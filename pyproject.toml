@@ -1,0 +1,40 @@
+# Tooling only: the bot is run as `python main.py`, not installed as a package.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes — undefined names, dead imports
+    "I",        # import order
+    "B",        # bugbear — mutable defaults, shadowed loop vars
+    "UP",       # pyupgrade
+    "SIM",      # obvious simplifications
+    "RUF",      # ruff's own checks
+]
+ignore = [
+    # A network-facing poller must not die because Telegram returned something
+    # unexpected; every broad except here logs and carries on deliberately.
+    "BLE001",
+    # Timestamps are local by design — the bot reports "today 15:10" to one
+    # person on one machine, not to clients in other zones.
+    "DTZ",
+    # Menus and command lists are class-level constants, never mutated.
+    "RUF012",
+    # Terminal glyphs (❯, ·) and language names written in their own
+    # language (Українська) are not typos; the warnings are noise here.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.basedpyright]
+include = ["ccbot", "main.py", "bin/setup.py"]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+# aiogram is fully typed, but its models are unions (Message |
+# InaccessibleMessage | None); the rules that matter are kept as errors below.
+reportMissingTypeArgument = false
+reportUnusedCallResult = false

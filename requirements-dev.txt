@@ -1,0 +1,7 @@
+# Checks run by bin/check.sh (and by the pre-commit hook).
+#   uv pip install -r requirements-dev.txt
+ruff>=0.16
+basedpyright>=1.31
+# Translation catalogues: pybabel extract / update / compile.
+# Only needed to change UI strings — running the bot reads the committed .mo.
+Babel>=2.17

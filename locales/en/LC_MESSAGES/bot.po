@@ -1,0 +1,1149 @@
+# English translations for claude-tg-bot.
+# Copyright (C) 2026 claude-tg-bot contributors
+# This file is distributed under the same license as the claude-tg-bot
+# project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: claude-tg-bot 1.0\n"
+"Report-Msgid-Bugs-To: https://github.com/\n"
+"POT-Creation-Date: 2026-08-24 21:14+0000\n"
+"PO-Revision-Date: 2026-08-24 20:08+0000\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language: en\n"
+"Language-Team: en <LL@li.org>\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#, python-format
+msgid "%d.%m"
+msgstr "%d.%m"
+
+#, python-format
+msgid "%d.%m %H:%M"
+msgstr "%d.%m %H:%M"
+
+#, python-format
+msgid "%d.%m.%y"
+msgstr "%d.%m.%y"
+
+#, python-brace-format
+msgid ", {count} waiting for you"
+msgid_plural ", {count} waiting for you"
+msgstr[0] ", {count} waiting for you"
+msgstr[1] ", {count} waiting for you"
+
+msgid "/clear sent"
+msgstr "/clear sent"
+
+msgid "/context sent"
+msgstr "/context sent"
+
+msgid "5 hours"
+msgstr "5 hours"
+
+msgid "7 days"
+msgstr "7 days"
+
+msgid "7 days · Opus"
+msgstr "7 days · Opus"
+
+msgid ""
+"<i>The buttons below work without understanding it: digits pick an "
+"option, the arrows walk the list, Esc backs out. 🖥 sends a fresh "
+"screen.</i>"
+msgstr ""
+"<i>The buttons below work without understanding it: digits pick an "
+"option, the arrows walk the list, Esc backs out. 🖥 sends a fresh "
+"screen.</i>"
+
+#, python-brace-format
+msgid "Active: {name}"
+msgstr "Active: {name}"
+
+msgid "Bot state: uptime, version, restart"
+msgstr "Bot state: uptime, version, restart"
+
+msgid "Bringing it up…"
+msgstr "Bringing it up…"
+
+#, python-brace-format
+msgid "Cannot read the log: {error}"
+msgstr "Cannot read the log: {error}"
+
+msgid "Clear the active session's context"
+msgstr "Clear the active session's context"
+
+msgid "Closed"
+msgstr "Closed"
+
+msgid "Could not switch that"
+msgstr "Could not switch that"
+
+msgid "Done"
+msgstr "Done"
+
+msgid "Drawing…"
+msgstr "Drawing…"
+
+msgid "End the active session cleanly"
+msgstr "End the active session cleanly"
+
+#, python-brace-format
+msgid "Error: {error} — see /log"
+msgstr "Error: {error} — see /log"
+
+msgid "Esc sent"
+msgstr "Esc sent"
+
+msgid "Fri"
+msgstr "Fri"
+
+msgid "Give a session your own name"
+msgstr "Give a session your own name"
+
+msgid "Help"
+msgstr "Help"
+
+msgid "I do not know that language"
+msgstr "I do not know that language"
+
+msgid "I only take images and PDFs."
+msgstr "I only take images and PDFs."
+
+msgid "Interface language"
+msgstr "Interface language"
+
+msgid "Interrupt what Claude is doing"
+msgstr "Interrupt what Claude is doing"
+
+#, python-brace-format
+msgid "Language: {name}"
+msgstr "Language: {name}"
+
+msgid "Last entries from the bot's journal"
+msgstr "Last entries from the bot's journal"
+
+#, python-brace-format
+msgid "Locally: <code>{command}</code>"
+msgstr "Locally: <code>{command}</code>"
+
+msgid "Looking…"
+msgstr "Looking…"
+
+msgid "Mon"
+msgstr "Mon"
+
+msgid "Moving it over…"
+msgstr "Moving it over…"
+
+msgid "New session in a chosen directory"
+msgstr "New session in a chosen directory"
+
+msgid "No active session — /sessions"
+msgstr "No active session — /sessions"
+
+msgid "No metrics yet — the status line has not been drawn."
+msgstr "No metrics yet — the status line has not been drawn."
+
+msgid "Not allowed"
+msgstr "Not allowed"
+
+#, python-brace-format
+msgid "Picked {n}"
+msgstr "Picked {n}"
+
+msgid "Project directories for new sessions"
+msgstr "Project directories for new sessions"
+
+msgid "Quota and context, without asking Claude"
+msgstr ""
+
+msgid "Removed"
+msgstr "Removed"
+
+msgid "Reset"
+msgstr "Reset"
+
+msgid "Restarting…"
+msgstr "Restarting…"
+
+msgid "Sat"
+msgstr "Sat"
+
+msgid "Selected"
+msgstr "Selected"
+
+msgid ""
+"Send the absolute path of a directory (it starts with / or ~).\n"
+"Or just press any button to cancel."
+msgstr ""
+"Send the absolute path of a directory (it starts with / or ~).\n"
+"Or just press any button to cancel."
+
+msgid "Send the absolute path of the project directory:"
+msgstr "Send the absolute path of the project directory:"
+
+msgid "Session list and controls"
+msgstr "Session list and controls"
+
+msgid "Session not found"
+msgstr "Session not found"
+
+msgid "Snapshot of the active session's terminal"
+msgstr "Snapshot of the active session's terminal"
+
+msgid "Starting…"
+msgstr "Starting…"
+
+#, python-brace-format
+msgid "Status: {status}"
+msgstr "Status: {status}"
+
+msgid "Sun"
+msgstr "Sun"
+
+#, python-brace-format
+msgid ""
+"Take a look at {what}:\n"
+"{paths}"
+msgstr ""
+"Take a look at {what}:\n"
+"{paths}"
+
+msgid "Taking a snapshot…"
+msgstr "Taking a snapshot…"
+
+msgid "That directory is already on the list"
+msgstr "That directory is already on the list"
+
+msgid ""
+"That does not look like a path (one starts with / or ~), so I am sending "
+"it to the session."
+msgstr ""
+"That does not look like a path (one starts with / or ~), so I am sending "
+"it to the session."
+
+#, python-brace-format
+msgid "That file is too big ({size} MB). The limit is 20 MB."
+msgstr "That file is too big ({size} MB). The limit is 20 MB."
+
+msgid "That session has already ended — see /sessions"
+msgstr "That session has already ended — see /sessions"
+
+msgid "That session is gone"
+msgstr "That session is gone"
+
+msgid "The bot was started by hand"
+msgstr "The bot was started by hand"
+
+msgid "The diagram has left the screen"
+msgstr "The diagram has left the screen"
+
+msgid "The log is empty."
+msgstr "The log is empty."
+
+#, python-brace-format
+msgid "This card is too old — send {command} again"
+msgstr "This card is too old — send {command} again"
+
+msgid "Thu"
+msgstr "Thu"
+
+#, python-brace-format
+msgid "To drive a session from a phone, start it with {button}."
+msgstr "To drive a session from a phone, start it with {button}."
+
+msgid "Tue"
+msgstr "Tue"
+
+msgid "Via ⬆️⬇️✅: "
+msgstr "Via ⬆️⬇️✅: "
+
+msgid "Wed"
+msgstr "Wed"
+
+msgid "Write your own answer:"
+msgstr "Write your own answer:"
+
+msgid "auto"
+msgstr "auto"
+
+msgid "closed"
+msgstr "closed"
+
+msgid "context"
+msgstr "context"
+
+msgid "dead"
+msgstr "dead"
+
+msgid "following your Telegram profile"
+msgstr "following your Telegram profile"
+
+msgid "idle"
+msgstr "idle"
+
+msgid "in reply"
+msgstr "in reply"
+
+msgid "in reply, now active"
+msgstr "in reply, now active"
+
+msgid "not a git repository"
+msgstr "not a git repository"
+
+msgid ""
+"read off the status line; exact figures appear once the statusline "
+"wrapper is in place"
+msgstr ""
+"read off the status line; exact figures appear once the statusline "
+"wrapper is in place"
+
+#, python-brace-format
+msgid "resets {when}"
+msgstr "resets {when}"
+
+msgid "session context"
+msgstr "session context"
+
+msgid "starting"
+msgstr "starting"
+
+msgid ""
+"tap one for details — whether to open it is decided there. 🔗 is a live "
+"session from a terminal, 🕘 are ones closed earlier.\n"
+"Replying to a session's message writes to that session and makes it "
+"active; ✏️ on its card gives it a name of your own."
+msgstr ""
+"tap one for details — whether to open it is decided there. 🔗 is a live "
+"session from a terminal, 🕘 are ones closed earlier.\n"
+"Replying to a session's message writes to that session and makes it "
+"active; ✏️ on its card gives it a name of your own."
+
+#, python-brace-format
+msgid "this image"
+msgid_plural "these {count} images"
+msgstr[0] "this image"
+msgstr[1] "these {count} images"
+
+#, python-brace-format
+msgid "today {time}"
+msgstr "today {time}"
+
+#, python-brace-format
+msgid "tomorrow {time}"
+msgstr "tomorrow {time}"
+
+msgid "unknown"
+msgstr "unknown"
+
+msgid "untitled"
+msgstr "untitled"
+
+msgid "waiting"
+msgstr "waiting"
+
+msgid "waiting for you"
+msgstr "waiting for you"
+
+msgid "window is gone"
+msgstr "window is gone"
+
+#, python-brace-format
+msgid "with {count} attachment"
+msgid_plural "with {count} attachments"
+msgstr[0] "with {count} attachment"
+msgstr[1] "with {count} attachments"
+
+msgid "working"
+msgstr "working"
+
+#, python-brace-format
+msgid "yesterday {time}"
+msgstr "yesterday {time}"
+
+msgid "your own name is gone — I will show Claude's own topic instead"
+msgstr "your own name is gone — I will show Claude's own topic instead"
+
+#, python-brace-format
+msgid "yst {time}"
+msgstr "yst {time}"
+
+#, python-brace-format
+msgid ""
+"{button} runs <code>claude --resume</code> in a new tmux window — the "
+"session picks up all of its context."
+msgstr ""
+"{button} runs <code>claude --resume</code> in a new tmux window — the "
+"session picks up all of its context."
+
+#, python-brace-format
+msgid ""
+"{button} sends the process a <b>termination signal</b> (SIGTERM) and "
+"brings <code>claude --resume</code> up in a tmux window — from the "
+"directory the session started in, so the project context stays the same. "
+"The terminal window goes dark, the history survives.\n"
+"A terminal session's stdin cannot be reached from outside, so a clean "
+"<code>/exit</code> is impossible here — which is exactly why the signal "
+"is needed."
+msgstr ""
+"{button} sends the process a <b>termination signal</b> (SIGTERM) and "
+"brings <code>claude --resume</code> up in a tmux window — from the "
+"directory the session started in, so the project context stays the same. "
+"The terminal window goes dark, the history survives.\n"
+"A terminal session's stdin cannot be reached from outside, so a clean "
+"<code>/exit</code> is impossible here — which is exactly why the signal "
+"is needed."
+
+#, python-brace-format
+msgid "{commit} + uncommitted changes"
+msgstr "{commit} + uncommitted changes"
+
+#, python-brace-format
+msgid "{d} d {h} h"
+msgstr "{d} d {h} h"
+
+#, python-brace-format
+msgid "{h} h {m} min"
+msgstr "{h} h {m} min"
+
+#, python-brace-format
+msgid ""
+"{minutes} min stale — this session has not redrawn its status line in a "
+"while"
+msgstr ""
+"{minutes} min stale — this session has not redrawn its status line in a "
+"while"
+
+#, python-brace-format
+msgid "{m} min {s} s"
+msgstr "{m} min {s} s"
+
+#, python-brace-format
+msgid "{s} s"
+msgstr "{s} s"
+
+#, python-brace-format
+msgid ""
+"{title} for <b>{name}</b>\n"
+"Currently: <code>{value}</code>"
+msgstr ""
+"{title} for <b>{name}</b>\n"
+"Currently: <code>{value}</code>"
+
+#, python-brace-format
+msgid "{used} of {total} token"
+msgid_plural "{used} of {total} tokens"
+msgstr[0] "{used} of {total} token"
+msgstr[1] "{used} of {total} tokens"
+
+#, python-brace-format
+msgid "{weekday} {time}"
+msgstr "{weekday} {time}"
+
+#, python-brace-format
+msgid "{window} limit"
+msgstr "{window} limit"
+
+#, python-brace-format
+msgid "{window} limit (resets {when})"
+msgstr "{window} limit (resets {when})"
+
+msgid "⌛️ That request has expired — treating this as an ordinary message."
+msgstr "⌛️ That request has expired — treating this as an ordinary message."
+
+#, python-brace-format
+msgid "⏱ Up for {duration} (started at {time})"
+msgstr "⏱ Up for {duration} (started at {time})"
+
+#, python-brace-format
+msgid "⏳ Ending {name} — sending /exit…"
+msgstr "⏳ Ending {name} — sending /exit…"
+
+msgid "⏳ Restarting — back in a few seconds…"
+msgstr "⏳ Restarting — back in a few seconds…"
+
+#, python-brace-format
+msgid "⏳ Stopping {name} (PID {pid})…"
+msgstr "⏳ Stopping {name} (PID {pid})…"
+
+#, python-brace-format
+msgid "⏸ Esc sent to <b>{name}</b>{note}"
+msgstr "⏸ Esc sent to <b>{name}</b>{note}"
+
+#, python-brace-format
+msgid "⏸ Waiting for you in the terminal: {names}"
+msgstr "⏸ Waiting for you in the terminal: {names}"
+
+#, python-brace-format
+msgid "▶️ Active session: <b>{name}</b>"
+msgstr "▶️ Active session: <b>{name}</b>"
+
+msgid "▶️ Open"
+msgstr "▶️ Open"
+
+msgid "▶️ Resume"
+msgstr "▶️ Resume"
+
+#, python-brace-format
+msgid "▶️ Text goes to <b>{name}</b>"
+msgstr "▶️ Text goes to <b>{name}</b>"
+
+#, python-brace-format
+msgid ""
+"▶️ Text now goes to <b>{name}</b>.\n"
+"<b>{previous}</b> keeps working — to write to it, reply to one of its "
+"messages."
+msgstr ""
+"▶️ Text now goes to <b>{name}</b>.\n"
+"<b>{previous}</b> keeps working — to write to it, reply to one of its "
+"messages."
+
+msgid "◉ Effort"
+msgstr "◉ Effort"
+
+msgid "◉ Reasoning effort"
+msgstr "◉ Reasoning effort"
+
+msgid "♻️ Refresh"
+msgstr "♻️ Refresh"
+
+#, python-brace-format
+msgid "⚙️ PID {pid} · started by hand — a crash will not bring it back"
+msgstr "⚙️ PID {pid} · started by hand — a crash will not bring it back"
+
+#, python-brace-format
+msgid "⚙️ PID {pid} · systemd <code>{unit}</code> — a crash brings it back in 5 s"
+msgstr "⚙️ PID {pid} · systemd <code>{unit}</code> — a crash brings it back in 5 s"
+
+#, python-brace-format
+msgid ""
+"⚠️ <b>Could not handle this message</b>\n"
+"<code>{error}</code>\n"
+"\n"
+"Your sessions are unaffected. Details in /log."
+msgstr ""
+"⚠️ <b>Could not handle this message</b>\n"
+"<code>{error}</code>\n"
+"\n"
+"Your sessions are unaffected. Details in /log."
+
+#, python-brace-format
+msgid ""
+"⚠️ <b>The session watcher has crashed</b>\n"
+"<code>{error}</code>\n"
+"\n"
+"While this lasts, Claude's replies do not reach the chat — prompts you "
+"send still get through to the session. Details in /log; /restart usually "
+"cures it."
+msgstr ""
+"⚠️ <b>The session watcher has crashed</b>\n"
+"<code>{error}</code>\n"
+"\n"
+"While this lasts, Claude's replies do not reach the chat — prompts you "
+"send still get through to the session. Details in /log; /restart usually "
+"cures it."
+
+#, python-brace-format
+msgid ""
+"⚠️ <b>{name}</b> is waiting for an answer, but I did not recognise the "
+"question. Here is the screen:"
+msgstr ""
+"⚠️ <b>{name}</b> is waiting for an answer, but I did not recognise the "
+"question. Here is the screen:"
+
+msgid "⚠️ Claude keeps this as the default for <b>new</b> sessions too."
+msgstr "⚠️ Claude keeps this as the default for <b>new</b> sessions too."
+
+msgid ""
+"⚠️ I could not find the <code>claude</code> executable. Lists of live "
+"sessions will be empty.\n"
+"Set the path in .env: <code>CCBOT_CLAUDE_BIN=/path/to/claude</code>"
+msgstr ""
+"⚠️ I could not find the <code>claude</code> executable. Lists of live "
+"sessions will be empty.\n"
+"Set the path in .env: <code>CCBOT_CLAUDE_BIN=/path/to/claude</code>"
+
+#, python-brace-format
+msgid ""
+"⚠️ Process {pid} did not exit within {seconds} s. End the session in the "
+"terminal and try again."
+msgstr ""
+"⚠️ Process {pid} did not exit within {seconds} s. End the session in the "
+"terminal and try again."
+
+msgid ""
+"⚠️ The bot was started by hand rather than by systemd — once it exits "
+"nothing will bring it back, and there will be nothing left to drive the "
+"sessions from a phone.\n"
+"\n"
+"Put it under systemd:\n"
+"<code>sed \"s|%INSTALL_DIR%|$PWD|g\" contrib/claude-tg-bot.service \\\n"
+"  &gt; ~/.config/systemd/user/claude-tg-bot.service\n"
+"systemctl --user daemon-reload\n"
+"systemctl --user enable --now claude-tg-bot</code>\n"
+"\n"
+"After that <code>/restart</code> will work."
+msgstr ""
+"⚠️ The bot was started by hand rather than by systemd — once it exits "
+"nothing will bring it back, and there will be nothing left to drive the "
+"sessions from a phone.\n"
+"\n"
+"Put it under systemd:\n"
+"<code>sed \"s|%INSTALL_DIR%|$PWD|g\" contrib/claude-tg-bot.service \\\n"
+"  &gt; ~/.config/systemd/user/claude-tg-bot.service\n"
+"systemctl --user daemon-reload\n"
+"systemctl --user enable --now claude-tg-bot</code>\n"
+"\n"
+"After that <code>/restart</code> will work."
+
+msgid ""
+"⚠️ The list comes from <code>CCBOT_DIRS</code> in .env — the buttons "
+"below will not change it."
+msgstr ""
+"⚠️ The list comes from <code>CCBOT_DIRS</code> in .env — the buttons "
+"below will not change it."
+
+msgid "⚠️ This session belongs to your terminal — it cannot be driven from here."
+msgstr "⚠️ This session belongs to your terminal — it cannot be driven from here."
+
+#, python-brace-format
+msgid "✅ Added: <code>{path}</code>"
+msgstr "✅ Added: <code>{path}</code>"
+
+#, python-brace-format
+msgid "✅ Created: <b>{name}</b>"
+msgstr "✅ Created: <b>{name}</b>"
+
+#, python-brace-format
+msgid "✅ Resumed: <b>{name}</b>"
+msgstr "✅ Resumed: <b>{name}</b>"
+
+msgid "✅ Select"
+msgstr "✅ Select"
+
+#, python-brace-format
+msgid ""
+"✅ The bot is back — the restart took {duration}.\n"
+"Code: <code>{version}</code>"
+msgstr ""
+"✅ The bot is back — the restart took {duration}.\n"
+"Code: <code>{version}</code>"
+
+msgid "✅ The watcher is back — following the sessions again."
+msgstr "✅ The watcher is back — following the sessions again."
+
+msgid "✅ Yes, restart"
+msgstr "✅ Yes, restart"
+
+#, python-brace-format
+msgid "✅ {name} stopped — bringing it up in tmux…"
+msgstr "✅ {name} stopped — bringing it up in tmux…"
+
+msgid "✏️ Another path"
+msgstr "✏️ Another path"
+
+#, python-brace-format
+msgid "✏️ Answer sent to <b>{name}</b>"
+msgstr "✏️ Answer sent to <b>{name}</b>"
+
+#, python-brace-format
+msgid "✏️ It is now <b>{name}</b>{note}"
+msgstr "✏️ It is now <b>{name}</b>{note}"
+
+msgid "✏️ Rename"
+msgstr "✏️ Rename"
+
+msgid ""
+"✏️ Send the name together with the command:\n"
+"<code>/rename Billing audit</code>\n"
+"\n"
+"Replying to a session's message renames that session, otherwise it is the"
+" active one. <code>/rename -</code> gives the automatic name back."
+msgstr ""
+"✏️ Send the name together with the command:\n"
+"<code>/rename Billing audit</code>\n"
+"\n"
+"Replying to a session's message renames that session, otherwise it is the"
+" active one. <code>/rename -</code> gives the automatic name back."
+
+#, python-brace-format
+msgid ""
+"✏️ What should <b>{name}</b> be called?\n"
+"Send the name in your next message (up to {limit} characters).\n"
+"<code>-</code> gives the automatic name back."
+msgstr ""
+"✏️ What should <b>{name}</b> be called?\n"
+"Send the name in your next message (up to {limit} characters).\n"
+"<code>-</code> gives the automatic name back."
+
+msgid "❌ Could not download the file"
+msgstr "❌ Could not download the file"
+
+#, python-brace-format
+msgid ""
+"❌ No such directory:\n"
+"<code>{path}</code>\n"
+"\n"
+"If that was an ordinary message — I was waiting for a path after "
+"{button}. Press /sessions and try again."
+msgstr ""
+"❌ No such directory:\n"
+"<code>{path}</code>\n"
+"\n"
+"If that was an ordinary message — I was waiting for a path after "
+"{button}. Press /sessions and try again."
+
+#, python-brace-format
+msgid "❌ No such directory: <code>{path}</code>"
+msgstr "❌ No such directory: <code>{path}</code>"
+
+msgid "❌ Not allowed to stop that process"
+msgstr "❌ Not allowed to stop that process"
+
+#, python-brace-format
+msgid ""
+"❌ Session <b>{name}</b> has ended.\n"
+"The transcript stays — it can be brought back from 🕘 in the list."
+msgstr ""
+"❌ Session <b>{name}</b> has ended.\n"
+"The transcript stays — it can be brought back from 🕘 in the list."
+
+msgid "❌ Unknown PID — I cannot move this one"
+msgstr "❌ Unknown PID — I cannot move this one"
+
+msgid "➕ Add a directory"
+msgstr "➕ Add a directory"
+
+msgid "➕ New session"
+msgstr "➕ New session"
+
+#, python-brace-format
+msgid "➡️ Sent to <b>{name}</b>{extra}{note}"
+msgstr "➡️ Sent to <b>{name}</b>{extra}{note}"
+
+#, python-brace-format
+msgid "➡️ Sent to {name} with {count} attachment"
+msgid_plural "➡️ Sent to {name} with {count} attachments"
+msgstr[0] "➡️ Sent to {name} with {count} attachment"
+msgstr[1] "➡️ Sent to {name} with {count} attachments"
+
+msgid "⬅️ Back"
+msgstr "⬅️ Back"
+
+msgid "⬅️ Cancel"
+msgstr "⬅️ Cancel"
+
+msgid "⬅️ Sessions"
+msgstr "⬅️ Sessions"
+
+#, python-brace-format
+msgid ""
+"🌐 <b>Interface language</b>\n"
+"\n"
+"Speaking: <b>{name}</b>"
+msgstr ""
+"🌐 <b>Interface language</b>\n"
+"\n"
+"Speaking: <b>{name}</b>"
+
+msgid "🌐 Same as Telegram"
+msgstr "🌐 Same as Telegram"
+
+#, python-brace-format
+msgid "💀 Session {name} is gone (its tmux window was closed)."
+msgstr "💀 Session {name} is gone (its tmux window was closed)."
+
+#, python-brace-format
+msgid "💬 It started with: {text}"
+msgstr "💬 It started with: {text}"
+
+#, python-brace-format
+msgid "💵 Session cost: ${amount}"
+msgstr "💵 Session cost: ${amount}"
+
+msgid ""
+"📁 <b>Project directories</b>\n"
+"\n"
+"The list is empty — directories are discovered from your own Claude "
+"history.\n"
+"Add some if you would rather see only certain projects."
+msgstr ""
+"📁 <b>Project directories</b>\n"
+"\n"
+"The list is empty — directories are discovered from your own Claude "
+"history.\n"
+"Add some if you would rather see only certain projects."
+
+#, python-brace-format
+msgid ""
+"📁 <b>Project directories</b>\n"
+"\n"
+"These are the directories offered under {button}."
+msgstr ""
+"📁 <b>Project directories</b>\n"
+"\n"
+"These are the directories offered under {button}."
+
+msgid "📁 Which directory should the session start in?"
+msgstr "📁 Which directory should the session start in?"
+
+#, python-brace-format
+msgid "📁 Working in <code>{path}</code>"
+msgstr "📁 Working in <code>{path}</code>"
+
+msgid "📈 Context: metrics appear after the first request"
+msgstr "📈 Context: metrics appear after the first request"
+
+#, python-brace-format
+msgid "📈 Context: {pct}% ({tokens} token)"
+msgid_plural "📈 Context: {pct}% ({tokens} tokens)"
+msgstr[0] "📈 Context: {pct}% ({tokens} token)"
+msgstr[1] "📈 Context: {pct}% ({tokens} tokens)"
+
+msgid "📉 Context breakdown"
+msgstr ""
+
+msgid "📊 Limits"
+msgstr "📊 Limits"
+
+#, python-brace-format
+msgid "📊 Status: <b>{status}</b>"
+msgstr "📊 Status: <b>{status}</b>"
+
+msgid ""
+"📋 <b>Sessions</b>\n"
+"\n"
+"The bot manages none yet — start with ➕.\n"
+"<i>🔗 are live sessions from your terminal, 🕘 ones closed earlier</i>"
+msgstr ""
+"📋 <b>Sessions</b>\n"
+"\n"
+"The bot manages none yet — start with ➕.\n"
+"<i>🔗 are live sessions from your terminal, 🕘 ones closed earlier</i>"
+
+#, python-brace-format
+msgid "📋 <b>Sessions</b> — {count} managed"
+msgid_plural "📋 <b>Sessions</b> — {count} managed"
+msgstr[0] "📋 <b>Sessions</b> — {count} managed"
+msgstr[1] "📋 <b>Sessions</b> — {count} managed"
+
+#, python-brace-format
+msgid "📎 Saved {count} file. Write something and I will send them together."
+msgid_plural "📎 Saved {count} files. Write something and I will send them together."
+msgstr[0] "📎 Saved {count} file. Write something and I will send them together."
+msgstr[1] "📎 Saved {count} files. Write something and I will send them together."
+
+#, python-brace-format
+msgid "📓 Journal: <code>{path}</code> — /log"
+msgstr "📓 Journal: <code>{path}</code> — /log"
+
+#, python-brace-format
+msgid "📡 Polling every {seconds} s · managed sessions: {count}"
+msgstr "📡 Polling every {seconds} s · managed sessions: {count}"
+
+#, python-brace-format
+msgid "📦 Transcript: {size} KB"
+msgstr "📦 Transcript: {size} KB"
+
+#, python-brace-format
+msgid "📦 Transcript: {size} MB"
+msgstr "📦 Transcript: {size} MB"
+
+msgid ""
+"🔄 <b>Restart the bot?</b>\n"
+"\n"
+"Claude's sessions are unaffected: they live in tmux, and the unit is set "
+"up to stop the bot alone (<code>KillMode=process</code>). Once it is "
+"back, the watcher picks the transcripts up where it left off.\n"
+"\n"
+"Only what is in the process's memory is lost: a half-finished request "
+"(«send me a path», «send me a name»), attachments waiting for a caption, "
+"and the note that says «this question has already been shown» — an open "
+"dialog may arrive in the chat a second time.\n"
+"\n"
+"It usually takes 5–10 seconds."
+msgstr ""
+"🔄 <b>Restart the bot?</b>\n"
+"\n"
+"Claude's sessions are unaffected: they live in tmux, and the unit is set "
+"up to stop the bot alone (<code>KillMode=process</code>). Once it is "
+"back, the watcher picks the transcripts up where it left off.\n"
+"\n"
+"Only what is in the process's memory is lost: a half-finished request "
+"(«send me a path», «send me a name»), attachments waiting for a caption, "
+"and the note that says «this question has already been shown» — an open "
+"dialog may arrive in the chat a second time.\n"
+"\n"
+"It usually takes 5–10 seconds."
+
+msgid "🔄 Refresh"
+msgstr "🔄 Refresh"
+
+msgid "🔄 Reset to autodiscovery"
+msgstr "🔄 Reset to autodiscovery"
+
+msgid "🔄 Restart the bot"
+msgstr "🔄 Restart the bot"
+
+msgid "🔐 Mode"
+msgstr "🔐 Mode"
+
+msgid "🔐 Permission mode"
+msgstr "🔐 Permission mode"
+
+msgid "🔒 <b>Terminal sessions</b> (driven only from the computer)"
+msgstr "🔒 <b>Terminal sessions</b> (driven only from the computer)"
+
+msgid "🔗 Move into tmux"
+msgstr "🔗 Move into tmux"
+
+msgid ""
+"🔴 The session is <b>working</b> right now — better to wait until it "
+"finishes."
+msgstr ""
+"🔴 The session is <b>working</b> right now — better to wait until it "
+"finishes."
+
+msgid ""
+"🕘 <b>Recent sessions</b> — closed earlier, context and all.\n"
+"Tap one for details — whether to resume it is decided there.\n"
+"<i>time · directory · topic · live ones are in /sessions</i>"
+msgstr ""
+"🕘 <b>Recent sessions</b> — closed earlier, context and all.\n"
+"Tap one for details — whether to resume it is decided there.\n"
+"<i>time · directory · topic · live ones are in /sessions</i>"
+
+#, python-brace-format
+msgid "🕘 Created: {when}"
+msgstr "🕘 Created: {when}"
+
+#, python-brace-format
+msgid "🕘 Last active: {when}"
+msgstr "🕘 Last active: {when}"
+
+msgid "🕘 No closed sessions found in the project directories."
+msgstr "🕘 No closed sessions found in the project directories."
+
+msgid "🕘 Recent"
+msgstr "🕘 Recent"
+
+#, python-brace-format
+msgid "🕘 Started: {when}"
+msgstr "🕘 Started: {when}"
+
+msgid "🖥 Screen"
+msgstr "🖥 Screen"
+
+msgid "🖥 the tmux server is not answering — there are no sessions right now"
+msgstr "🖥 the tmux server is not answering — there are no sessions right now"
+
+#, python-brace-format
+msgid "🖥 tmux server: PID {pid} — sessions survive a bot restart"
+msgstr "🖥 tmux server: PID {pid} — sessions survive a bot restart"
+
+msgid "🖼 Diagram"
+msgstr "🖼 Diagram"
+
+#, python-brace-format
+msgid "🖼 Diagram for option {n}"
+msgstr "🖼 Diagram for option {n}"
+
+#, python-brace-format
+msgid "🖼 Diagram for option {n}:"
+msgstr "🖼 Diagram for option {n}:"
+
+msgid "🖼 Diagram:"
+msgstr "🖼 Diagram:"
+
+msgid "🖼 The diagram is wider than the screen — sent as a picture"
+msgstr "🖼 The diagram is wider than the screen — sent as a picture"
+
+#, python-brace-format
+msgid "🚀 Launched from <code>{path}</code>"
+msgstr "🚀 Launched from <code>{path}</code>"
+
+msgid "🚪 End"
+msgstr "🚪 End"
+
+msgid "🤖 <b>Bot service</b>"
+msgstr "🤖 <b>Bot service</b>"
+
+msgid ""
+"🤖 <b>Claude Code session dispatcher</b>\n"
+"\n"
+"<b>Sessions</b>\n"
+"/sessions — the session list, cards and controls\n"
+"/new — start a session (pick a directory)\n"
+"\n"
+"<b>Where things go</b>\n"
+"Without a reply, everything — text and commands — goes to the\n"
+"<b>active</b> session. Replying to a session's message goes to\n"
+"<b>that</b> session and makes it active. The commands below\n"
+"follow the same rule.\n"
+"\n"
+"<b>Acting on a session</b>\n"
+"/usage — how much of the 5-hour and 7-day quota is spent, and\n"
+"   how full this session's context is. Read off the status line,\n"
+"   so it is instant, costs no tokens and does not disturb the\n"
+"   session. Not to be confused with «📉 Context breakdown» on the\n"
+"   card: that one asks Claude itself <i>what</i> is filling the\n"
+"   context — and that is a real turn in the session.\n"
+"/screen — a text snapshot of the terminal\n"
+"/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
+"   The session stays alive and its context is untouched.\n"
+"/clear — clear the session's context. The session lives on,\n"
+"   its history is gone.\n"
+"/rename <i>name</i> — your own name instead of <code>project-1a2b</code>\n"
+"   (<code>/rename -</code> gives the automatic one back). Until you\n"
+"   name it, the list shows the topic Claude came up with itself.\n"
+"/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
+"   the tmux window closes. The transcript stays — the session can\n"
+"   be brought back from 🕘 in the list.\n"
+"\n"
+"Any other <code>/command</code> (<code>/model</code>, "
+"<code>/compact</code>,\n"
+"<code>/cost</code>…) is passed to Claude as it is.\n"
+"\n"
+"<b>The bot itself</b>\n"
+"/service — uptime, code version, tmux state, restart button\n"
+"/restart — restart the bot (Claude's sessions are unaffected)\n"
+"/log — the last lines of the journal\n"
+"/dirs — directories offered when starting a session\n"
+"/lang — interface language\n"
+"\n"
+"📷 Photos and PDFs are saved and handed to Claude as paths —\n"
+"as an album, with a caption, or with the text in the next message.\n"
+"\n"
+"When Claude asks a question, buttons with the options arrive."
+msgstr ""
+
+msgid "🧠 Model"
+msgstr "🧠 Model"
+
+#, python-brace-format
+msgid "🧩 Code: <code>{version}</code>"
+msgstr "🧩 Code: <code>{version}</code>"
+
+#, python-brace-format
+msgid "🧹 /clear sent to <b>{name}</b>{note}"
+msgstr "🧹 /clear sent to <b>{name}</b>{note}"
+
+#, python-brace-format
+msgid ""
+"🧹 <b>{name}</b>: context cleared — the session was given a new id, and I "
+"am following it there."
+msgstr ""
+"🧹 <b>{name}</b>: context cleared — the session was given a new id, and I "
+"am following it there."
+
+#~ msgid ""
+#~ "🌐 <b>Interface language</b>\n"
+#~ "\n"
+#~ "Currently: <b>{name}</b>\n"
+#~ "<i>Without a choice of your own "
+#~ "the bot follows your Telegram "
+#~ "profile.</i>"
+#~ msgstr ""
+#~ "🌐 <b>Interface language</b>\n"
+#~ "\n"
+#~ "Currently: <b>{name}</b>\n"
+#~ "<i>Without a choice of your own "
+#~ "the bot follows your Telegram "
+#~ "profile.</i>"
+
+#~ msgid ""
+#~ "🤖 <b>Claude Code session dispatcher</b>\n"
+#~ "\n"
+#~ "<b>Sessions</b>\n"
+#~ "/sessions — the session list, cards and controls\n"
+#~ "/new — start a session (pick a directory)\n"
+#~ "\n"
+#~ "<b>Where things go</b>\n"
+#~ "Without a reply, everything — text and commands — goes to the\n"
+#~ "<b>active</b> session. Replying to a session's message goes to\n"
+#~ "<b>that</b> session and makes it active. The commands below\n"
+#~ "follow the same rule.\n"
+#~ "\n"
+#~ "<b>Acting on a session</b>\n"
+#~ "/usage — context, and the 5-hour / 7-day limits\n"
+#~ "/screen — a text snapshot of the terminal\n"
+#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
+#~ "   The session stays alive and its context is untouched.\n"
+#~ "/clear — clear the session's context. The session lives on,\n"
+#~ "   its history is gone.\n"
+#~ "/rename <i>name</i> — your own name "
+#~ "instead of <code>project-1a2b</code>\n"
+#~ "   (<code>/rename -</code> gives the automatic one back). Until you\n"
+#~ "   name it, the list shows the topic Claude came up with itself.\n"
+#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
+#~ "   the tmux window closes. The transcript stays — the session can\n"
+#~ "   be brought back from 🕘 in the list.\n"
+#~ "\n"
+#~ "Any other <code>/command</code> "
+#~ "(<code>/model</code>, <code>/compact</code>,\n"
+#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
+#~ "\n"
+#~ "<b>The bot itself</b>\n"
+#~ "/service — uptime, code version, tmux state, restart button\n"
+#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
+#~ "/log — the last lines of the journal\n"
+#~ "/dirs — directories offered when starting a session\n"
+#~ "/lang — interface language\n"
+#~ "\n"
+#~ "📷 Photos and PDFs are saved and handed to Claude as paths —\n"
+#~ "as an album, with a caption, or with the text in the next message.\n"
+#~ "\n"
+#~ "When Claude asks a question, buttons with the options arrive."
+#~ msgstr ""
+#~ "🤖 <b>Claude Code session dispatcher</b>\n"
+#~ "\n"
+#~ "<b>Sessions</b>\n"
+#~ "/sessions — the session list, cards and controls\n"
+#~ "/new — start a session (pick a directory)\n"
+#~ "\n"
+#~ "<b>Where things go</b>\n"
+#~ "Without a reply, everything — text and commands — goes to the\n"
+#~ "<b>active</b> session. Replying to a session's message goes to\n"
+#~ "<b>that</b> session and makes it active. The commands below\n"
+#~ "follow the same rule.\n"
+#~ "\n"
+#~ "<b>Acting on a session</b>\n"
+#~ "/usage — context, and the 5-hour / 7-day limits\n"
+#~ "/screen — a text snapshot of the terminal\n"
+#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
+#~ "   The session stays alive and its context is untouched.\n"
+#~ "/clear — clear the session's context. The session lives on,\n"
+#~ "   its history is gone.\n"
+#~ "/rename <i>name</i> — your own name "
+#~ "instead of <code>project-1a2b</code>\n"
+#~ "   (<code>/rename -</code> gives the automatic one back). Until you\n"
+#~ "   name it, the list shows the topic Claude came up with itself.\n"
+#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
+#~ "   the tmux window closes. The transcript stays — the session can\n"
+#~ "   be brought back from 🕘 in the list.\n"
+#~ "\n"
+#~ "Any other <code>/command</code> "
+#~ "(<code>/model</code>, <code>/compact</code>,\n"
+#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
+#~ "\n"
+#~ "<b>The bot itself</b>\n"
+#~ "/service — uptime, code version, tmux state, restart button\n"
+#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
+#~ "/log — the last lines of the journal\n"
+#~ "/dirs — directories offered when starting a session\n"
+#~ "/lang — interface language\n"
+#~ "\n"
+#~ "📷 Photos and PDFs are saved and handed to Claude as paths —\n"
+#~ "as an album, with a caption, or with the text in the next message.\n"
+#~ "\n"
+#~ "When Claude asks a question, buttons with the options arrive."
+
+#~ msgid "Context, and the 5-hour / 7-day limits"
+#~ msgstr "Context, and the 5-hour / 7-day limits"
+

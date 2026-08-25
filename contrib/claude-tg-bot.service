@@ -1,0 +1,37 @@
+# systemd user unit. Install:
+#
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|%INSTALL_DIR%|$PWD|g" contrib/claude-tg-bot.service \
+#       > ~/.config/systemd/user/claude-tg-bot.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-tg-bot
+#
+# The unit lives while you have a session on the machine. To keep it running
+# with no login at all: sudo loginctl enable-linger $USER
+
+[Unit]
+Description=Claude Code Telegram session dispatcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%INSTALL_DIR%
+EnvironmentFile=%INSTALL_DIR%/.env
+# systemd user units do not source the login profile, so a node installed via
+# nvm is invisible unless its bin directory is named here. Adjust to taste, or
+# set CCBOT_CLAUDE_BIN in .env instead.
+Environment=PATH=%h/.nvm/versions/node/current/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%INSTALL_DIR%/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+# The tmux server the bot starts ends up in this unit's cgroup, and the default
+# kill mode would take it — along with every Claude session inside it — on each
+# restart. Signal the bot only; the sessions must outlive it.
+KillMode=process
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
