@@ -25,7 +25,7 @@ from aiogram.types import (
     Update,
 )
 
-from . import logsetup, media, service, status_feed, tmux, util
+from . import logsetup, media, rich, service, status_feed, tmux, util
 from . import screen as screenmod
 from . import sessions as sess
 from .config import Config
@@ -43,6 +43,7 @@ from .i18n import (
 )
 from .i18n import use as use_locale
 from .keyboards import (
+    STATUS_ICON,
     choice_kb,
     confirm_kb,
     dirs_kb,
@@ -154,6 +155,76 @@ Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
 as an album, with a caption, or with the text in the next message.
 
 When Claude asks a question, buttons with the options arrive.""")
+
+
+# The order the states are explained in: from the ones that want something
+# from you down to the ones that are merely broken.
+_LEGEND_ORDER = ("waiting", "busy", "idle", "starting", "dead", "gone")
+
+
+def _status_legend(views: list[sess.SessionView],
+                   active: str | None) -> list[str]:
+    """One line per icon actually present in the list, and nothing more.
+
+    The active session wears ▶️ instead of its own status icon, so it is not
+    what puts a state into the legend.
+    """
+    seen = {v.status for v in views if v.session_id != active}
+    return [f"{STATUS_ICON[s]} {sess.status_label(s)}"
+            for s in _LEGEND_ORDER if s in seen and s in STATUS_ICON]
+
+
+def _sessions_text(managed: list[sess.SessionView],
+                   foreign: list[sess.SessionView],
+                   active: str | None) -> str:
+    """The list's caption: a legend for exactly the icons on the screen.
+
+    The two kinds of session are named apart — the bot's own tmux windows and
+    the terminal's, which it can only watch — because a row of buttons alone
+    cannot say which is which.
+    """
+    if managed:
+        waiting = [v for v in managed if v.status == "waiting"]
+        head = ngettext("📋 <b>Sessions</b> — {count} managed",
+                        "📋 <b>Sessions</b> — {count} managed",
+                        len(managed)).format(count=len(managed))
+        if waiting:
+            head += ngettext(", {count} waiting for you",
+                             ", {count} waiting for you",
+                             len(waiting)).format(count=len(waiting))
+        block = [_("🖥 <b>In tmux</b> — started by the bot, driven from here")]
+        cur = next((v for v in managed if v.session_id == active), None)
+        if cur:
+            block.append(_("▶️ active: <b>{name}</b> — plain text goes here"
+                           ).format(name=html.escape(cur.name)))
+        block += _status_legend(managed, active)
+        parts = [head, "\n".join(block)]
+    else:
+        parts = [_("📋 <b>Sessions</b>\n\nThe bot manages none in tmux yet — "
+                   "start one with {button}.").format(
+                       button=_("➕ New session"))]
+    if foreign:
+        block = [_("🔗 <b>In your own terminal</b> — the bot only shows them; "
+                   "«{button}» on the card takes one over.").format(
+                       button=_("🔗 Move into tmux"))]
+        # Only a session stuck on a prompt is worth calling out: that one
+        # needs a hand at the desk, where the bot cannot reach.
+        stuck = [v for v in foreign if v.status == "waiting"]
+        if stuck:
+            block.append(_("⏸ waiting for you at the keyboard: {names}"
+                           ).format(names=", ".join(
+                               html.escape(v.name) for v in stuck[:3])))
+        parts.append("\n".join(block))
+    # Named through the button's own string so the sentence and the keyboard
+    # cannot drift apart in a translation.
+    parts.append(_("<b>{button}</b> — sessions closed earlier; resuming "
+                   "brings the context back.").format(button=_("🕘 Recent")))
+    if managed:
+        parts.append("<i>" + _(
+            "Tap a session for details — whether to open it is decided there. "
+            "Replying to a session's message writes to that session and makes "
+            "it active; ✏️ on its card gives it a name of your own.") + "</i>")
+    return "\n\n".join(parts)
 
 
 def _stale_card(command: str) -> str:
@@ -277,7 +348,12 @@ class CCBot:
         async def _log(m: Message):
             if not self._ok(m):
                 return
-            await m.answer(as_pre(logsetup.tail(50)), parse_mode="HTML")
+            body = logsetup.tail(50)
+            # Log lines are long by nature; a rich block scrolls where <pre>
+            # used to fold every one of them into three.
+            if not await rich.send(self.bot, m.chat.id,
+                                   blocks=[rich.pre(rich.ascii_frame(body))]):
+                await m.answer(as_pre(body), parse_mode="HTML")
 
         @dp.message(Command("service"))
         async def _service(m: Message):
@@ -600,37 +676,7 @@ class CCBot:
             await target.answer(_stale_card("/sessions"), show_alert=True)
             return
         active = self.store.get_active(here.chat.id)
-        # Everything the buttons already say is left out: by the time you
-        # scroll past a duplicate list, you no longer remember it.
-        if managed:
-            waiting = [v for v in managed if v.status == "waiting"]
-            text = ngettext("📋 <b>Sessions</b> — {count} managed",
-                            "📋 <b>Sessions</b> — {count} managed",
-                            len(managed)).format(count=len(managed))
-            if waiting:
-                text += ngettext(", {count} waiting for you",
-                                 ", {count} waiting for you",
-                                 len(waiting)).format(count=len(waiting))
-            cur = next((v for v in managed if v.session_id == active), None)
-            if cur:
-                text += "\n" + _("▶️ Text goes to <b>{name}</b>").format(name=cur.name)
-            text += "\n<i>" + _(
-                "tap one for details — whether to open it is decided there. "
-                "🔗 is a live session from a terminal, 🕘 are ones closed "
-                "earlier.\nReplying to a session's message writes to that "
-                "session and makes it active; ✏️ on its card gives it a name "
-                "of your own.") + "</i>"
-        else:
-            text = _("📋 <b>Sessions</b>\n\nThe bot manages none yet — start "
-                     "with ➕.\n<i>🔗 are live sessions from your terminal, "
-                     "🕘 ones closed earlier</i>")
-        # The 🔗 rows speak for themselves; only a session stuck on a prompt
-        # is worth calling out, because that one needs attention at the desk.
-        stuck = [v for v in foreign if v.status == "waiting"]
-        if stuck:
-            names = ", ".join(v.name for v in stuck[:3])
-            text += "\n" + _("⏸ Waiting for you in the terminal: {names}").format(
-                names=names)
+        text = _sessions_text(managed, foreign, active)
         kb = sessions_kb(managed, foreign, active)
         if isinstance(target, CallbackQuery):
             await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
@@ -948,6 +994,22 @@ class CCBot:
         # message is not swallowed as a directory path.
         if not data.startswith("nd:manual") and not data.startswith("dt:"):
             self.pending.pop(chat_id, None)
+
+        if data.startswith("grp:"):
+            # A divider row still has to answer a tap: it says what the group
+            # below it is, which is exactly what the icons cannot say alone.
+            if data == "grp:term":
+                await c.answer(_(
+                    "Sessions from your own terminal. The bot can only watch "
+                    "them — their input is out of reach. «Move into tmux» "
+                    "restarts one under the bot, context and all."),
+                    show_alert=True)
+            else:
+                await c.answer(_(
+                    "Sessions the bot started in tmux windows. Full control "
+                    "from the chat: text, dialog buttons, Esc, /clear."),
+                    show_alert=True)
+            return
 
         if data == "ls":
             await c.answer()

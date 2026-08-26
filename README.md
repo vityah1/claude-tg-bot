@@ -426,21 +426,27 @@ When an option has an ASCII diagram, Claude draws it to the side and only for
 the highlighted row. The bot splits the screen into columns: option labels go
 onto buttons, and the diagram is delivered according to its width.
 
-**Verified on real clients:** mobile Telegram does not scroll code blocks, it
-wraps them — a wide diagram falls apart there even though it looks flawless on
-the desktop. Hence:
+For years this was the hard part: mobile Telegram did not scroll a code block,
+it wrapped it, so a wide diagram fell apart on a phone while looking flawless on
+the desktop. Anything wider than 36 characters had to leave as a PNG.
 
-* **up to 36 characters** — as text in `<pre>`: it lines up on a phone;
-* **wider** — a PNG (`ccbot/render.py`, Pillow + DejaVu Sans Mono). An image
-  zooms and can be dragged with a finger, and the alignment is exactly what the
-  terminal had.
+**Bot API 10.1 (June 2026) removed the problem.** A rich message's preformatted
+block scrolls sideways, so the diagram now travels inline as text at any width —
+it lines up, and it can be copied. Two things were measured on a live client
+rather than read in the documentation:
 
-The photo is sent once per question; the ⬆️ ⬇️ buttons update the text only,
-and "🖼 Diagram" redraws the picture for the currently highlighted option.
+* a single block accepted **30 000** characters, where the docs promise 1024;
+* box-drawing (`─ │ ┼`) is **not a letter wide** in Telegram's monospace face,
+  so a captured frame comes out ragged. Plain ASCII (`- | +`) lines up exactly,
+  which is what `rich.ascii_frame()` converts it to.
 
-A small thing that cost time: the lines in the PNG overlap by a pixel
-(`LINE_SPACING = -1`) — otherwise the `│` glyph renders a hair shorter than its
-cell and every vertical comes out dotted.
+The PNG path (`ccbot/render.py`, Pillow + DejaVu Sans Mono) stays underneath as
+the fallback for a client that has no rich messages; "🖼 Diagram" still redraws
+the current option on demand.
+
+A small thing that cost time back then, and still applies to the fallback: the
+lines in the PNG overlap by a pixel (`LINE_SPACING = -1`) — otherwise the `│`
+glyph renders a hair shorter than its cell and every vertical comes out dotted.
 
 Parsing the columns is needed precisely so the graphics do not end up inside
 option labels. The question and the heading are rendered across the full width,
@@ -696,10 +702,12 @@ situation is not an option.
 
 ## Later
 
-* **Colour in the PNG.** The render is monochrome today; `capture-pane -e`
-  returns ANSI, so the highlighting could be reproduced if it is ever wanted.
-* **The screen as an image.** The same renderer could be applied to "🖥 Screen",
-  so a full terminal arrives as a picture too.
+* **Streaming an answer.** `sendRichMessageDraft` exists for exactly the case
+  this bot has — a reply that grows while Claude writes it — and would replace
+  the "⏳ working" pulse with the text itself appearing.
+* **Native tables.** Claude's Markdown tables are already drawn by the client;
+  the bot's own lists (sessions, usage) are still `·`-separated text and could
+  become `InputRichBlockTable`.
 * **Long plans.** `ExitPlanMode` with a large plan is truncated for now — it
   ought to be split across several messages.
 

@@ -70,6 +70,12 @@ def sid8(session_id: str) -> str:
 def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
                 active: str | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    # The two kinds look alike in a list of rows, so they are split by a
+    # divider row. Telegram centres a caption, which makes dashes read as a
+    # separator; tapping one explains the group rather than doing nothing.
+    if managed:
+        kb.row(InlineKeyboardButton(
+            text=_("──── 🖥 in tmux ────"), callback_data="grp:tmux"))
     for v in managed:
         icon = STATUS_ICON.get(v.status, "•")
         label = _distinct_name(v.name, v.dir_name)
@@ -80,6 +86,9 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
             text=_fit(f"{mark} {v.dir_name} · {label}", hint),
             callback_data=f"s:{sid8(v.session_id)}",
         ))
+    if foreign:
+        kb.row(InlineKeyboardButton(
+            text=_("──── 🔗 in your terminal ────"), callback_data="grp:term"))
     for v in foreign:
         # 🔗 means "not mine yet" — opening it moves the session into tmux.
         hint = _("waiting") if v.status == "waiting" else ""

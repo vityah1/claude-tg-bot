@@ -21,7 +21,7 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
-from . import render, status_feed, tmux, transcript
+from . import render, rich, status_feed, tmux, transcript
 from . import screen as screenmod
 from . import sessions as sess
 from .i18n import _, resolve
@@ -421,32 +421,51 @@ class Watcher:
         rt.last_dialog_sig = sig
         rt.last_dialog_state = state
 
-        text, kb = self._render_dialog(name, session_id, dialog)
+        blocks, kb = self._dialog_blocks(name, session_id, dialog)
         if same_question and rt.dialog_msg_id:
+            if await rich.edit(self.bot, self.chat_id, rt.dialog_msg_id,
+                               blocks=blocks, reply_markup=kb):
+                return
             try:
                 await self.bot.edit_message_text(
-                    text, chat_id=self.chat_id, message_id=rt.dialog_msg_id,
+                    self._render_dialog(name, session_id, dialog)[0],
+                    chat_id=self.chat_id, message_id=rt.dialog_msg_id,
                     reply_markup=kb, parse_mode="HTML",
                 )
                 return
             except Exception:
                 pass          # message too old or unchanged — fall through
-        msg = await self._say_html(text, session_id=session_id, reply_markup=kb)
+        msg = await self._say_rich(session_id, blocks=blocks, reply_markup=kb)
+        if msg is None:
+            # No rich messages here: the old card, and a wide drawing goes
+            # back to being a picture because a <pre> would wrap it.
+            text, kb = self._render_dialog(name, session_id, dialog)
+            msg = await self._say_html(text, session_id=session_id, reply_markup=kb)
+            if dialog.preview and render.max_line_width(dialog.preview) > _PHONE_COLS:
+                await self.send_preview(session_id, dialog)
         rt.dialog_msg_id = getattr(msg, "message_id", None)
-        if dialog.preview and render.max_line_width(dialog.preview) > _PHONE_COLS:
-            # Send the drawing once per question; arrow navigation refreshes the
-            # text only, and "🖼 Diagram" re-renders on demand.
-            await self.send_preview(session_id, dialog)
 
     async def _emit(self, session_id: str, name: str, body: str,
                     usage, status) -> None:
-        """Send one block of Claude's output, split to fit Telegram."""
+        """Send one block of Claude's output.
+
+        Claude writes Markdown, and since Bot API 10.1 Telegram renders it —
+        headings, tables and fenced code arrive as themselves rather than as
+        the punctuation around them, and 32 768 characters usually mean no
+        split at all. The chunked plain-text path stays underneath for when
+        the API will not take the document.
+        """
+        tail = usage_suffix(usage, status)
+        doc = f"**💬 {rich.md_escape(name)}**\n\n{body}{tail}"
+        if len(doc) <= rich.DOC_LIMIT and await self._say_rich(
+                session_id, markdown=doc):
+            return
         chunks = split_text(f"💬 {name}\n\n{body}")
         for i, chunk in enumerate(chunks):
             # Usage tail rides along only on the last chunk, and only once
             # consumption is worth noticing.
-            tail = usage_suffix(usage, status) if i == len(chunks) - 1 else ""
-            await self._say(chunk + tail, session_id=session_id)
+            await self._say(chunk + (tail if i == len(chunks) - 1 else ""),
+                            session_id=session_id)
 
     async def _preface(self, session_id: str, window_id: str, name: str,
                        rt: SessionRuntime, usage, status) -> None:
@@ -529,10 +548,15 @@ class Watcher:
         rt.blocked_edited = time.time()
         log.info("blocked without a parsed dialog id=%s name=%s",
                  session_id[:8], name)
-        msg = await self._say_html(
-            self._blocked_text(name, raw), session_id=session_id,
+        msg = await self._say_rich(
+            session_id, blocks=self._blocked_blocks(name, raw),
             reply_markup=blocked_kb(session_id),
         )
+        if msg is None:
+            msg = await self._say_html(
+                self._blocked_text(name, raw), session_id=session_id,
+                reply_markup=blocked_kb(session_id),
+            )
         rt.blocked_msg_id = getattr(msg, "message_id", None)
 
     async def _still_waiting(self, session_id: str) -> bool:
@@ -559,6 +583,10 @@ class Watcher:
             return
         rt.blocked_sig = signature
         rt.blocked_edited = now
+        if await rich.edit(self.bot, self.chat_id, rt.blocked_msg_id,
+                           blocks=self._blocked_blocks(name, raw),
+                           reply_markup=blocked_kb(session_id)):
+            return
         try:
             await self.bot.edit_message_text(
                 self._blocked_text(name, raw), chat_id=self.chat_id,
@@ -570,14 +598,30 @@ class Watcher:
             # a word to the user, who already has the card and its buttons.
             log.debug("blocked card edit skipped", exc_info=True)
 
-    def _blocked_text(self, name: str, raw: str) -> str:
-        head = _("⚠️ <b>{name}</b> is waiting for an answer, but I did not "
-                 "recognise the question. Here is the screen:").format(
-                     name=html.escape(name))
-        foot = _("<i>The buttons below work without understanding it: digits "
+    @staticmethod
+    def _blocked_head(name: str) -> str:
+        return _("⚠️ {name} is waiting for an answer, but I did not recognise "
+                 "the question. Here is the screen:").format(name=name)
+
+    @staticmethod
+    def _blocked_foot() -> str:
+        return _("The buttons below work without understanding it: digits "
                  "pick an option, the arrows walk the list, Esc backs out. "
-                 "🖥 sends a fresh screen.</i>")
-        return head + "\n" + as_pre_lines(screenmod.tail_text(raw, 1500)) + "\n" + foot
+                 "🖥 sends a fresh screen.")
+
+    def _blocked_blocks(self, name: str, raw: str) -> list[rich.Block]:
+        """The whole screen, scrollable, with the frame straightened out."""
+        return [
+            rich.para(self._blocked_head(name)),
+            rich.pre(rich.ascii_frame(screenmod.tail_text(raw, rich.PRE_LIMIT))),
+            rich.para(rich.italic(self._blocked_foot())),
+        ]
+
+    def _blocked_text(self, name: str, raw: str) -> str:
+        """The same card for a client that cannot take a rich message."""
+        return (html.escape(self._blocked_head(name)) + "\n"
+                + as_pre_lines(screenmod.tail_text(raw, 1500))
+                + "\n<i>" + html.escape(self._blocked_foot()) + "</i>")
 
     async def _pulse(self, session_id: str, name: str, raw: str,
                      rt: SessionRuntime, blocked: bool) -> None:
@@ -641,6 +685,35 @@ class Watcher:
             if reached != previous:
                 rt.alerted[key] = reached
 
+    def _dialog_blocks(self, name: str, session_id: str, dialog) -> tuple:
+        """The question as rich blocks — nothing in here is parsed as markup.
+
+        Labels and diagrams come off a terminal, where "<" is a "<" and not
+        the start of a tag: with blocks there is no escaping step left to
+        forget. The diagram is inline at any width now, because a preformatted
+        block scrolls instead of wrapping.
+        """
+        head = ["❓ ", rich.bold(name)]
+        if dialog.title:
+            head.append(f" · {dialog.title}")
+        blocks: list[rich.Block] = [rich.para(*head), rich.para(dialog.question)]
+        for o in dialog.options:
+            mark = "▸ " if o.selected else ""
+            blocks.append(rich.para(mark, rich.bold(f"{o.number}. {o.label}")))
+            if o.description:
+                blocks.append(rich.para(f"    {o.description}"))
+        if dialog.extras:
+            # TRANSLATORS: options with no digit of their own, reachable only
+            # by walking the list with the arrow buttons.
+            blocks.append(rich.para(_("Via ⬆️⬇️✅: ") + ", ".join(dialog.extras)))
+        if dialog.preview:
+            sel = next((o.number for o in dialog.options if o.selected), None)
+            blocks.append(rich.para(
+                _("🖼 Diagram for option {n}:").format(n=sel) if sel
+                else _("🖼 Diagram:")))
+            blocks.append(rich.pre(rich.ascii_frame(dialog.preview)))
+        return blocks, dialog_kb(session_id, dialog)
+
     def _render_dialog(self, name: str, session_id: str, dialog):
         head = f"❓ <b>{html.escape(name)}</b>"
         if dialog.title:
@@ -682,6 +755,22 @@ class Watcher:
         if session_id and msg:
             self.store.remember_message(msg.message_id, session_id)
 
+    async def _say_rich(self, session_id: str | None = None, *, blocks=None,
+                        markdown: str | None = None, **kw):
+        """Rich-message twin of _say — None means "fall back to plain text".
+
+        A message the store never saw is a message a reply cannot address, so
+        the bookkeeping is identical to _say's; only the wire format differs.
+        """
+        msg = await rich.send(self.bot, self.chat_id, blocks=blocks,
+                              markdown=markdown, **kw)
+        if msg is None:
+            return None
+        log.info("out rich id=%s -> %s", msg.message_id, (session_id or "—")[:8])
+        if session_id:
+            self.store.remember_message(msg.message_id, session_id)
+        return msg
+
     async def _say_html(self, text: str, session_id: str | None = None, **kw):
         try:
             msg = await self.bot.send_message(
@@ -695,18 +784,28 @@ class Watcher:
         return msg
 
     async def send_preview(self, session_id: str, dialog) -> None:
-        """Render the highlighted option's ASCII art and send it as a photo."""
-        if not dialog.preview or not render.available():
+        """The highlighted option's drawing, on demand from the 🖼 button.
+
+        Text first: a scrollable block keeps the alignment and can be copied.
+        The PNG stays underneath for a client that has no rich messages.
+        """
+        if not dialog.preview:
             return
         sel = next((o.number for o in dialog.options if o.selected), None)
+        caption = (_("🖼 Diagram for option {n}").format(n=sel) if sel
+                   else _("🖼 Diagram"))
+        if await self._say_rich(session_id, blocks=[
+                rich.para(caption),
+                rich.pre(rich.ascii_frame(dialog.preview))]):
+            return
+        if not render.available():
+            return
         out = Path(tempfile.gettempdir()) / f"ccbot-preview-{session_id[:8]}.png"
         try:
             render.text_to_png(dialog.preview, out)
         except Exception:
             log.exception("preview render failed")
             return
-        caption = (_("🖼 Diagram for option {n}").format(n=sel) if sel
-                   else _("🖼 Diagram"))
         try:
             await self.bot.send_photo(self.chat_id, FSInputFile(out), caption=caption)
         except Exception:
@@ -715,6 +814,10 @@ class Watcher:
     async def send_screen(self, window_id: str, name: str,
                           session_id: str | None = None) -> None:
         raw = await tmux.capture(window_id)
-        body = screenmod.tail_text(raw, 3200)
-        await self._say(f"🖥 {name}\n" + as_pre(body), session_id=session_id,
-                        parse_mode="HTML")
+        if await self._say_rich(session_id, blocks=[
+                rich.para("🖥 ", rich.bold(name)),
+                rich.pre(rich.ascii_frame(screenmod.tail_text(raw, rich.PRE_LIMIT))),
+        ]):
+            return
+        await self._say(f"🖥 {name}\n" + as_pre(screenmod.tail_text(raw, 3200)),
+                        session_id=session_id, parse_mode="HTML")

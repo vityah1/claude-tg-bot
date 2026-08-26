@@ -76,7 +76,8 @@ lifecycle; `state.py` — SQLite (managed sessions, the active one per chat,
 managed/foreign/closed; `keyboards.py` — inline keyboards and the
 `callback_data` format; `paths.py` — XDG paths; `settings.py` —
 `~/.config/ccbot/config.json`; `service.py` — the bot's own process (uptime,
-version, restart); `media.py`, `render.py` (ASCII→PNG), `util.py`,
+version, restart); `rich.py` (Bot API 10.x rich messages); `media.py`,
+`render.py` (ASCII→PNG, now only a fallback), `util.py`,
 `logsetup.py`.
 
 ## The bot's state
@@ -185,10 +186,24 @@ is still alive, too. That is why rows are read tolerantly
   human edits.
 - **Metrics: `status_feed` first, `screen.read_status` as the fallback.** Do not
   parse bars off the screen where a payload exists.
-- **Telegram limits**: long text goes through `util.split_text`, terminal output
-  through `as_pre`/`as_pre_lines`. A mobile client **does not scroll** `<pre>`,
-  it wraps it, so an ASCII diagram wider than 36 columns is sent as an image
-  (`render.text_to_png`).
+- 🔴 **Rich messages are the normal path now** (`ccbot/rich.py`, Bot API 10.1,
+  June 2026). A preformatted block **scrolls** sideways, so the old rule — "a
+  phone wraps `<pre>`, therefore anything wider than 36 columns becomes a PNG" —
+  is gone. Terminal output goes out as `rich.pre()`, Claude's answers as
+  `markdown=` (he writes Markdown; Telegram now renders it), and a question as
+  a list of blocks. Text inside a block is **never parsed**, which is why an
+  option label containing `<b>` no longer needs escaping.
+  Three things measured against the live API, not the docs: a single block took
+  **30 000** characters (the docs claim 1024), a rich message can be **edited in
+  place** and carries an inline keyboard, and box-drawing (`─ │ ┼`) is **not a
+  letter wide** in Telegram's monospace face — a captured frame comes out
+  ragged, plain ASCII does not, hence `rich.ascii_frame()` on everything read
+  off a terminal.
+- **Every rich send has a plain-text fallback and must keep it.** `rich.send`
+  returns None instead of raising, and the caller then uses the old path
+  (`_say_html`, `as_pre`, and the PNG for a wide diagram). An older client must
+  not turn into silence. `util.split_text`, `as_pre`/`as_pre_lines` and
+  `render.text_to_png` are that fallback — they are not dead code.
 - **`c.message` is not guaranteed.** For a card older than 48 hours Telegram
   serves `InaccessibleMessage` (or `None`) — it can be neither edited nor
   replied to. Take the message through `_editable()` only, never `c.message.…`.
