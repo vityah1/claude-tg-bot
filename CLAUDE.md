@@ -114,8 +114,22 @@ is still alive, too. That is why rows are read tolerantly
   accounts for the reply and makes that session active. This applies to commands
   as well: a `/clear` sent as a reply to one session's message has to clear that
   session's context.
-- **User text goes through `tmux.paste_text()` only** (bracketed paste).
-  `send-keys -l` would submit a multi-line prompt at the first newline.
+- **User text goes through `tmux.submit_text()` only** (bracketed paste,
+  then Enter, both under one lock per window). `send-keys -l` would submit a
+  multi-line prompt at the first newline, and an unlocked paste interleaves
+  with the next one: the buffer name used to be derived from the window alone,
+  and `paste-buffer -d` deletes it, so two concurrent prompts became
+  `no buffer ccbot-7` (11 of 13 forwarded messages, 2026-08-27).
+- 🔴 **Incoming messages are batched, not forwarded one by one.** A forwarded
+  conversation arrives as a message per bubble in a single poll, and aiogram
+  runs an update per task — order is not guaranteed and neither is spacing.
+  `CCBot._hold` queues them per chat, `_inbox_loop` waits for `_INBOX_QUIET`
+  of quiet (and for every attachment download to finish), and `_flush_inbox`
+  sends **one** prompt sorted by `message_id`, with the target resolved then
+  (`_batch_target`: the first reply naming a session wins). A forwarded item
+  keeps its author from `forward_origin`, which is also what tells a forwarded
+  batch from the user's own typing (`media.build_batch_prompt`). Anything that
+  sends a prompt outside this path is back to one Enter per message.
 - **A new bot `/command` means four places**: the handler in `_register()`, the
   `OWN_COMMANDS` set, the `CCBot.MENU` list, and the text of `help_text()`.
   Forget `OWN_COMMANDS` and the command silently travels to Claude as text.

@@ -8,6 +8,7 @@ which is stable and unique — unlike names or indexes, which shift or collide.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import shlex
 from dataclasses import dataclass
@@ -113,16 +114,41 @@ async def list_windows() -> list[Window]:
     return windows
 
 
-async def paste_text(window_id: str, text: str) -> None:
-    """Insert *text* into the window using bracketed paste.
+# One prompt at a time per window. Two arriving together — a forwarded batch,
+# a dialog digit and the text after it — interleave inside the TUI input line,
+# and the buffer made it worse: its name came from the window alone, and
+# ``paste-buffer -d`` deletes the buffer, so a concurrent pair raced into
+# "no buffer ccbot-7" (13 forwarded messages, 2026-08-27).
+_input_locks: dict[str, asyncio.Lock] = {}
+_buf_seq = itertools.count()
+
+
+def input_lock(window_id: str) -> asyncio.Lock:
+    """The lock that serialises everything typed into *window_id*."""
+    lock = _input_locks.get(window_id)
+    if lock is None:
+        lock = _input_locks[window_id] = asyncio.Lock()
+    return lock
+
+
+async def _paste(window_id: str, text: str) -> None:
+    """Bracketed paste, no Enter. Only to be called holding the lock.
 
     Going through a buffer (rather than ``send-keys -l``) keeps quotes,
     semicolons and newlines intact, and bracketed paste stops Claude from
     submitting the prompt at the first newline of a multi-line message.
     """
-    buf = f"ccbot-{window_id.lstrip('@')}"
+    buf = f"ccbot-{window_id.lstrip('@')}-{next(_buf_seq)}"
     await _run("load-buffer", "-b", buf, "-", stdin=text.encode())
     await _run("paste-buffer", "-p", "-d", "-b", buf, "-t", window_id)
+
+
+async def submit_text(window_id: str, text: str, settle: float = 0.25) -> None:
+    """Paste *text* and press Enter as one indivisible action."""
+    async with input_lock(window_id):
+        await _paste(window_id, text)
+        await asyncio.sleep(settle)   # let the TUI render the paste
+        await _run("send-keys", "-t", window_id, "Enter")
 
 
 async def send_keys(window_id: str, *keys: str) -> None:

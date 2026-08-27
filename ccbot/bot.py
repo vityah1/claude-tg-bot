@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import logging
 import os
 import signal
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -70,8 +72,13 @@ OWN_COMMANDS = {"start", "help", "sessions", "new", "exit", "screen", "esc",
 
 # Telegram's Bot API refuses to serve files larger than this.
 _MAX_ATTACHMENT = 20 * 1024 * 1024
-# How long to wait for the rest of an album before acting on it.
-_MEDIA_DEBOUNCE = 1.8
+# How long the inbox waits for the rest of a burst before sending it on.
+# Telegram hands a whole forwarded batch over in a single poll — thirteen
+# messages landed within 190 ms on 2026-08-27 — and an album is no slower, so
+# a short window catches both while costing a lone message almost nothing.
+_INBOX_QUIET = 0.8
+# How often the collector looks at a batch it is holding.
+_INBOX_TICK = 0.2
 # Order Shift+Tab walks through permission modes.
 _MODE_CYCLE = ("auto", "manual", "acceptEdits", "plan")
 # How long to let Claude wind down after /exit before removing the window.
@@ -153,6 +160,10 @@ Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
 
 📷 Photos and PDFs are saved and handed to Claude as paths —
 as an album, with a caption, or with the text in the next message.
+
+📨 Messages that arrive together become <b>one</b> prompt: a
+forwarded conversation, an album, a thought written in three
+goes. A forwarded message keeps the name of whoever wrote it.
 
 When Claude asks a question, buttons with the options arrive.""")
 
@@ -253,6 +264,65 @@ def _editable(target: Message | CallbackQuery) -> Message | None:
     return msg if isinstance(msg, Message) else None
 
 
+def _sender_name(m: Message) -> str:
+    """Who wrote a forwarded message; empty for one the user wrote here.
+
+    Telegram says this in ``forward_origin``, whose four shapes name the
+    author in four different places (a visible user, a hidden one, a group, a
+    channel). An empty string is the answer for a message that was not
+    forwarded at all, and that is what tells a batch apart from a burst of
+    the user's own typing.
+    """
+    origin = getattr(m, "forward_origin", None)
+    if origin is None:
+        return ""
+    user = getattr(origin, "sender_user", None)
+    if user is not None:
+        return user.full_name or user.username or _("someone")
+    hidden = getattr(origin, "sender_user_name", None)
+    if hidden:
+        return hidden
+    chat = getattr(origin, "sender_chat", None) or getattr(origin, "chat", None)
+    if chat is not None:
+        return chat.title or chat.full_name or _("someone")
+    return _("someone")
+
+
+@dataclass
+class _Item:
+    """One queued message: what it said, what it brought, who wrote it."""
+
+    message: Message
+    text: str = ""
+    path: Path | None = None
+    sender: str = ""
+
+
+@dataclass
+class _Inbox:
+    """One chat's messages waiting to leave as a single prompt.
+
+    Telegram delivers a forwarded batch in one poll and aiogram runs an update
+    per task, so a forwarded conversation used to become one prompt per
+    message, in whatever order the event loop scheduled them, each with its
+    own Enter — and each racing the others for the same tmux buffer. They are
+    gathered here instead and sorted by message_id, which is the only ordering
+    that survives concurrent handlers.
+    """
+
+    items: dict[int, _Item] = field(default_factory=dict)
+    last: float = 0.0
+    # Attachments still coming down from Telegram. The batch may not be
+    # flushed while any of them is in flight, or the file would arrive after
+    # the prompt that mentions it.
+    downloads: int = 0
+    # Attachments this batch has seen, for naming the files apart.
+    files: int = 0
+    task: asyncio.Task | None = None
+    # Whether the person has already been told the files are waiting.
+    announced: bool = False
+
+
 class CCBot:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -266,11 +336,10 @@ class CCBot:
         # chat_id -> ("dir",) | ("dialog", session_id, option_number)
         #          | ("rename", session_id) | ("adddir",)
         self.pending: dict[int, tuple] = {}
-        # Attachments wait here until a caption or the next text message
-        # arrives, so an album plus its comment reach Claude as one prompt.
-        self.media_buf: dict[int, list[Path]] = {}
-        self.media_caption: dict[int, str] = {}
-        self.media_timer: dict[int, asyncio.Task] = {}
+        # Incoming messages wait here for the rest of their burst, so a
+        # forwarded conversation, an album and the sentence that explains it
+        # reach Claude as one prompt.
+        self.inbox: dict[int, _Inbox] = {}
         self.dir_choices: list[str] = []
         self.dp.update.outer_middleware(logsetup.UpdateLogMiddleware(cfg.allowed))
         # Per-update language, read from the settings first and from the
@@ -795,18 +864,138 @@ class CCBot:
     async def _send_prompt(self, mgd, text: str) -> None:
         self._typed(mgd)
         log.info("prompt -> %s (%s): %r", mgd.full_label, mgd.session_id[:8], text[:120])
-        await tmux.paste_text(mgd.window_id, text)
-        await asyncio.sleep(0.25)     # let the TUI render the paste
-        await tmux.send_keys(mgd.window_id, "Enter")
+        await tmux.submit_text(mgd.window_id, text)
+
+    # ----------------------------------------------------------------- inbox
+    def _inbox_of(self, chat_id: int) -> _Inbox:
+        box = self.inbox.get(chat_id)
+        if box is None:
+            box = self.inbox[chat_id] = _Inbox()
+        return box
+
+    def _hold(self, m: Message, text: str = "", download: bool = False) -> _Item:
+        """Queue one incoming message and keep the collection window open.
+
+        An attachment is registered here *before* it is downloaded: the batch
+        must not leave while a file is still on its way, and the message keeps
+        its place in the order either way.
+        """
+        box = self._inbox_of(m.chat.id)
+        item = _Item(message=m, text=text, sender=_sender_name(m))
+        box.items[m.message_id] = item
+        box.last = time.monotonic()
+        box.announced = False
+        if download:
+            box.downloads += 1
+            box.files += 1
+        if box.task is None or box.task.done():
+            box.task = asyncio.create_task(self._inbox_loop(m.chat.id))
+        return item
+
+    async def _inbox_loop(self, chat_id: int) -> None:
+        """Hold the batch until the burst is over, then send it as one prompt.
+
+        This runs outside a handler, where @dp.errors cannot see it, so a
+        failure has to speak for itself — otherwise a message the person sent
+        simply never arrives anywhere.
+        """
+        try:
+            while True:
+                await asyncio.sleep(_INBOX_TICK)
+                box = self.inbox.get(chat_id)
+                if box is None or not box.items:
+                    return
+                if box.downloads:
+                    continue
+                if time.monotonic() - box.last >= _INBOX_QUIET:
+                    break
+            await self._flush_inbox(chat_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("inbox flush failed: chat=%s", chat_id)
+            with contextlib.suppress(Exception):
+                await self.bot.send_message(
+                    chat_id, _("❌ Could not pass that on — see /log"))
+
+    async def _flush_inbox(self, chat_id: int) -> None:
+        """Everything the chat has queued leaves as a single prompt."""
+        box = self.inbox.get(chat_id)
+        if box is None or not box.items:
+            return
+        items = [box.items[mid] for mid in sorted(box.items)]
+        paths = [i.path for i in items if i.path]
+        if paths and not any(i.text.strip() for i in items):
+            # Attachments with nothing said about them wait for the words:
+            # a photo now and the question about it a minute later is a normal
+            # way to use a phone.
+            box.task = None
+            if not box.announced:
+                box.announced = True
+                await self.bot.send_message(chat_id, ngettext(
+                    "📎 Saved {count} file. Write something and I will send "
+                    "them together.",
+                    "📎 Saved {count} files. Write something and I will send "
+                    "them together.", len(paths)).format(count=len(paths)))
+            return
+        # Nothing was awaited since the batch was read, so this pop makes the
+        # flush single-winner: a second caller finds an empty inbox.
+        self.inbox.pop(chat_id, None)
+        mgd, note = await self._batch_target(items)
+        if not mgd:
+            return
+        pieces = [media.Piece(text=i.text, path=i.path, sender=i.sender)
+                  for i in items]
+        await self._send_prompt(mgd, media.build_batch_prompt(pieces))
+        parts = []
+        if len(items) > 1:
+            parts.append(ngettext("{count} message", "{count} messages",
+                                  len(items)).format(count=len(items)))
+        if paths:
+            parts.append(ngettext("{count} attachment", "{count} attachments",
+                                  len(paths)).format(count=len(paths)))
+        await self._ack(
+            items[-1].message,
+            _("➡️ Sent to <b>{name}</b>{extra}{note}").format(
+                name=html.escape(mgd.full_label),
+                extra=(" · " + " · ".join(parts)) if parts else "",
+                note=note),
+            mgd,
+        )
+
+    async def _batch_target(self, items: list[_Item]) -> tuple:
+        """Where a whole batch goes: the first reply naming a session wins.
+
+        A forwarded message often replies to another forwarded message, which
+        is no route at all — hence the check that the reply is one of the
+        bot's own cards before it decides anything.
+        """
+        for item in items:
+            replied = getattr(item.message, "reply_to_message", None)
+            if replied and self.store.session_of_message(replied.message_id):
+                return await self._target(item.message)
+        return await self._target(items[-1].message)
 
     # ----------------------------------------------------------------- media
     async def _on_media(self, m: Message) -> None:
-        chat_id = m.chat.id
+        """Save an attachment into the batch, keeping its place in the order."""
+        box = self._inbox_of(m.chat.id)
+        item = self._hold(m, text=(m.caption or ""), download=True)
+        try:
+            item.path = await self._download(m, index=box.files - 1)
+        finally:
+            box.downloads = max(0, box.downloads - 1)
+            box.last = time.monotonic()
+        if item.path is None:
+            box.items.pop(m.message_id, None)
+
+    async def _download(self, m: Message, index: int) -> Path | None:
+        """Fetch the file behind *m*; say what went wrong and return None."""
         # A photo sent as a reply switches the active session too, so the
         # caption that follows it lands in the same place.
         mgd, _note = await self._target(m)
         if not mgd:
-            return
+            return None
 
         if m.photo:
             obj, mime = m.photo[-1], "image/jpeg"
@@ -814,72 +1003,28 @@ class CCBot:
             obj, mime = m.document, (m.document.mime_type or "")
             if not (mime.startswith("image/") or mime == "application/pdf"):
                 await m.answer(_("I only take images and PDFs."))
-                return
+                return None
         else:
-            return
+            return None
 
         size = getattr(obj, "file_size", 0) or 0
         if size > _MAX_ATTACHMENT:
             await m.answer(_("That file is too big ({size} MB). The limit "
                              "is 20 MB.").format(size=size // 1024 // 1024))
-            return
+            return None
 
         try:
             tg_file = await self.bot.get_file(obj.file_id)
             if not tg_file.file_path:
                 raise RuntimeError(f"Telegram returned no path for {obj.file_id}")
-            idx = len(self.media_buf.get(chat_id, []))
             suffix = media.guess_suffix(tg_file.file_path, mime)
-            path = media.new_path(mgd.session_id, suffix, idx)
+            path = media.new_path(mgd.session_id, suffix, index)
             await self.bot.download_file(tg_file.file_path, destination=path)
         except Exception:
             log.exception("attachment download failed")
             await m.answer(_("❌ Could not download the file"))
-            return
-
-        self.media_buf.setdefault(chat_id, []).append(path)
-        if m.caption:
-            self.media_caption[chat_id] = m.caption
-
-        # Albums arrive as separate messages; wait for the batch to settle.
-        old = self.media_timer.pop(chat_id, None)
-        if old:
-            old.cancel()
-        self.media_timer[chat_id] = asyncio.create_task(self._flush_media(chat_id))
-
-    async def _flush_media(self, chat_id: int) -> None:
-        try:
-            await asyncio.sleep(_MEDIA_DEBOUNCE)
-        except asyncio.CancelledError:
-            return
-        self.media_timer.pop(chat_id, None)
-        paths = self.media_buf.get(chat_id) or []
-        if not paths:
-            return
-        caption = self.media_caption.pop(chat_id, "")
-        if not caption:
-            await self.bot.send_message(
-                chat_id,
-                ngettext("📎 Saved {count} file. Write something and I will "
-                         "send them together.",
-                         "📎 Saved {count} files. Write something and I will "
-                         "send them together.",
-                         len(paths)).format(count=len(paths)),
-            )
-            return
-        self.media_buf.pop(chat_id, None)
-        mgd = self.store.get(self.store.get_active(chat_id) or "")
-        if not mgd:
-            return
-        await self._send_prompt(mgd, media.build_prompt(paths, caption))
-        msg = await self.bot.send_message(
-            chat_id,
-            ngettext("➡️ Sent to {name} with {count} attachment",
-                     "➡️ Sent to {name} with {count} attachments",
-                     len(paths)).format(name=mgd.full_label, count=len(paths)),
-        )
-        if msg:
-            self.store.remember_message(msg.message_id, mgd.session_id)
+            return None
+        return path
 
     # -------------------------------------------------------------- handlers
     async def _on_text(self, m: Message) -> None:
@@ -952,33 +1097,18 @@ class CCBot:
             cmd = text[1:].split()[0].split("@")[0].lower()
             if cmd in OWN_COMMANDS:
                 return          # handled by the dedicated handlers
-
-        # A reply beats the active session: answering a message from finman
-        # must reach finman even if 7loc was opened in the meantime.
-        mgd, note = await self._target(m)
-        if not mgd:
+            # A command Claude parses has to arrive on a line of its own, so
+            # whatever is queued goes first and the command follows alone.
+            await self._flush_inbox(chat_id)
+            self._hold(m, text)
+            await self._flush_inbox(chat_id)
             return
 
-        paths = self.media_buf.pop(chat_id, [])
-        if paths:
-            timer = self.media_timer.pop(chat_id, None)
-            if timer:
-                timer.cancel()
-            self.media_caption.pop(chat_id, None)
-            text = media.build_prompt(paths, text)
-
-        await self._send_prompt(mgd, text)
-        suffix = ""
-        if paths:
-            suffix = " " + ngettext("with {count} attachment",
-                                    "with {count} attachments",
-                                    len(paths)).format(count=len(paths))
-        await self._ack(
-            m,
-            _("➡️ Sent to <b>{name}</b>{extra}{note}").format(
-                name=html.escape(mgd.full_label), extra=suffix, note=note),
-            mgd,
-        )
+        # Ordinary text joins the queue instead of going straight through:
+        # a forwarded conversation, an album and the words that explain it
+        # belong in one prompt, and the target is worked out at that point
+        # (a reply still beats the active session — see _batch_target).
+        self._hold(m, text)
 
     async def _on_callback(self, c: CallbackQuery) -> None:
         data = c.data or ""

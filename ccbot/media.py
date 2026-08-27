@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -76,12 +77,64 @@ def cleanup(max_age_days: int = MAX_AGE_DAYS) -> int:
     return removed
 
 
+@dataclass(frozen=True)
+class Piece:
+    """One Telegram message on its way into a prompt.
+
+    *sender* is filled in for a forwarded message and empty for one the user
+    wrote themselves — which is what decides whether the prompt keeps the
+    names. A forwarded conversation without them is unreadable: two people
+    answering each other become one voice contradicting itself.
+    """
+
+    text: str = ""
+    path: Path | None = None
+    sender: str = ""
+
+
+def _paths_head(paths: list[Path], numbered: bool = False) -> str:
+    listing = "\n".join(f"{i}. {p}" for i, p in enumerate(paths, 1)) if numbered \
+        else "\n".join(str(p) for p in paths)
+    noun = ngettext("this image", "these {count} images",
+                    len(paths)).format(count=len(paths))
+    return _("Take a look at {what}:\n{paths}").format(what=noun, paths=listing)
+
+
 def build_prompt(paths: list[Path], text: str) -> str:
     """Compose the message handed to Claude: file paths plus the user's text."""
     if not paths:
         return text
-    listing = "\n".join(str(p) for p in paths)
-    noun = ngettext("this image", "these {count} images",
-                    len(paths)).format(count=len(paths))
-    head = _("Take a look at {what}:\n{paths}").format(what=noun, paths=listing)
+    head = _paths_head(paths)
     return f"{head}\n\n{text}" if text.strip() else head
+
+
+def build_batch_prompt(pieces: list[Piece]) -> str:
+    """Fold a burst of messages into the single prompt Claude receives.
+
+    Nothing forwarded means nothing to attribute, so the texts are simply
+    joined and the attachments listed as before — a lone message comes out
+    byte for byte as the person typed it. A forwarded batch instead becomes a
+    transcript: every line says who wrote it, and an attachment is referenced
+    by number from the line it arrived with, so the picture stays attached to
+    the sentence that asked about it.
+    """
+    paths = [p.path for p in pieces if p.path]
+    if not any(p.sender for p in pieces):
+        joined = "\n\n".join(t for t in (p.text.strip() for p in pieces) if t)
+        return build_prompt(paths, joined)
+
+    lines, seen = [], 0
+    for piece in pieces:
+        who = piece.sender or _("me")
+        if piece.path:
+            seen += 1
+            who += " " + _("[image {n}]").format(n=seen)
+        body = piece.text.strip()
+        lines.append(f"{who}: {body}" if body else who)
+    head = ngettext("Forwarded from Telegram, {count} message, oldest first:",
+                    "Forwarded from Telegram, {count} messages, oldest first:",
+                    len(pieces)).format(count=len(pieces))
+    dump = head + "\n\n" + "\n".join(lines)
+    if paths:
+        return _paths_head(paths, numbered=True) + "\n\n" + dump
+    return dump

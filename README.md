@@ -466,9 +466,54 @@ display, so there is no way to paste a picture "with Ctrl+V".
 
 * with a caption — it goes straight through together with it;
 * without one — it waits for the next text message;
-* an album is gathered into a single prompt (a 1.8 s window).
+* an album is gathered into a single prompt.
 
 Attachments older than 14 days are cleared out when the bot starts.
+
+## One burst, one prompt
+
+Nothing goes to a session the moment it arrives. Every incoming message lands
+in a per-chat inbox and leaves 0.8 s after the last of them
+(`_INBOX_QUIET`) — as **one** prompt, ordered by `message_id`. An attachment
+still coming down from Telegram holds the batch open, so the picture is never
+mentioned in a prompt that arrives before the file exists.
+
+The reason is what a phone actually sends. Forwarding a conversation produces a
+message per bubble, Telegram hands the whole lot over in a single poll (13 of
+them within 190 ms on 2026-08-27), and aiogram runs an update per task. Sent
+straight through, that became 13 prompts in whatever order the event loop
+scheduled them, each with its own Enter — and 13 simultaneous
+`tmux load-buffer`/`paste-buffer` pairs on one buffer name, of which 11 died
+with `no buffer ccbot-7`, because `paste-buffer -d` deletes the buffer another
+call was about to paste. Hence both halves of the fix: the inbox, and one lock
+per window in `tmux.py` (`tmux.submit_text` — paste and Enter, indivisible).
+
+A forwarded batch also keeps its authorship. `forward_origin` says who wrote
+each message — a visible user, a hidden one, a group, a channel — and the
+prompt becomes a transcript:
+
+```
+Take a look at this image:
+1. /home/vik/.cache/ccbot/media/0444d8e4/20260827-131032-0.jpg
+
+Forwarded from Telegram, 13 messages, oldest first:
+
+Andrii: hi!
+Andrii: did you not set the plans up??
+Vik: Hi
+Andrii [image 1]: why like this??
+…
+```
+
+Without the names, two people answering each other collapse into one voice
+contradicting itself. Messages the user typed themselves have no author to
+name, so they are simply joined by a blank line, and a single message is passed
+through byte for byte — the ordinary case is untouched.
+
+Two things deliberately skip the queue: a `/command` bound for Claude (it
+flushes whatever is waiting and then goes alone, because a command has to be
+the first thing on its line) and an answer to a question the bot asked
+("send me a path", a dialog option), which is a conversation of its own.
 
 ## Project directories
 
