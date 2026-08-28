@@ -457,16 +457,34 @@ The ⬆️ ⬇️ ✅ buttons page through the list, and the message is **edited
 than duplicated. The arrows also reach options with no number ("Chat about
 this") that no digit corresponds to.
 
-## Images and PDFs
+## Attachments
 
-Photos, albums and PDFs from Telegram are saved into
-`~/.cache/ccbot/media/<session>/` and handed to Claude as paths — its `Read`
-displays images natively. The system clipboard is not used here: WSL has no
-display, so there is no way to paste a picture "with Ctrl+V".
+Anything Telegram can carry — a photo, an album, a document of any type, a
+video, an audio file, a voice message, a sticker — is saved into
+`~/.cache/ccbot/media/<session>/` and handed to Claude as a path. Its `Read`
+displays images natively; a JSON, a log or a CSV it simply reads, and an
+archive or an audio file it can unpack or convert on its own. The system
+clipboard is not used here: WSL has no display, so there is no way to paste a
+picture "with Ctrl+V".
+
+**The format is not filtered.** It used to be — images and PDFs only, and a
+forwarded JSON came back as "I only take images and PDFs", which is a bot
+deciding what Claude is capable of reading. The only real limit is Telegram's:
+a bot may download **20 MB**, and past that the answer says so and suggests
+sending a path instead.
+
+A file keeps the name it was sent with (sanitised, and given a `-1` suffix
+rather than overwriting a namesake): the path is all Claude sees, and
+`dialog-with-maksym.json` says more than `20260828-131032-0.json`. Only what
+arrives nameless — a photo, a voice note — is named by timestamp.
 
 * with a caption — it goes straight through together with it;
 * without one — it waits for the next text message;
 * an album is gathered into a single prompt.
+
+The prompt says "image" only when every attachment really is one; otherwise it
+says "file", and inside a forwarded transcript the marker is `[file 2]` rather
+than `[image 2]`.
 
 Attachments older than 14 days are cleared out when the bot starts.
 

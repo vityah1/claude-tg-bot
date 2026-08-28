@@ -158,8 +158,11 @@ Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
 /dirs — directories offered when starting a session
 /lang — interface language
 
-📷 Photos and PDFs are saved and handed to Claude as paths —
-as an album, with a caption, or with the text in the next message.
+📎 <b>Any file</b> — a photo, a PDF, a JSON dump, a log, an
+archive, a voice message — is saved and handed to Claude as a
+path, under the name you sent it with. As an album, with a
+caption, or with the text in the next message. Telegram lets a
+bot download 20 MB at most; for anything bigger, send the path.
 
 📨 Messages that arrive together become <b>one</b> prompt: a
 forwarded conversation, an album, a thought written in three
@@ -286,6 +289,57 @@ def _sender_name(m: Message) -> str:
     if chat is not None:
         return chat.title or chat.full_name or _("someone")
     return _("someone")
+
+
+@dataclass(frozen=True)
+class _Att:
+    """One attachment as the downloader needs it, whatever Telegram called it."""
+
+    file_id: str
+    size: int
+    mime: str
+    name: str | None
+    fallback: str
+
+
+def _att(obj: object, mime: str, fallback: str) -> _Att:
+    return _Att(
+        file_id=str(getattr(obj, "file_id", "")),
+        size=int(getattr(obj, "file_size", 0) or 0),
+        mime=str(getattr(obj, "mime_type", None) or mime),
+        name=getattr(obj, "file_name", None),
+        fallback=fallback,
+    )
+
+
+def _attachment(m: Message) -> _Att | None:
+    """The file a message carries, of any kind and of any format.
+
+    The format is never judged: Claude reads a JSON, unpacks an archive and
+    can transcribe a voice message himself, so a bot that only accepts
+    pictures turns a forwarded conversation into a hole. Every kind Telegram
+    has is taken — the name is what the sender called it, and where Telegram
+    gives none (a photo, a voice note) the fallback suffix names the file.
+    """
+    # An animation and a video note also fill ``document``/``video`` on some
+    # clients, so the specific kinds are asked about first.
+    if m.photo:
+        return _att(m.photo[-1], "image/jpeg", ".jpg")
+    if m.animation:
+        return _att(m.animation, "video/mp4", ".mp4")
+    if m.video_note:
+        return _att(m.video_note, "video/mp4", ".mp4")
+    if m.voice:
+        return _att(m.voice, "audio/ogg", ".oga")
+    if m.sticker:
+        return _att(m.sticker, "image/webp", ".webp")
+    if m.document:
+        return _att(m.document, "", ".bin")
+    if m.video:
+        return _att(m.video, "video/mp4", ".mp4")
+    if m.audio:
+        return _att(m.audio, "audio/mpeg", ".mp3")
+    return None
 
 
 @dataclass
@@ -482,13 +536,12 @@ class CCBot:
                 )
                 await self._show_sessions(m)
 
-        @dp.message(F_.photo)
-        async def _photo(m: Message):
-            if self._ok(m):
-                await self._on_media(m)
-
-        @dp.message(F_.document)
-        async def _document(m: Message):
+        # Every kind of attachment, not a chosen few: an unhandled kind falls
+        # through to no handler at all, and a voice message inside a forwarded
+        # conversation would silently disappear from the batch.
+        @dp.message(F_.photo | F_.document | F_.video | F_.audio | F_.voice
+                    | F_.video_note | F_.animation | F_.sticker)
+        async def _media(m: Message):
             if self._ok(m):
                 await self._on_media(m)
 
@@ -997,33 +1050,31 @@ class CCBot:
         if not mgd:
             return None
 
-        if m.photo:
-            obj, mime = m.photo[-1], "image/jpeg"
-        elif m.document:
-            obj, mime = m.document, (m.document.mime_type or "")
-            if not (mime.startswith("image/") or mime == "application/pdf"):
-                await m.answer(_("I only take images and PDFs."))
-                return None
-        else:
+        att = _attachment(m)
+        if att is None or not att.file_id:
             return None
 
-        size = getattr(obj, "file_size", 0) or 0
+        size = att.size
         if size > _MAX_ATTACHMENT:
-            await m.answer(_("That file is too big ({size} MB). The limit "
-                             "is 20 MB.").format(size=size // 1024 // 1024))
+            # Telegram's own ceiling for a bot download, not a rule of ours.
+            await m.answer(_("That file is too big ({size} MB). Telegram lets "
+                             "a bot download 20 MB at most — put it somewhere "
+                             "on disk and send me the path instead.").format(
+                                 size=size // 1024 // 1024))
             return None
 
         try:
-            tg_file = await self.bot.get_file(obj.file_id)
+            tg_file = await self.bot.get_file(att.file_id)
             if not tg_file.file_path:
-                raise RuntimeError(f"Telegram returned no path for {obj.file_id}")
-            suffix = media.guess_suffix(tg_file.file_path, mime)
-            path = media.new_path(mgd.session_id, suffix, index)
+                raise RuntimeError(f"Telegram returned no path for {att.file_id}")
+            suffix = media.guess_suffix(tg_file.file_path, att.mime, att.fallback)
+            path = media.new_path(mgd.session_id, suffix, index, att.name)
             await self.bot.download_file(tg_file.file_path, destination=path)
         except Exception:
             log.exception("attachment download failed")
             await m.answer(_("❌ Could not download the file"))
             return None
+        log.info("attachment saved: %s (%s, %s bytes)", path, att.mime or "?", size)
         return path
 
     # -------------------------------------------------------------- handlers

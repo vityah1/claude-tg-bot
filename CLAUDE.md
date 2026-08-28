@@ -130,6 +130,19 @@ is still alive, too. That is why rows are read tolerantly
   keeps its author from `forward_origin`, which is also what tells a forwarded
   batch from the user's own typing (`media.build_batch_prompt`). Anything that
   sends a prompt outside this path is back to one Enter per message.
+- 🔴 **An attachment is never filtered by format.** `_attachment()` takes every
+  kind Telegram has (photo, document, video, audio, voice, video note,
+  animation, sticker) and hands the path over whatever the MIME type says: a
+  JSON, a log, an archive are all things Claude reads or unpacks himself, and
+  the whitelist that used to be there ("I only take images and PDFs") answered
+  a forwarded conversation dump with a refusal. The only limit left is
+  Telegram's own 20 MB for a bot download, and the message for it says to send
+  a path instead. The handler filter has to list every kind too — an unlisted
+  one matches no handler at all and vanishes from the batch in silence.
+  A file keeps the name it was sent with (`media.safe_name`, `-1` on a
+  collision, never an invented extension); only the nameless kinds get the
+  timestamp. `media.is_image()` is what decides whether the prompt says "image"
+  or "file" — announcing a JSON as an image sends Claude looking for a picture.
 - **A new bot `/command` means four places**: the handler in `_register()`, the
   `OWN_COMMANDS` set, the `CCBot.MENU` list, and the text of `help_text()`.
   Forget `OWN_COMMANDS` and the command silently travels to Claude as text.
