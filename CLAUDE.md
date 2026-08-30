@@ -62,6 +62,7 @@ asymmetric:
 | Blocking dialogs, the spinner, the status line | `tmux capture-pane` + parser | `screen.py` |
 | Exact metrics (context, limits, model, cost) | the status-line payload via `bin/statusline-tee.sh` | `status_feed.py` |
 | The list of live sessions | `claude agents --json` | `sessions.py` |
+| Which Claude Code a session runs, and which is on disk | the payload's `version` / `claude --version` | `updates.py` |
 | Interface language (gettext, `locales/`) | a middleware on each update + a context in the watcher tick | `i18n.py` |
 
 The `Watcher._tick()` loop (`watcher.py`, every `CCBOT_POLL_INTERVAL` seconds,
@@ -143,6 +144,30 @@ is still alive, too. That is why rows are read tolerantly
   collision, never an invented extension); only the nameless kinds get the
   timestamp. `media.is_image()` is what decides whether the prompt says "image"
   or "file" — announcing a JSON as an image sends Claude looking for a picture.
+- 🔴 **A session restart is `/exit` + `claude --resume <id> -n <name>` in the
+  same window, and the window is never killed** (`CCBot._restart_session`).
+  `--resume` keeps the session id — verified against the live CLI on
+  2026-08-30: same `sessionId` in `claude agents --json`, same transcript file,
+  appended to rather than replaced. That is what makes the restart cheap:
+  the reader's offset stays valid, so nothing is replayed into the chat, and
+  `adopt()` must *not* be called. The launch name has to come back exactly as
+  it was, or the session is lost at its first `/clear` (see `Managed.name`).
+  Unlike `_close`, a restart that fails leaves the session standing: no
+  `kill_window` on any path.
+- 🔴 **A restart refuses a busy or waiting session, and asks twice.**
+  `claude agents --json` is asked with `force=True` (the five-second cache
+  would refuse a session that had *just* finished), and the screen is read on
+  top of that — a session relaunched seconds ago is missing from the agent
+  list entirely, and without the screen check a second press would walk over
+  the prompt it had meanwhile been given. Neither source alone is enough: the
+  agent list knows about dialogs `find_dialog()` cannot parse (`/model` is
+  one), the screen knows about work the list has not caught up with.
+- **`screen.is_busy()` needs the spinner line, not only the interrupt hint.**
+  "esc to interrupt" joins the spinner a few seconds into a turn, so the hint
+  alone reads the first seconds of every turn as idle (2.1.251:
+  `✻ Smooshing… (1s · thinking)`). The line is matched by `_WORKING_RE`, which
+  demands the ellipsis: `_ACTIVITY_RE` accepts the `●` that also heads Claude's
+  prose, and without the ellipsis "● I ran it (3s later)" reads as hard at work.
 - **A new bot `/command` means four places**: the handler in `_register()`, the
   `OWN_COMMANDS` set, the `CCBot.MENU` list, and the text of `help_text()`.
   Forget `OWN_COMMANDS` and the command silently travels to Claude as text.

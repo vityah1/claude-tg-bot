@@ -21,12 +21,12 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
-from . import render, rich, status_feed, tmux, transcript
+from . import render, rich, status_feed, tmux, transcript, updates
 from . import screen as screenmod
 from . import sessions as sess
-from .i18n import _, resolve
+from .i18n import _, ngettext, resolve
 from .i18n import use as use_locale
-from .keyboards import blocked_kb, dialog_kb
+from .keyboards import blocked_kb, dialog_kb, update_notice_kb
 from .settings import Settings
 from .state import Store
 from .transcript import TranscriptReader
@@ -48,6 +48,10 @@ _TITLE_RETRY = 30.0
 
 # How long the same watcher failure stays quiet after it has been reported.
 _FAIL_REPEAT = 3600.0
+
+# How often to ask what version of Claude Code is on disk. It only moves when
+# the background updater has been at work, and asking spawns a node process.
+_VERSION_CHECK = 600.0
 
 # Silence while Claude works reads as a broken bot, so a working session gets a
 # heartbeat: one message, edited in place, never a stream of them.
@@ -163,6 +167,8 @@ class Watcher:
         # 1.5 seconds does not become 2400 messages an hour.
         self.failure_sig: str | None = None
         self.failure_told = 0.0
+        # Last time the disk was asked which Claude Code is installed.
+        self.version_checked = 0.0
 
     def start(self) -> None:
         if self._task is None:
@@ -191,6 +197,7 @@ class Watcher:
 
     def forget(self, session_id: str) -> None:
         self.runtimes.pop(session_id, None)
+        updates.forget(session_id)
 
     def adopt(self, session_id: str, skip_existing: bool = True) -> None:
         """Track a session; by default ignore transcript written before now."""
@@ -298,7 +305,43 @@ class Watcher:
                 session_id=fresh, parse_mode="HTML",
             )
 
+    async def _check_version(self) -> None:
+        """Say once when a newer Claude Code is waiting on disk.
+
+        The sessions cannot notice this themselves: a running process keeps
+        the build it started with, and nothing in the TUI mentions the file
+        that has meanwhile been replaced. Announced once per release — the
+        note is kept in the settings file, so a bot restart does not turn one
+        release into a second notification.
+        """
+        now = time.time()
+        if now - self.version_checked < _VERSION_CHECK:
+            return
+        self.version_checked = now
+        disk = await updates.installed()
+        if not disk or self.settings.notified_version == disk:
+            return
+        behind = [m for m in self.store.all_managed()
+                  if updates.stale(m.session_id, disk)]
+        if not behind:
+            return
+        self.settings.notified_version = disk
+        log.info("announcing claude %s; %d session(s) behind", disk, len(behind))
+        head = _("⬆️ <b>Claude Code {version} is on disk</b>").format(
+            version=html.escape(disk))
+        body = ngettext(
+            "{count} session is still running an older build — a session only "
+            "picks a new one up when it is started again.",
+            "{count} sessions are still running an older build — a session "
+            "only picks a new one up when it is started again.",
+            len(behind)).format(count=len(behind))
+        tail = _("A restart keeps the context: the same session id, the same "
+                 "transcript, the same history. /update")
+        await self._say_html(f"{head}\n\n{body}\n\n{tail}",
+                             reply_markup=update_notice_kb())
+
     async def _tick(self) -> None:
+        await self._check_version()
         await self._rebind_cleared()
         live = {a.get("sessionId"): a for a in await sess.live_agents()}
         for m in self.store.all_managed():

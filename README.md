@@ -286,6 +286,7 @@ has to be typed by hand.
 | `/dirs` | the project directories offered when starting a session |
 | `/rename` | your own name for a session (`/rename -` gives the automatic one back) |
 | `/lang` | interface language (`en` and `uk` for now) |
+| `/update` | which Claude Code each session runs, which one is on disk, and a restart that keeps the context |
 | `/exit` | **ends the session**: Claude shuts down on its own, then the tmux window closes |
 
 All of them act on the **active** session, or — in a reply — on the one whose
@@ -312,6 +313,65 @@ The process is not killed. `/exit` goes into the session — Claude shuts itself
 down and gets to finish writing the transcript; only then is the tmux window
 taken away. Calling it `kill` would promise the opposite. Ctrl+D does not work
 here: the TUI ignores it (verified).
+
+## Updating Claude Code
+
+Claude Code updates itself in the background, but a running process keeps the
+build it started with: the new one reaches a session only when its `claude` is
+started again. Nothing in the TUI says so, so a session can sit three releases
+behind for a week and look perfectly healthy.
+
+`/update` puts both numbers on one card — the version on disk, the version each
+session is actually running — and offers the restart that closes the gap.
+
+```
+⬆️ Claude Code
+
+On disk: 2.1.251 — what a session gets the moment it is started again.
+
+✅ finman · calendar — 2.1.247 ⬆️
+✅ pay4say · widget — 2.1.245 ⬆️
+▶️⏸ claude-tg-bot · the update card — 2.1.241 ⬆️
+
+3 sessions are behind.
+Busy or waiting, so left alone: claude-tg-bot · the update card
+```
+
+**Where the numbers come from.** On disk: `claude --version`, asked at most
+every five minutes — it only moves when the background updater has been at
+work. In a session: the `version` field of the status-line payload, which the
+process rewrites on every status-line render, with the transcript as the
+fallback where the tee is not installed. Both are written by the process
+itself, so they describe the build that is running and not the file on disk.
+
+**What a restart is.** `/exit` into the session, then
+`claude --resume <id> -n <name>` in the *same* tmux window. The session id
+survives a resume, so the transcript keeps growing in the same file, the
+reader's offset stays valid, and nothing is replayed into the chat. The launch
+name comes back exactly as it was — it is the only thread back to a session
+that is later `/clear`ed. The context comes back with the history; the prompt
+cache does not, so the first reply after a restart takes a little longer, and
+anything half-typed into the session's input line is gone.
+
+**What it refuses to do.** A session that is working, or waiting on a question,
+is left alone — checked twice over, because neither source is enough on its
+own: `claude agents --json` (asked fresh, not from the five-second cache) knows
+about dialogs the screen parser does not recognise, and the screen answers
+immediately for a session that has only just been relaunched and is missing
+from the agent list for a couple of seconds. If `/exit` does not finish in
+20 seconds, or the resumed `claude` does not appear within 40, the restart
+stops and says so — the window is never killed, unlike `/exit` from the menu.
+
+**"🔄 Check for updates"** runs `claude update`, which is the CLI's own
+"check and install if there is anything". It changes what is on disk and
+nothing else: the restart is still yours to press.
+
+**Being told about it.** When a release lands on disk while sessions are behind,
+the watcher says so once — one message per version, remembered in
+`config.json`, so a bot restart does not turn one release into a second
+notification. Between messages the badge is enough: `⬆️` and a count in
+`/sessions`, the two versions on the session card, and the disk version in
+`/service`.
 
 ## Three kinds of session in the list
 

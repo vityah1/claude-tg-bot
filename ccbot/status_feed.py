@@ -99,6 +99,7 @@ class Usage:
     model: str = ""
     model_id: str = ""
     effort: str = ""
+    version: str = ""      # the Claude Code build this session is running
     cwd: str = ""
     transcript_path: str = ""
     ctx_pct: int | None = None
@@ -164,6 +165,7 @@ def read(session_id: str) -> Usage | None:
         model=(d.get("model") or {}).get("display_name") or "",
         model_id=(d.get("model") or {}).get("id") or "",
         effort=(d.get("effort") or {}).get("level") or "",
+        version=d.get("version") or "",
         cwd=d.get("cwd") or "",
         transcript_path=d.get("transcript_path") or "",
         ctx_pct=round(float(used)) if used is not None else None,

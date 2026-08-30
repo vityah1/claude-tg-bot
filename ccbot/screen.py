@@ -85,8 +85,16 @@ _LIST_START_RE = re.compile(r"^\s*([-*•·→▸○◦]|\d+[.)]|[|┃])\s")
 # Free-text escape hatches Claude offers inside choice dialogs.
 _TEXT_OPTION_HINTS = ("type something", "chat about this", "other")
 
-# Shown while the model is generating.
+# Shown while the model is generating. Not enough on its own: the hint only
+# joins the spinner line after the first few seconds, so a turn that has just
+# started reads as idle (2.1.251: "✻ Smooshing… (1s · thinking)"). The spinner
+# line itself is the reliable half — see is_busy.
 _BUSY_MARKERS = ("esc to interrupt", "to interrupt")
+# The spinner line as a *state*, which is stricter than _ACTIVITY_RE: the verb
+# must trail an ellipsis ("Smooshing… (1s · thinking)"). _ACTIVITY_RE accepts
+# the "●" that also heads Claude's prose, so without the ellipsis a sentence
+# like "● I ran it (3s later)" would read as a session hard at work.
+_WORKING_RE = re.compile(r"^[✻✽✢✳*●]\s+\S.*…\s*\(\d+[hms]\b")
 
 # How far above the footer a dialog body may reach, and how much question text to keep.
 _WINDOW = 60
@@ -449,9 +457,17 @@ def said_above_dialog(screen: str) -> str:
 
 
 def is_busy(screen: str) -> bool:
-    """True while Claude is generating (an interrupt hint is visible)."""
+    """True while Claude is generating.
+
+    Either half is proof: the interrupt hint, and the spinner line with its
+    running timer. The hint alone used to be the test, and it misses the first
+    seconds of every turn — long enough for a restart to walk over a prompt
+    that had only just been sent.
+    """
     low = screen.lower()
-    return any(m in low for m in _BUSY_MARKERS)
+    if any(m in low for m in _BUSY_MARKERS):
+        return True
+    return any(_WORKING_RE.match(ln.strip()) for ln in screen.splitlines())
 
 
 def read_activity(screen: str) -> str:

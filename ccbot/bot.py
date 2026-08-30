@@ -7,6 +7,7 @@ import contextlib
 import html
 import logging
 import os
+import shlex
 import signal
 import time
 import uuid
@@ -22,12 +23,13 @@ from aiogram.types import (
     BotCommandScopeAllPrivateChats,
     CallbackQuery,
     ErrorEvent,
+    InlineKeyboardMarkup,
     MenuButtonCommands,
     Message,
     Update,
 )
 
-from . import logsetup, media, rich, service, status_feed, tmux, util
+from . import logsetup, media, rich, service, status_feed, tmux, updates, util
 from . import screen as screenmod
 from . import sessions as sess
 from .config import Config
@@ -56,6 +58,7 @@ from .keyboards import (
     service_kb,
     session_kb,
     sessions_kb,
+    update_kb,
 )
 from .settings import Settings
 from .state import Store
@@ -68,7 +71,7 @@ log = logging.getLogger("ccbot.bot")
 # to Claude, so /model, /compact, /cost and friends keep working.
 OWN_COMMANDS = {"start", "help", "sessions", "new", "exit", "screen", "esc",
                 "usage", "clear", "log", "dirs", "rename", "service", "restart",
-                "lang"}
+                "lang", "update"}
 
 # Telegram's Bot API refuses to serve files larger than this.
 _MAX_ATTACHMENT = 20 * 1024 * 1024
@@ -83,8 +86,24 @@ _INBOX_TICK = 0.2
 _MODE_CYCLE = ("auto", "manual", "acceptEdits", "plan")
 # How long to let Claude wind down after /exit before removing the window.
 _EXIT_TIMEOUT = 8.0
+# A restart waits longer than that: nothing is killed if it overruns, so there
+# is no reason to be hasty, and a busy machine can take a while to unload.
+_RESTART_EXIT_TIMEOUT = 20.0
+# And how long the relaunched `claude` is given to appear in the window.
+_RESTART_START_TIMEOUT = 40.0
+# How long to keep reading the version after a restart before settling for
+# "restarted" without a number. The payload lands on the first status render.
+_RESTART_VERSION_WAIT = 25.0
 # A half-finished prompt ("send me a path") expires rather than lingering.
 _PENDING_TTL = 180.0
+
+
+@dataclass
+class _Restart:
+    """What came of relaunching one session's `claude`."""
+    ok: bool
+    reason: str = ""     # why not, phrased for the chat
+    version: str = ""    # the build it came back as, when it could be read
 
 
 def restart_ask() -> str:
@@ -152,6 +171,10 @@ Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
 <code>/cost</code>…) is passed to Claude as it is.
 
 <b>The bot itself</b>
+/update — which Claude Code each session runs, which one is
+   on disk, and a restart that keeps the context: Claude
+   updates itself in the background, but a running session
+   stays on the build it started with.
 /service — uptime, code version, tmux state, restart button
 /restart — restart the bot (Claude's sessions are unaffected)
 /log — the last lines of the journal
@@ -190,7 +213,7 @@ def _status_legend(views: list[sess.SessionView],
 
 def _sessions_text(managed: list[sess.SessionView],
                    foreign: list[sess.SessionView],
-                   active: str | None) -> str:
+                   active: str | None, behind: int = 0) -> str:
     """The list's caption: a legend for exactly the icons on the screen.
 
     The two kinds of session are named apart — the bot's own tmux windows and
@@ -212,6 +235,11 @@ def _sessions_text(managed: list[sess.SessionView],
             block.append(_("▶️ active: <b>{name}</b> — plain text goes here"
                            ).format(name=html.escape(cur.name)))
         block += _status_legend(managed, active)
+        if behind:
+            block.append(ngettext(
+                "⬆️ {count} session runs an older Claude Code — /update",
+                "⬆️ {count} sessions run an older Claude Code — /update",
+                behind).format(count=behind))
         parts = [head, "\n".join(block)]
     else:
         parts = [_("📋 <b>Sessions</b>\n\nThe bot manages none in tmux yet — "
@@ -495,6 +523,11 @@ class CCBot:
             await m.answer(restart_ask(), parse_mode="HTML",
                            reply_markup=restart_confirm_kb())
 
+        @dp.message(Command("update"))
+        async def _update(m: Message):
+            if self._ok(m):
+                await self._show_update(m)
+
         @dp.message(Command("clear"))
         async def _clear(m: Message):
             # In the menu for discoverability, but the work is Claude's.
@@ -720,6 +753,18 @@ class CCBot:
             _("🧩 Code: <code>{version}</code>").format(
                 version=html.escape(service.version())),
         ]
+        disk = await updates.installed()
+        if disk:
+            behind = sum(1 for m in managed
+                         if updates.stale(m.session_id, disk))
+            line = _("🧰 Claude Code on disk: <code>{version}</code>").format(
+                version=html.escape(disk))
+            if behind:
+                line += " · " + ngettext(
+                    "{count} session is still on an older one — /update",
+                    "{count} sessions are still on an older one — /update",
+                    behind).format(count=behind)
+            lines.append(line)
         if service.under_systemd():
             lines.append(
                 _("⚙️ PID {pid} · systemd <code>{unit}</code> — a crash brings "
@@ -798,7 +843,9 @@ class CCBot:
             await target.answer(_stale_card("/sessions"), show_alert=True)
             return
         active = self.store.get_active(here.chat.id)
-        text = _sessions_text(managed, foreign, active)
+        disk = await updates.installed()
+        behind = sum(1 for v in managed if updates.stale(v.session_id, disk))
+        text = _sessions_text(managed, foreign, active, behind)
         kb = sessions_kb(managed, foreign, active)
         if isinstance(target, CallbackQuery):
             await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
@@ -904,6 +951,257 @@ class CCBot:
         await tmux.kill_window(mgd.window_id)
         self.store.remove(session_id)
         self.watcher.forget(session_id)
+
+    # --------------------------------------------------- claude code updates
+    async def _await_claude(self, window_id: str, want: bool,
+                            timeout: float) -> bool:
+        """Wait for `claude` to be gone from a window, or to be back in it."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if await tmux.claude_running(window_id) is want:
+                return True
+            await asyncio.sleep(0.5)
+        return await tmux.claude_running(window_id) is want
+
+    @staticmethod
+    async def _await_version(session_id: str, want: str) -> str:
+        """Read the restarted session's version, once it says what it is."""
+        deadline = time.monotonic() + _RESTART_VERSION_WAIT
+        seen = ""
+        while time.monotonic() < deadline:
+            seen = updates.running(session_id)
+            if seen == want:
+                return seen
+            await asyncio.sleep(1.0)
+        return seen
+
+    async def _restart_session(self, mgd) -> _Restart:
+        """Relaunch a session's `claude` in place, context and all.
+
+        `/exit`, then `claude --resume <id> -n <name>` in the same window. The
+        session id survives a resume, so the transcript keeps growing in the
+        same file and the reader's offset stays valid — nothing is replayed
+        into the chat. The launch name has to come back exactly as it was: it
+        is the only thread back to a session that is later cleared.
+
+        Unlike `_close`, this never kills the window. A restart that goes
+        wrong must leave the session where it stood, not take it down.
+        """
+        if not await tmux.window_exists(mgd.window_id):
+            return _Restart(False, _("its tmux window is gone"))
+        # force: the cached answer is up to five seconds old, and a session
+        # that has just finished would be refused on the strength of a reading
+        # taken while it was still working.
+        agents = await sess.live_agents(force=True)
+        status = next((a.get("status", "") for a in agents
+                       if a.get("sessionId") == mgd.session_id), "")
+        if status == "busy":
+            return _Restart(False, _("it is working right now"))
+        if status == "waiting":
+            return _Restart(False, _("it is waiting for an answer"))
+        # The agent list is not enough on its own: a session that has just been
+        # relaunched is missing from it for a few seconds, and a second restart
+        # would then walk straight over whatever it had been asked meanwhile.
+        # The screen answers immediately and needs nothing to be registered.
+        try:
+            raw = await tmux.capture(mgd.window_id)
+        except tmux.TmuxError:
+            raw = ""
+        if screenmod.is_busy(raw):
+            return _Restart(False, _("it is working right now"))
+        if screenmod.find_dialog(raw) is not None:
+            return _Restart(False, _("it is waiting for an answer"))
+
+        log.info("restarting session id=%s name=%s window=%s status=%s",
+                 mgd.session_id[:8], mgd.name, mgd.window_id, status or "-")
+        updates.note_restarted(mgd.session_id)
+        self._typed(mgd)
+        if await tmux.claude_running(mgd.window_id):
+            await tmux.send_keys(mgd.window_id, "Escape")
+            await asyncio.sleep(0.3)
+            await self._send_prompt(mgd, "/exit")
+            if not await self._await_claude(mgd.window_id, False,
+                                            _RESTART_EXIT_TIMEOUT):
+                updates.forget(mgd.session_id)
+                log.warning("restart aborted: %s did not exit", mgd.session_id[:8])
+                return _Restart(False, _("it did not shut down within {n} s")
+                                .format(n=int(_RESTART_EXIT_TIMEOUT)))
+        await tmux.run_in_window(
+            mgd.window_id,
+            f"claude --resume {shlex.quote(mgd.session_id)} "
+            f"-n {shlex.quote(mgd.name)}",
+        )
+        if not await self._await_claude(mgd.window_id, True,
+                                        _RESTART_START_TIMEOUT):
+            log.error("restart failed: %s did not come back", mgd.session_id[:8])
+            return _Restart(False, _("it did not come back within {n} s")
+                            .format(n=int(_RESTART_START_TIMEOUT)))
+        self._typed(mgd)
+        version = await self._await_version(mgd.session_id,
+                                            await updates.installed())
+        if version:
+            updates.settled(mgd.session_id)
+        log.info("session restarted id=%s version=%s",
+                 mgd.session_id[:8], version or "unknown")
+        return _Restart(True, version=version)
+
+    async def _outdated(self) -> tuple[str, list[tuple]]:
+        """The disk version, and (session, status, its version) for each one."""
+        disk = await updates.installed()
+        views = {v.session_id: v for v in await sess.managed_views(self.store)}
+        rows = []
+        for m in self.store.all_managed():
+            view = views.get(m.session_id)
+            rows.append((m, view.status if view else "",
+                         updates.stale(m.session_id, disk)))
+        return disk, rows
+
+    async def _update_text(self, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
+        """The version card: what is on disk, what each session runs."""
+        disk, rows = await self._outdated()
+        behind = [(m, st) for m, st, old in rows if old]
+        idle = [m for m, st in behind if st in ("idle", "starting")]
+        active = await self._active(chat_id)
+        # "This session" means the active one and nothing else: offering the
+        # button for whichever session happened to be first in the list would
+        # restart something the caption never named.
+        one = next((m for m in idle
+                    if active and m.session_id == active.session_id), None)
+        lines = [_("⬆️ <b>Claude Code</b>"), ""]
+        if disk:
+            lines.append(_("On disk: <code>{version}</code> — what a session "
+                           "gets the moment it is started again.").format(
+                               version=html.escape(disk)))
+        else:
+            lines.append(_("The version on disk could not be read — is the "
+                           "<code>claude</code> CLI on the bot's PATH?"))
+        if rows:
+            lines.append("")
+            for m, st, old in rows:
+                icon = STATUS_ICON.get(st, "❔")
+                here = "▶️" if active and m.session_id == active.session_id else ""
+                mine = old or updates.running(m.session_id)
+                mark = " ⬆️" if old else ""
+                lines.append(f"{here}{icon} <b>{html.escape(m.full_label)}</b> — "
+                             f"<code>{html.escape(mine or '?')}</code>{mark}")
+        if not behind:
+            lines += ["", _("✅ Every session is already running the version "
+                            "that is on disk.")]
+        else:
+            skipped = [m for m, st in behind if st not in ("idle", "starting")]
+            lines += ["", ngettext("{count} session is behind.",
+                                   "{count} sessions are behind.",
+                                   len(behind)).format(count=len(behind))]
+            if skipped:
+                lines.append(_("Busy or waiting, so left alone: {names}").format(
+                    names=", ".join(html.escape(m.full_label) for m in skipped)))
+            lines += ["", _(
+                "A restart is <code>/exit</code> followed by "
+                "<code>claude --resume</code> in the same window: the session "
+                "id, the transcript and the context all survive. What does not: "
+                "anything half-typed into its input line, and the prompt cache — "
+                "so the first reply after a restart takes a little longer.")]
+        return "\n".join(lines), update_kb(
+            one.session_id if one else None, len(idle))
+
+    async def _show_update(self, target: Message | CallbackQuery) -> None:
+        here = _editable(target)
+        if here is None:
+            await target.answer(_stale_card("/update"), show_alert=True)
+            return
+        text, kb = await self._update_text(here.chat.id)
+        if isinstance(target, CallbackQuery):
+            await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await here.answer(text, reply_markup=kb, parse_mode="HTML")
+
+    async def _restart_one(self, chat_id: int, mgd) -> None:
+        """Restart a single session, saying so before, during and after."""
+        note = await self.bot.send_message(
+            chat_id,
+            _("⏳ Restarting <b>{name}</b> — /exit, then resume…").format(
+                name=html.escape(mgd.full_label)),
+            parse_mode="HTML")
+        res = await self._restart_session(mgd)
+        if res.ok and res.version:
+            text = _("✅ <b>{name}</b> now runs <code>{version}</code> — the "
+                     "context came back with it.").format(
+                         name=html.escape(mgd.full_label),
+                         version=html.escape(res.version))
+        elif res.ok:
+            text = _("✅ <b>{name}</b> has been restarted; it has not said "
+                     "which version it is yet.").format(
+                         name=html.escape(mgd.full_label))
+        else:
+            text = _("⚠️ <b>{name}</b> was not restarted — {reason}. Nothing "
+                     "was changed.").format(name=html.escape(mgd.full_label),
+                                            reason=res.reason)
+        with contextlib.suppress(Exception):
+            await note.edit_text(text, parse_mode="HTML")
+
+    async def _restart_all(self, chat_id: int) -> None:
+        """Restart every idle session that is behind, one after another.
+
+        In sequence rather than at once: each relaunch reads a whole
+        transcript back, and several doing that together is how a laptop
+        starts swapping.
+        """
+        _disk, rows = await self._outdated()
+        queue = [m for m, st, old in rows if old and st in ("idle", "starting")]
+        if not queue:
+            await self.bot.send_message(chat_id, _(
+                "Nothing to restart: no idle session is behind."))
+            return
+        note = await self.bot.send_message(
+            chat_id, ngettext("⏳ Restarting {count} session…",
+                              "⏳ Restarting {count} sessions…",
+                              len(queue)).format(count=len(queue)))
+        done, failed = [], []
+        for i, mgd in enumerate(queue, 1):
+            with contextlib.suppress(Exception):
+                await note.edit_text(_("⏳ {index}/{total}: <b>{name}</b>…")
+                                     .format(index=i, total=len(queue),
+                                             name=html.escape(mgd.full_label)),
+                                     parse_mode="HTML")
+            res = await self._restart_session(mgd)
+            if res.ok:
+                done.append((mgd, res.version))
+            else:
+                failed.append((mgd, res.reason))
+        lines = []
+        if done:
+            lines.append(ngettext("✅ Restarted {count} session:",
+                                  "✅ Restarted {count} sessions:",
+                                  len(done)).format(count=len(done)))
+            lines += [f"• <b>{html.escape(m.full_label)}</b> — "
+                      f"<code>{html.escape(v or '?')}</code>" for m, v in done]
+        if failed:
+            lines.append(_("⚠️ Left as they were:"))
+            lines += [f"• <b>{html.escape(m.full_label)}</b> — {r}"
+                      for m, r in failed]
+        with contextlib.suppress(Exception):
+            await note.edit_text("\n".join(lines), parse_mode="HTML")
+
+    async def _check_updates(self, chat_id: int) -> None:
+        """Ask the CLI to fetch a new release, then say what changed."""
+        before = await updates.installed()
+        note = await self.bot.send_message(
+            chat_id, _("🔄 Running <code>claude update</code> — this can take "
+                       "a minute…"), parse_mode="HTML")
+        ok, output = await updates.update_cli()
+        after = await updates.installed(force=True)
+        if not ok:
+            text = _("⚠️ <code>claude update</code> failed:\n<code>{output}"
+                     "</code>").format(output=html.escape(output[:500] or "—"))
+        elif after and before and after != before:
+            text = _("⬆️ Updated: <code>{before}</code> → <code>{after}</code>. "
+                     "Restart the sessions to put it to work — /update.").format(
+                         before=html.escape(before), after=html.escape(after))
+        else:
+            text = _("✅ Already on the latest release: <code>{version}</code>."
+                     ).format(version=html.escape(after or before or "?"))
+        with contextlib.suppress(Exception):
+            await note.edit_text(text, parse_mode="HTML")
 
     def _typed(self, mgd) -> None:
         """Tell the watcher the bot has just typed into this session.
@@ -1195,6 +1493,31 @@ class CCBot:
         if data == "ls":
             await c.answer()
             await self._show_sessions(c)
+            return
+
+        if data.startswith("upd:"):
+            action = data[4:]
+            if action == "show":
+                await c.answer()
+                await self._show_update(c)
+            elif action == "check":
+                await c.answer(_("Checking…"))
+                await self._check_updates(chat_id)
+                await self._show_update(c)
+            elif action == "all":
+                await c.answer(_("Restarting…"))
+                await self._restart_all(chat_id)
+                await self._show_update(c)
+            elif action.startswith("one:"):
+                mgd = self._resolve(action[4:])
+                if not mgd:
+                    await c.answer(_stale_card("/update"), show_alert=True)
+                    return
+                await c.answer(_("Restarting…"))
+                await self._restart_one(chat_id, mgd)
+                await self._show_update(c)
+            else:
+                await c.answer()
             return
 
         if data == "new":
@@ -1636,6 +1959,13 @@ class CCBot:
                             f"🔐 {st.mode_label}" if st.mode else "") if b]
         if bits:
             lines.append("🧠 " + " · ".join(bits))
+        behind = updates.stale(mgd.session_id, await updates.installed())
+        if behind:
+            lines.append(_("⬆️ Claude Code <code>{old}</code> — "
+                           "<code>{new}</code> is on disk; /update restarts it "
+                           "without losing the context.").format(
+                               old=html.escape(behind),
+                               new=html.escape(updates.cached_installed())))
         if u and u.ctx_pct is not None:
             tok = f"{u.ctx_tokens:,}".replace(",", " ")
             lines.append(ngettext("📈 Context: {pct}% ({tokens} token)",
@@ -1710,6 +2040,9 @@ class CCBot:
             bits.append(f"🔐 {st.mode_label}")
         if ctx:
             bits.append(f"ctx {ctx}")
+        behind = updates.stale(mgd.session_id, await updates.installed())
+        if behind:
+            bits.append(f"⬆️ {behind} → {updates.cached_installed()}")
         text = (_("▶️ Active session: <b>{name}</b>").format(
                     name=html.escape(view.name))
                 + f"\n<code>{view.short_cwd}</code>\n"
@@ -1804,6 +2137,7 @@ class CCBot:
         ("dirs", N_("Project directories for new sessions")),
         ("lang", N_("Interface language")),
         ("log", N_("Last entries from the bot's journal")),
+        ("update", N_("Claude Code version and session restarts")),
         ("service", N_("Bot state: uptime, version, restart")),
         ("help", N_("Help")),
     ]

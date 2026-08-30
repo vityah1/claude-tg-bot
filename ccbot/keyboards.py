@@ -239,6 +239,41 @@ def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def update_kb(session_id: str | None, outdated: int) -> InlineKeyboardMarkup:
+    """Actions on the Claude Code version card.
+
+    A restart button appears only for a session that is both behind and idle:
+    offering it for one that is working would promise something the bot then
+    refuses to do.
+    """
+    kb = InlineKeyboardBuilder()
+    if session_id:
+        kb.row(InlineKeyboardButton(
+            text=_("⬆️ Restart this session"),
+            callback_data=f"upd:one:{sid8(session_id)}"))
+    # With a "this session" button already there, "all" is only worth showing
+    # when it would do more than that button does.
+    if outdated > (1 if session_id else 0):
+        kb.row(InlineKeyboardButton(
+            text=_("⬆️ Restart all idle ({count})").format(count=outdated),
+            callback_data="upd:all"))
+    kb.row(InlineKeyboardButton(text=_("🔄 Check for updates"),
+                                callback_data="upd:check"))
+    kb.row(
+        InlineKeyboardButton(text=_("♻️ Refresh"), callback_data="upd:show"),
+        InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
+    )
+    return kb.as_markup()
+
+
+def update_notice_kb() -> InlineKeyboardMarkup:
+    """The one button the "a new version is out" message needs."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("⬆️ Update sessions"),
+                                callback_data="upd:show"))
+    return kb.as_markup()
+
+
 def restart_confirm_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(

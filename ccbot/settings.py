@@ -26,6 +26,9 @@ _DEFAULTS: dict[str, Any] = {
     # this, Claude's answers would arrive wrapped in English while every reply
     # to a typed message came back in the profile's language.
     "telegram_language": None,
+    # Newest Claude Code build the chat has already been told about, so the
+    # same release is not announced on every poll — or again after a restart.
+    "notified_version": None,
 }
 
 
@@ -107,4 +110,15 @@ class Settings:
         if not code or code == self.telegram_language:
             return
         self.data["telegram_language"] = code
+        self.save()
+
+    # -- Claude Code version -------------------------------------------
+    @property
+    def notified_version(self) -> str | None:
+        v = self.data.get("notified_version")
+        return v if isinstance(v, str) else None
+
+    @notified_version.setter
+    def notified_version(self, value: str | None) -> None:
+        self.data["notified_version"] = value
         self.save()

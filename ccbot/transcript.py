@@ -8,6 +8,7 @@ scrollback limit. The terminal is only consulted for blocking dialogs.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,10 @@ _INJECTED_PREFIXES = ("<local-command", "<command-", "<system-", "<user-prompt",
 # A session opens with a file-history snapshot that routinely runs past 250 KB,
 # so a smaller budget finds the preamble and nothing else.
 PROMPT_SCAN_BYTES = 1024 * 1024
+# Enough of the tail to be sure of catching a record with a version on it.
+VERSION_SCAN_BYTES = 256 * 1024
+
+_VERSION_RE = re.compile(r'"version"\s*:\s*"([^"]+)"')
 
 
 @dataclass
@@ -182,3 +187,25 @@ class TranscriptReader:
             if raw.strip():
                 events.extend(parse_line(raw))
         return events
+
+
+def last_version(session_id: str) -> str:
+    """The Claude Code build that wrote to this transcript most recently.
+
+    A fallback for `updates.running()` on an install with no status-line tee.
+    Only the tail is read, and only for the *last* match: every record carries
+    the version of the process that wrote it, so an older one further up says
+    nothing about the process alive now.
+    """
+    path = find_transcript(session_id)
+    if path is None:
+        return ""
+    try:
+        with path.open("rb") as fh:
+            size = path.stat().st_size
+            fh.seek(max(0, size - VERSION_SCAN_BYTES))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    found = _VERSION_RE.findall(tail)
+    return found[-1] if found else ""
