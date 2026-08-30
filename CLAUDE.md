@@ -154,6 +154,15 @@ is still alive, too. That is why rows are read tolerantly
   it was, or the session is lost at its first `/clear` (see `Managed.name`).
   Unlike `_close`, a restart that fails leaves the session standing: no
   `kill_window` on any path.
+- 🔴 **A restart checks that `claude` is on disk before it stops anything.**
+  Claude Code updates itself by replacing the binary in place: for a second or
+  two the path is missing, and briefly it is half-written (bash: `Exec format
+  error`). `/exit` inside that window leaves the session at a shell prompt with
+  nothing to resume it — which is what happened to one session on 2026-08-30,
+  mid-`upd:all`. Hence the pre-flight check, plus a second `_launch_resume`
+  attempt, plus a failure message that says the window is intact and pressing
+  again will work (it does: with no `claude` running, the restart skips `/exit`
+  and goes straight to the resume).
 - 🔴 **A restart refuses a busy or waiting session, and asks twice.**
   `claude agents --json` is asked with `force=True` (the five-second cache
   would refuse a session that had *just* finished), and the screen is read on

@@ -62,7 +62,7 @@ from .keyboards import (
 )
 from .settings import Settings
 from .state import Store
-from .util import as_pre, usage_report
+from .util import as_pre, split_text, usage_report
 from .watcher import Watcher
 
 log = logging.getLogger("ccbot.bot")
@@ -89,11 +89,16 @@ _EXIT_TIMEOUT = 8.0
 # A restart waits longer than that: nothing is killed if it overruns, so there
 # is no reason to be hasty, and a busy machine can take a while to unload.
 _RESTART_EXIT_TIMEOUT = 20.0
-# And how long the relaunched `claude` is given to appear in the window.
-_RESTART_START_TIMEOUT = 40.0
+# And how long the relaunched `claude` is given to appear in the window. A
+# successful relaunch takes 3-8 seconds; the rest is room for a loaded machine,
+# and there is a second attempt behind this one anyway.
+_RESTART_START_TIMEOUT = 25.0
 # How long to keep reading the version after a restart before settling for
 # "restarted" without a number. The payload lands on the first status render.
 _RESTART_VERSION_WAIT = 25.0
+# How much of the changelog one message may carry. Below the rich-message
+# document cap, with room for the heading and the "and N older" tail.
+_NEWS_LIMIT = 24000
 # A half-finished prompt ("send me a path") expires rather than lingering.
 _PENDING_TTL = 180.0
 
@@ -975,6 +980,16 @@ class CCBot:
             await asyncio.sleep(1.0)
         return seen
 
+    async def _launch_resume(self, mgd) -> bool:
+        """Start `claude --resume` in the session's window; True if it came up."""
+        await tmux.run_in_window(
+            mgd.window_id,
+            f"claude --resume {shlex.quote(mgd.session_id)} "
+            f"-n {shlex.quote(mgd.name)}",
+        )
+        return await self._await_claude(mgd.window_id, True,
+                                        _RESTART_START_TIMEOUT)
+
     async def _restart_session(self, mgd) -> _Restart:
         """Relaunch a session's `claude` in place, context and all.
 
@@ -1012,6 +1027,16 @@ class CCBot:
         if screenmod.find_dialog(raw) is not None:
             return _Restart(False, _("it is waiting for an answer"))
 
+        # Nothing is shut down unless there is something to start again with.
+        # The self-update swaps the binary in place, and a session stopped
+        # while it is missing has nothing to come back to.
+        exe = sess.claude_bin()
+        if not exe or not Path(exe).exists():
+            log.warning("restart refused: claude CLI is not on disk (%s)", exe)
+            return _Restart(False, _("the claude CLI is not on disk this "
+                                     "second — it is updating itself; try "
+                                     "again in a minute"))
+
         log.info("restarting session id=%s name=%s window=%s status=%s",
                  mgd.session_id[:8], mgd.name, mgd.window_id, status or "-")
         updates.note_restarted(mgd.session_id)
@@ -1026,16 +1051,21 @@ class CCBot:
                 log.warning("restart aborted: %s did not exit", mgd.session_id[:8])
                 return _Restart(False, _("it did not shut down within {n} s")
                                 .format(n=int(_RESTART_EXIT_TIMEOUT)))
-        await tmux.run_in_window(
-            mgd.window_id,
-            f"claude --resume {shlex.quote(mgd.session_id)} "
-            f"-n {shlex.quote(mgd.name)}",
-        )
-        if not await self._await_claude(mgd.window_id, True,
-                                        _RESTART_START_TIMEOUT):
-            log.error("restart failed: %s did not come back", mgd.session_id[:8])
-            return _Restart(False, _("it did not come back within {n} s")
-                            .format(n=int(_RESTART_START_TIMEOUT)))
+        if not await self._launch_resume(mgd):
+            # Claude Code replaces its own binary in place while updating, and
+            # for a second or two `claude` is missing — or half-written, which
+            # bash reports as "Exec format error". A session shut down inside
+            # that window came back to a shell prompt (2026-08-30), so the
+            # launch is attempted once more before giving up.
+            log.warning("restart: %s did not come back, trying once more",
+                        mgd.session_id[:8])
+            await updates.installed(force=True)
+            if not await self._launch_resume(mgd):
+                log.error("restart failed: %s did not come back",
+                          mgd.session_id[:8])
+                return _Restart(False, _(
+                    "it did not come back. Its window is untouched, so "
+                    "pressing again resumes it"))
         self._typed(mgd)
         version = await self._await_version(mgd.session_id,
                                             await updates.installed())
@@ -1181,6 +1211,51 @@ class CCBot:
                       for m, r in failed]
         with contextlib.suppress(Exception):
             await note.edit_text("\n".join(lines), parse_mode="HTML")
+
+    async def _show_news(self, chat_id: int) -> None:
+        """Release notes between the oldest session and what is on disk.
+
+        Read from Claude Code's own cached changelog, which it refreshes when
+        it updates itself: no network, no tokens, and it names exactly the
+        releases a restart would bring in.
+        """
+        if not updates.available():
+            await self.bot.send_message(chat_id, _(
+                "I have no local copy of the release notes "
+                "(<code>~/.claude/cache/changelog.md</code>). "
+                "They are at code.claude.com/docs/en/changelog, and "
+                "<code>/release-notes</code> shows them inside a session."),
+                parse_mode="HTML")
+            return
+        disk, rows = await self._outdated()
+        behind = [old for _m, _st, old in rows if old]
+        since = min(behind, key=updates.parse) if behind else ""
+        body, releases, left = updates.changelog(
+            since, disk, limit=_NEWS_LIMIT,
+            max_releases=0 if since else 1)
+        if not body:
+            await self.bot.send_message(chat_id, _(
+                "Nothing new: every session already runs what is on disk."))
+            return
+        if since:
+            head = ngettext(
+                "🆕 **Claude Code {since} → {disk}** — {count} release",
+                "🆕 **Claude Code {since} → {disk}** — {count} releases",
+                releases).format(since=since, disk=disk, count=releases)
+        else:
+            head = _("🆕 **Claude Code {disk}** — the newest release notes"
+                     ).format(disk=disk)
+        tail = ""
+        if left and since:
+            tail = "\n\n" + ngettext(
+                "…and {count} older release, at code.claude.com/docs/en/changelog",
+                "…and {count} older releases, at code.claude.com/docs/en/changelog",
+                left).format(count=left)
+        doc = f"{head}\n\n{body}{tail}"
+        if await rich.send(self.bot, chat_id, markdown=doc):
+            return
+        for chunk in split_text(f"{head}\n\n{body}{tail}"):
+            await self.bot.send_message(chat_id, chunk)
 
     async def _check_updates(self, chat_id: int) -> None:
         """Ask the CLI to fetch a new release, then say what changed."""
@@ -1500,6 +1575,9 @@ class CCBot:
             if action == "show":
                 await c.answer()
                 await self._show_update(c)
+            elif action == "news":
+                await c.answer(_("Reading the release notes…"))
+                await self._show_news(chat_id)
             elif action == "check":
                 await c.answer(_("Checking…"))
                 await self._check_updates(chat_id)

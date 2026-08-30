@@ -353,6 +353,14 @@ that is later `/clear`ed. The context comes back with the history; the prompt
 cache does not, so the first reply after a restart takes a little longer, and
 anything half-typed into the session's input line is gone.
 
+**The self-update is the hazard here.** Claude Code replaces its own binary in
+place, and for a second or two `claude` is missing — or half-written, which
+bash reports as `Exec format error`. A session shut down inside that window has
+nothing to come back to: that is exactly how one session ended up at a shell
+prompt on 2026-08-30. So the CLI is checked *before* anything is shut down, and
+a launch that does not come up is tried once more. Even then the window is
+left standing, and pressing restart again resumes the session.
+
 **What it refuses to do.** A session that is working, or waiting on a question,
 is left alone — checked twice over, because neither source is enough on its
 own: `claude agents --json` (asked fresh, not from the five-second cache) knows
@@ -361,6 +369,15 @@ immediately for a session that has only just been relaunched and is missing
 from the agent list for a couple of seconds. If `/exit` does not finish in
 20 seconds, or the resumed `claude` does not appear within 40, the restart
 stops and says so — the window is never killed, unlike `/exit` from the menu.
+
+**"🆕 What's new"** answers the obvious next question — what a restart would
+actually bring in. Claude Code keeps the full changelog at
+`~/.claude/cache/changelog.md` and refreshes it when it updates itself, so the
+notes are read from disk: no network, no tokens. The card shows exactly the
+releases between the oldest session still behind and the version on disk
+(`2.1.247 → 2.1.251 — 3 releases`), newest first, and names how many older ones
+were left out. `/release-notes` inside a session is the same thing from the
+other side.
 
 **"🔄 Check for updates"** runs `claude update`, which is the CLI's own
 "check and install if there is anything". It changes what is on disk and

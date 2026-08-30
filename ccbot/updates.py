@@ -21,6 +21,7 @@ import asyncio
 import logging
 import re
 import time
+from pathlib import Path
 
 from . import sessions as sess
 from . import status_feed, transcript
@@ -37,6 +38,11 @@ _PROBE_TIMEOUT = 20.0
 # payload is rewritten on the first status-line render, the transcript on the
 # first record. Until then the session must not be flagged as outdated again.
 _SETTLE = 90.0
+
+# Claude Code keeps the full release notes on disk and refreshes them when it
+# updates itself, so reading them costs nothing and works offline.
+CHANGELOG = Path.home() / ".claude" / "cache" / "changelog.md"
+_RELEASE_RE = re.compile(r"^##\s+(\d+(?:\.\d+)+)\s*$")
 
 _installed_at = 0.0
 _installed = ""
@@ -159,3 +165,50 @@ async def update_cli(timeout: float = 300.0) -> tuple[bool, str]:
     text = out.decode("utf-8", "replace").strip()
     log.info("claude update rc=%s: %s", proc.returncode, text[:300])
     return proc.returncode == 0, text
+
+
+def available() -> bool:
+    """Whether the local copy of the release notes is there to be read."""
+    return CHANGELOG.is_file()
+
+
+def changelog(since: str = "", until: str = "", limit: int = 0,
+              max_releases: int = 0) -> tuple[str, int, int]:
+    """Release notes above *since* and up to *until*, newest first.
+
+    Returns the text, how many releases it holds, and how many were left out —
+    the file runs to hundreds of releases, and a chat message does not.
+
+    The file is ordered newest-first, so the scan stops at the first heading
+    that is not newer than *since* rather than reading 600 KB to the end.
+    """
+    lo, hi = parse(since), parse(until)
+    kept: list[str] = []
+    releases = skipped = 0
+    used = 0
+    taking = False
+    try:
+        with CHANGELOG.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                head = _RELEASE_RE.match(line.rstrip())
+                if head:
+                    ver = parse(head.group(1))
+                    if hi and ver > hi:
+                        taking = False          # newer than what is on disk
+                        continue
+                    if lo and ver <= lo:
+                        break                   # everything below is older
+                    if (max_releases and releases >= max_releases) or \
+                            (limit and used >= limit):
+                        skipped += 1
+                        taking = False
+                        continue
+                    releases += 1
+                    taking = True
+                if taking:
+                    kept.append(line)
+                    used += len(line)
+    except OSError as exc:
+        log.warning("changelog unreadable: %s", exc)
+        return "", 0, 0
+    return "".join(kept).strip(), releases, skipped

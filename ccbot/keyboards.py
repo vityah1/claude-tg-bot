@@ -257,8 +257,11 @@ def update_kb(session_id: str | None, outdated: int) -> InlineKeyboardMarkup:
         kb.row(InlineKeyboardButton(
             text=_("⬆️ Restart all idle ({count})").format(count=outdated),
             callback_data="upd:all"))
-    kb.row(InlineKeyboardButton(text=_("🔄 Check for updates"),
-                                callback_data="upd:check"))
+    kb.row(
+        InlineKeyboardButton(text=_("🆕 What's new"), callback_data="upd:news"),
+        InlineKeyboardButton(text=_("🔄 Check for updates"),
+                             callback_data="upd:check"),
+    )
     kb.row(
         InlineKeyboardButton(text=_("♻️ Refresh"), callback_data="upd:show"),
         InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
