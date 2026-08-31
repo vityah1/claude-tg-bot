@@ -239,6 +239,18 @@ def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def cancel_rename_kb(session_id: str) -> InlineKeyboardMarkup:
+    """A way out of "send me a name" that does not need a message.
+
+    Any button clears a half-finished prompt (see `_on_callback`), so going
+    back to the card is itself the cancellation.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("⬅️ Cancel"),
+                                callback_data=f"s:{sid8(session_id)}"))
+    return kb.as_markup()
+
+
 def update_kb(session_id: str | None, outdated: int) -> InlineKeyboardMarkup:
     """Actions on the Claude Code version card.
 

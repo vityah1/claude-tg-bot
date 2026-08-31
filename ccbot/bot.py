@@ -48,6 +48,7 @@ from .i18n import (
 from .i18n import use as use_locale
 from .keyboards import (
     STATUS_ICON,
+    cancel_rename_kb,
     choice_kb,
     confirm_kb,
     dirs_kb,
@@ -165,9 +166,11 @@ follow the same rule.
    The session stays alive and its context is untouched.
 /clear — clear the session's context. The session lives on,
    its history is gone.
-/rename <i>name</i> — your own name instead of <code>project-1a2b</code>
-   (<code>/rename -</code> gives the automatic one back). Until you
-   name it, the list shows the topic Claude came up with itself.
+/rename <i>name</i> — your own name instead of <code>project-1a2b</code>.
+   Sent bare, from the "/" menu, it asks for the name and takes
+   your next message as it. (<code>/rename -</code> gives the
+   automatic one back.) Until you name it, the list shows the
+   topic Claude came up with itself.
 /exit — <b>end the session</b>: Claude shuts down on its own, then
    the tmux window closes. The transcript stays — the session can
    be brought back from 🕘 in the list.
@@ -804,6 +807,21 @@ class CCBot:
         # systemd's Restart=always does the rest.
         await self.dp.stop_polling()
 
+    def _ask_name(self, chat_id: int, mgd) -> str:
+        """Arm "the next message is the name" and word the question.
+
+        Shared by the ✏️ button and by a bare `/rename`: picking the command
+        out of the "/" menu and typing the name after it is the whole point —
+        nobody wants to type `/rename` by hand to get the name on the same
+        line.
+        """
+        self.pending[chat_id] = ("rename", mgd.session_id, time.time())
+        return _("✏️ What should <b>{name}</b> be called?\n"
+                 "Send the name in your next message (up to {limit} "
+                 "characters).\n<code>-</code> gives the automatic name "
+                 "back.").format(name=html.escape(mgd.full_label),
+                                 limit=util.NAME_LIMIT)
+
     async def _rename_session(self, m: Message, mgd, raw: str, note: str = "") -> None:
         """Give a session a name a human can recognise in a list."""
         auto = util.default_name(mgd.cwd, mgd.session_id)
@@ -813,14 +831,15 @@ class CCBot:
         reset_words = {"-", "auto", _("auto")}
         name = auto if wanted.lower() in reset_words else util.clean_name(wanted)
         if not name:
-            await m.answer(
-                _("✏️ Send the name together with the command:\n"
-                  "<code>/rename Billing audit</code>\n\n"
-                  "Replying to a session's message renames that session, "
-                  "otherwise it is the active one. <code>/rename -</code> gives "
-                  "the automatic name back."),
-                parse_mode="HTML",
-            )
+            # Either the command came in bare — the usual case, straight from
+            # the "/" menu — or what arrived was nothing but unprintables.
+            head = ""
+            if wanted:
+                head = _("❌ There is nothing left of that name once "
+                         "unprintable characters are dropped.") + "\n\n"
+            await m.answer(head + self._ask_name(m.chat.id, mgd),
+                           parse_mode="HTML",
+                           reply_markup=cancel_rename_kb(mgd.session_id))
             return
         # Only the display name changes: `name` stays the one Claude was
         # launched with, which is how the session is found again after /clear.
@@ -1870,16 +1889,9 @@ class CCBot:
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
-            self.pending[chat_id] = ("rename", mgd.session_id, time.time())
             await c.answer()
-            await msg.answer(
-                _("✏️ What should <b>{name}</b> be called?\n"
-                  "Send the name in your next message (up to {limit} "
-                  "characters).\n<code>-</code> gives the automatic name "
-                  "back.").format(name=html.escape(mgd.full_label),
-                                  limit=util.NAME_LIMIT),
-                parse_mode="HTML",
-            )
+            await msg.answer(self._ask_name(chat_id, mgd), parse_mode="HTML",
+                             reply_markup=cancel_rename_kb(mgd.session_id))
             return
 
         if data.startswith("lang:"):

@@ -138,7 +138,10 @@ The bot calls a managed session `directory-1a2b` — unique, but no help in
 telling two sessions of the same project apart. So the name in the list and in
 message captions is taken from three sources in turn:
 
-1. **your own name** — `/rename Billing audit`, or ✏️ on the session card;
+1. **your own name** — `/rename Billing audit`, or ✏️ on the session card,
+   or just `/rename` picked out of the "/" menu: it asks which name, and takes
+   your next message as the answer (with a ⬅️ Cancel button, and it lapses
+   after three minutes rather than swallowing a message meant for Claude);
 2. **the title Claude came up with** (`ai-title` in the transcript) — managed
    sessions rarely get one: the bot starts `claude -n <name>`, and Claude does
    not invent a title for a session that already has one;
