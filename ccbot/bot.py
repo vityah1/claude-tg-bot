@@ -47,11 +47,13 @@ from .i18n import (
 )
 from .i18n import use as use_locale
 from .keyboards import (
+    HISTORY_PAGE,
     STATUS_ICON,
     cancel_rename_kb,
     choice_kb,
     confirm_kb,
     dirs_kb,
+    history_dirs_kb,
     history_kb,
     lang_kb,
     project_dirs_kb,
@@ -1624,20 +1626,19 @@ class CCBot:
 
         if data == "hist":
             await c.answer(_("Looking…"))
-            views = await sess.closed_views(self.store, limit=12, roots=self.roots)
-            if not views:
-                await msg.edit_text(
-                    _("🕘 No closed sessions found in the project directories."),
-                    reply_markup=history_kb([]),
-                )
-                return
-            await msg.edit_text(
-                _("🕘 <b>Recent sessions</b> — closed earlier, context and "
-                  "all.\nTap one for details — whether to resume it is decided "
-                  "there.\n<i>time · directory · topic · live ones are in "
-                  "/sessions</i>"),
-                parse_mode="HTML", reply_markup=history_kb(views),
-            )
+            await self._show_history(msg, chat_id)
+            return
+
+        if data == "hdirs":
+            await c.answer(_("Looking…"))
+            await self._show_history_dirs(msg)
+            return
+
+        if data.startswith("hd:"):
+            key, _sep, page = data[3:].partition(":")
+            await c.answer(_("Looking…"))
+            await self._show_history(msg, chat_id, key=key,
+                                     page=int(page or 0))
             return
 
         if data == "foreign":   # legacy entry point, kept harmless
@@ -1698,22 +1699,26 @@ class CCBot:
             return
 
         if data.startswith("res:"):
-            v = await self._find_closed(data[4:])
+            # res:<sid8>[:<dir key>:<page>] — the tail says where "Back" goes;
+            # a card from an older build has none, and falls back to the top.
+            short, _sep, origin = data[4:].partition(":")
+            v = await self._find_closed(short)
             if not v:
-                await c.answer(_("Session not found"), show_alert=True)
+                await c.answer(self._closed_gone(short), show_alert=True)
                 return
+            back = f"hd:{origin}" if origin else "hist"
             await c.answer()
             await self._safe_edit(
                 msg,
                 self._closed_details(v), parse_mode="HTML",
-                reply_markup=confirm_kb(v.session_id, "closed"),
+                reply_markup=confirm_kb(v.session_id, "closed", back=back),
             )
             return
 
         if data.startswith("dores:"):
             v = await self._find_closed(data[6:])
             if not v:
-                await c.answer(_("Session not found"), show_alert=True)
+                await c.answer(self._closed_gone(data[6:]), show_alert=True)
                 return
             await c.answer(_("Bringing it up…"))
             await self._create(chat_id, v.cwd, resume=v.session_id)
@@ -2027,10 +2032,79 @@ class CCBot:
         await self._create(chat_id, v.cwd, resume=v.session_id)
 
     async def _find_closed(self, short: str):
-        for v in await sess.closed_views(self.store, limit=60, roots=self.roots):
-            if v.session_id.startswith(short):
-                return v
+        return await sess.closed_view(self.store, short, roots=self.roots)
+
+    def _closed_gone(self, short: str) -> str:
+        """Why a session that was on the list a moment ago cannot be resumed.
+
+        Nearly always because it has since been started: a card stays on the
+        screen, and "not found" would send the reader looking for a file that
+        is right where it was. Resuming a running session is what is refused,
+        not the session.
+        """
+        if self._resolve(short):
+            return _("That session is running again — open it in /sessions.")
+        return _("Session not found")
+
+    async def _history_dir(self, chat_id: int, key: str) -> str | None:
+        """The directory a `hd:` key stands for, or the one to open by default.
+
+        Without a key the active session's directory is the answer: history is
+        reached from a session list, and the project being worked in is the one
+        being looked for. Only when that directory holds nothing closed does
+        the choice have to be made by hand.
+        """
+        dirs = await sess.closed_dirs(self.store, roots=self.roots)
+        if key:
+            return next((d.cwd for d in dirs if d.key == key), None)
+        active = self.store.get_active(chat_id)
+        mgd = self.store.get(active) if active else None
+        if mgd and any(d.cwd == mgd.cwd for d in dirs):
+            return mgd.cwd
         return None
+
+    async def _show_history(self, msg: Message, chat_id: int, key: str = "",
+                            page: int = 0) -> None:
+        cwd = await self._history_dir(chat_id, key)
+        if cwd is None:
+            # Either the key is stale or there is no obvious directory: both
+            # end at the same place, the list of directories.
+            await self._show_history_dirs(msg)
+            return
+        views = await sess.closed_all(self.store, self.roots, cwd)
+        pages = max(1, -(-len(views) // HISTORY_PAGE))
+        page = max(0, min(page, pages - 1))
+        shown = views[page * HISTORY_PAGE:(page + 1) * HISTORY_PAGE]
+        head = _("🕘 <b>Closed sessions</b> — resuming brings the context "
+                 "back.\n📁 <code>{path}</code>").format(
+                     path=html.escape(cwd))
+        count = ngettext("{n} session", "{n} sessions", len(views)).format(
+            n=len(views))
+        body = _("{count} · tap one for details — whether to resume it is "
+                 "decided there.\n<i>time · topic · live ones are in "
+                 "/sessions</i>").format(count=count)
+        await self._safe_edit(
+            msg, f"{head}\n\n{body}", parse_mode="HTML",
+            reply_markup=history_kb(shown, key=sess.dir_key(cwd), page=page,
+                                    pages=pages),
+        )
+
+    async def _show_history_dirs(self, msg: Message) -> None:
+        dirs = await sess.closed_dirs(self.store, roots=self.roots)
+        if not dirs:
+            await self._safe_edit(
+                msg,
+                _("🕘 No closed sessions found in the project directories."),
+                reply_markup=history_dirs_kb([]),
+            )
+            return
+        total = sum(d.count for d in dirs)
+        await self._safe_edit(
+            msg,
+            _("🕘 <b>Closed sessions</b> — {total} in all, by directory.\n"
+              "Pick a project to see its own list.").format(total=total),
+            parse_mode="HTML", reply_markup=history_dirs_kb(dirs),
+        )
 
     async def _managed_details(self, mgd) -> str:
         views = await sess.managed_views(self.store)

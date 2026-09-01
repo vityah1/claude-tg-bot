@@ -183,6 +183,18 @@ is still alive, too. That is why rows are read tolerantly
 - **`callback_data` is limited to 64 bytes**: the session id is cut to 8
   characters (`sid8`) and resolved back by prefix (`_resolve`, `_find_foreign`,
   `_find_closed`).
+- 🔴 **A closed session is one that nothing owns, and history is per
+  directory.** `sessions.closed_all()` drops a transcript whose id is live in
+  `claude agents --json` **or** present in `Store.all_managed()`: after
+  `/clear` the running process writes under a new id, so its old file looks
+  closed, and resuming it would take over the database row of a session still
+  sitting in a tmux window. The list is filtered by exact `cwd` and paged
+  (`HISTORY_PAGE`) because one project holds dozens of transcripts — 88 in
+  `pay4say` on 2026-09-01, of which a global list of twelve showed four. A
+  card is therefore resolved by `sessions.closed_view()`, a direct glob on the
+  file name (the id *is* the file name), never by scanning the newest N; and
+  the directory in `callback_data` is a hash of the path (`sessions.dir_key`),
+  never its position in the list, which moves as sessions open and close.
 - **Three kinds of session.** `managed` — in tmux, full control; `foreign` —
   somebody else's terminal, view only (stdin is out of reach; "move" means
   SIGTERM + `--resume`); `closed` — a transcript, brought back with `--resume`.

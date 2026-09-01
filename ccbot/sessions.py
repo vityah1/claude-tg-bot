@@ -12,6 +12,7 @@ Three kinds are surfaced:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -56,6 +57,55 @@ _STATUS_LABELS = {
 def status_label(status: str) -> str:
     msgid = _STATUS_LABELS.get(status)
     return _(msgid) if msgid else status
+
+
+def short_when(mtime: float) -> str:
+    """Timestamp trimmed for a button, where every character counts."""
+    if not mtime:
+        return "—"
+    ts = datetime.fromtimestamp(mtime)
+    delta = (datetime.now().date() - ts.date()).days
+    if delta == 0:
+        return f"{ts:%H:%M}"
+    if delta == 1:
+        # TRANSLATORS: "yesterday" abbreviated to fit a button caption.
+        return _("yst {time}").format(time=f"{ts:%H:%M}")
+    # TRANSLATORS: strftime format — day and month, on a button.
+    return ts.strftime(_("%d.%m"))
+
+
+def short_dir(path: str, budget: int = _DIR_BUDGET) -> str:
+    """Path trimmed for a button, but still recognisable as a path.
+
+    The bare folder name reads like part of the session title; keeping the
+    leading ~ and an ellipsis makes it obvious this is where it runs.
+    """
+    if not path:
+        return "?"
+    home = str(Path.home())
+    if path == home:
+        return "~"
+    if path.startswith(home + "/"):
+        path = "~/" + path[len(home) + 1:]
+    if len(path) <= budget:
+        return path
+    parts = path.split("/")
+    tail = parts[-1]
+    # Keep the parent when it still fits — "…/backend/pay4say" says more
+    # than "…/pay4say".
+    if len(parts) > 1 and len("…/" + parts[-2] + "/" + tail) <= budget:
+        return "…/" + parts[-2] + "/" + tail
+    return "…/" + tail
+
+
+def dir_key(path: str) -> str:
+    """Stable short id for a directory, for use in callback_data.
+
+    A position in a list would be shorter, but it moves as soon as a session
+    is opened or closed: an older card would then quietly page through a
+    different project. A hash of the path stays valid across restarts.
+    """
+    return hashlib.sha1(path.rstrip("/").encode()).hexdigest()[:8]
 
 
 def under_roots(path: str | None, roots: tuple[str, ...]) -> bool:
@@ -109,45 +159,13 @@ class SessionView:
 
     @property
     def when_short(self) -> str:
-        """Timestamp trimmed for a button, where every character counts."""
-        if not self.mtime:
-            return "—"
-        ts = datetime.fromtimestamp(self.mtime)
-        delta = (datetime.now().date() - ts.date()).days
-        if delta == 0:
-            return f"{ts:%H:%M}"
-        if delta == 1:
-            # TRANSLATORS: "yesterday" abbreviated to fit a button caption.
-            return _("yst {time}").format(time=f"{ts:%H:%M}")
-        # TRANSLATORS: strftime format — day and month, on a button.
-        return ts.strftime(_("%d.%m"))
+        return short_when(self.mtime)
 
     @property
     def dir_name(self) -> str:
-        """Path trimmed for a button, but still recognisable as a path.
-
-        The bare folder name reads like part of the session title; keeping the
-        leading ~ and an ellipsis makes it obvious this is where it runs.
-        """
         # The launch directory, not the current one: it decides which CLAUDE.md
         # and permissions the session got, so it is what identifies it in a list.
-        path = self.cwd
-        if not path:
-            return "?"
-        home = str(Path.home())
-        if path == home:
-            return "~"
-        if path.startswith(home + "/"):
-            path = "~/" + path[len(home) + 1:]
-        if len(path) <= _DIR_BUDGET:
-            return path
-        parts = path.split("/")
-        tail = parts[-1]
-        # Keep the parent when it still fits — "…/backend/pay4say" says more
-        # than "…/pay4say".
-        if len(parts) > 1 and len("…/" + parts[-2] + "/" + tail) <= _DIR_BUDGET:
-            return "…/" + parts[-2] + "/" + tail
-        return "…/" + tail
+        return short_dir(self.cwd)
 
     @property
     def short_cwd(self) -> str:
@@ -156,6 +174,26 @@ class SessionView:
         if c.startswith(home):
             c = "~" + c[len(home):]
         return c if len(c) <= 44 else "…" + c[-43:]
+
+
+@dataclass
+class DirStat:
+    """A directory as a row in the history list."""
+    cwd: str
+    count: int
+    mtime: float
+
+    @property
+    def key(self) -> str:
+        return dir_key(self.cwd)
+
+    @property
+    def dir_name(self) -> str:
+        return short_dir(self.cwd)
+
+    @property
+    def when_short(self) -> str:
+        return short_when(self.mtime)
 
 
 _claude_path: str | None = None
@@ -350,10 +388,22 @@ def _scan_file(path: Path, store: Store) -> tuple[str | None, str | None, str | 
     return sid, cwd, title, opening
 
 
-async def closed_views(store: Store, limit: int = _HISTORY_LIMIT,
-                       roots: tuple[str, ...] = ()) -> list[SessionView]:
-    """Most recently touched transcripts that are not currently running."""
+async def closed_all(store: Store, roots: tuple[str, ...] = (),
+                     cwd: str | None = None) -> list[SessionView]:
+    """Every resumable transcript, newest first.
+
+    The whole list, not a page of it: the caller needs the total to page
+    through it, and a directory with eighty sessions in it is the normal case.
+    Rescanning is cheap because `_scan_file` caches per (path, mtime, size) —
+    a full pass over two hundred transcripts costs milliseconds once warm.
+    """
     live_ids = {a.get("sessionId") for a in await live_agents()}
+    # A managed session is off the list even when the CLI has stopped naming
+    # it: after `/clear` the live process writes under a new id, leaving the
+    # old transcript to look closed. Resuming that one would take over the
+    # database row of a session that is still in a tmux window.
+    live_ids |= {m.session_id for m in store.all_managed()}
+    want = cwd.rstrip("/") if cwd else None
     files = []
     for p in PROJECTS_DIR.glob("*/*.jsonl"):
         try:
@@ -364,14 +414,14 @@ async def closed_views(store: Store, limit: int = _HISTORY_LIMIT,
 
     views: list[SessionView] = []
     for mtime, path in files:
-        if len(views) >= limit:
-            break
         if path.stem in live_ids:
             continue
-        sid, cwd, title, opening = _scan_file(path, store)
-        if not sid or not cwd:
+        sid, cwd_, title, opening = _scan_file(path, store)
+        if not sid or not cwd_:
             continue
-        if not under_roots(cwd, roots):
+        if not under_roots(cwd_, roots):
+            continue
+        if want is not None and cwd_.rstrip("/") != want:
             continue
         try:
             size = path.stat().st_size
@@ -382,11 +432,82 @@ async def closed_views(store: Store, limit: int = _HISTORY_LIMIT,
         if not title and not opening:
             continue
         views.append(SessionView(
-            session_id=sid, name=(title or opening or _("untitled")), cwd=cwd,
+            session_id=sid, name=(title or opening or _("untitled")), cwd=cwd_,
             kind="closed", status="closed", title=title, mtime=mtime,
             size=size, opening=opening or "",
         ))
     return views
+
+
+async def closed_views(store: Store, limit: int = _HISTORY_LIMIT,
+                       roots: tuple[str, ...] = (), cwd: str | None = None,
+                       offset: int = 0) -> list[SessionView]:
+    """One page of `closed_all`."""
+    views = await closed_all(store, roots, cwd)
+    return views[offset:offset + limit] if limit else views[offset:]
+
+
+async def closed_dirs(store: Store,
+                      roots: tuple[str, ...] = ()) -> list[DirStat]:
+    """Directories that have resumable sessions, busiest activity first.
+
+    Sorted by recency rather than by count: the project worked on an hour ago
+    is the one being looked for, however few sessions it holds.
+    """
+    stats: dict[str, DirStat] = {}
+    for v in await closed_all(store, roots):
+        st = stats.get(v.cwd)
+        if st is None:
+            stats[v.cwd] = DirStat(cwd=v.cwd, count=1, mtime=v.mtime)
+        else:
+            st.count += 1
+            st.mtime = max(st.mtime, v.mtime)
+    return sorted(stats.values(), key=lambda s: s.mtime, reverse=True)
+
+
+def find_transcript(short: str) -> Path | None:
+    """The transcript whose session id starts with *short*.
+
+    A session id is the file name, so this is a direct lookup — no scanning a
+    window of recent sessions, which is what used to make a button on a later
+    page resolve to nothing.
+    """
+    # Nothing but an id ever reaches the glob: "*" or "?" in a callback would
+    # otherwise match a transcript nobody asked for.
+    if not short or not all(ch.isalnum() or ch == "-" for ch in short):
+        return None
+    matches = []
+    for path in PROJECTS_DIR.glob(f"*/{short}*.jsonl"):
+        try:
+            matches.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    if not matches:
+        return None
+    matches.sort(reverse=True)
+    return matches[0][1]
+
+
+async def closed_view(store: Store, short: str,
+                      roots: tuple[str, ...] = ()) -> SessionView | None:
+    """A single closed session, found by the first characters of its id."""
+    path = find_transcript(short)
+    if path is None:
+        return None
+    sid, cwd, title, opening = _scan_file(path, store)
+    if not sid or not cwd or not under_roots(cwd, roots):
+        return None
+    if store.get(sid) or sid in {a.get("sessionId") for a in await live_agents()}:
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return SessionView(
+        session_id=sid, name=(title or opening or _("untitled")), cwd=cwd,
+        kind="closed", status="closed", title=title, mtime=st.st_mtime,
+        size=st.st_size, opening=opening or "",
+    )
 
 
 async def recent_dirs(store: Store, limit: int = 12,
@@ -412,7 +533,7 @@ async def recent_dirs(store: Store, limit: int = 12,
 
     for a in await live_agents():
         push(a.get("cwd"))
-    for v in await closed_views(store, limit=60, roots=roots):
+    for v in await closed_all(store, roots):
         push(v.cwd)
         if len(seen) >= limit:
             break

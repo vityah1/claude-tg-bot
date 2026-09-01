@@ -120,17 +120,43 @@ you have scrolled a long list, the summary is forgotten. So the top carries
 counters only, and all the information lives on the buttons themselves:
 
 ```
-🕘 Recent sessions — newest first.
-   [09:33 · finman · Widget rework of the mileage…]
-   [08:32 · 7loc-admin-web · Paddle billing agree…]
-   [Sun 21:25 · finman · The last deploy]
+🕘 Closed sessions — resuming brings the context back.
+📁 /home/vik/7loc/backend/pay4say
+
+88 sessions · tap one for details.
+   [09:33 · Widget rework of the mileage report]
+   [08:32 · Paddle billing agreement, second try]
+   [Sun 21:25 · The last deploy]
+   [◀️]  [page 2 of 11]  [▶️]
+   [📁 Another directory]  [⬅️ Sessions]
 ```
 
-The button format is `time · directory · what the session is about`. The
-directory is shown by its base name: a full path does not fit on a button, and
-`finman` or `pay4say` is enough to get your bearings. The name comes from the
-session's AI title, or from the first prompt when there is none, because a bare
-UUID says nothing at all.
+History is **per directory**, and paged. It has to be: a project accumulates
+dozens of transcripts (88 in that example), and a single global list of the
+twelve newest — which is what this used to be — buried every one of them under
+whatever other project was touched last. `🕘 Recent` opens the active session's
+own directory straight away, and `📁 Another directory` lists the rest with a
+count each:
+
+```
+🕘 Closed sessions — 185 in all, by directory.
+   [📁 ~/dev/finman · 60 · 06:30]
+   [📁 ~/7loc/backend/pay4say · 88 · yst 20:39]
+   [📁 …/7loc-admin-web · 10 · yst 20:34]
+```
+
+The button format is `time · what the session is about`; in the by-directory
+list it is `path · how many · last activity`. Inside one directory the path is
+left off the rows — it is the same on all of them, and the caption is better
+spent on what tells them apart. The name comes from the session's AI title, or
+from the first prompt when there is none, because a bare UUID says nothing at
+all.
+
+The page a card was opened from travels in its `callback_data`
+(`res:<sid8>:<dir key>:<page>`), so "⬅️ Back" returns to page 7 rather than to
+the top. The directory key is a hash of the path, not its position in the list:
+positions move as sessions open and close, and an older card would then page
+through a different project.
 
 ## Session names
 

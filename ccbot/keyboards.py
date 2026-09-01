@@ -7,7 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .i18n import _, language_name, offered
 from .screen import Dialog
-from .sessions import SessionView
+from .sessions import DirStat, SessionView
 
 # Aliases accepted by `/model`; the CLI resolves them to the latest release.
 MODELS = [
@@ -104,14 +104,15 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
     return kb.as_markup()
 
 
-def confirm_kb(session_id: str, kind: str) -> InlineKeyboardMarkup:
+def confirm_kb(session_id: str, kind: str,
+               back: str = "hist") -> InlineKeyboardMarkup:
     """Detail card actions: a button caption is one line, a card is not."""
     s = sid8(session_id)
     kb = InlineKeyboardBuilder()
     if kind == "closed":
         kb.row(
             InlineKeyboardButton(text=_("▶️ Resume"), callback_data=f"dores:{s}"),
-            InlineKeyboardButton(text=_("⬅️ Back"), callback_data="hist"),
+            InlineKeyboardButton(text=_("⬅️ Back"), callback_data=back),
         )
     elif kind == "foreign":
         kb.row(
@@ -349,12 +350,54 @@ def lang_kb(current: str, following: bool = True) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def history_kb(views: list[SessionView]) -> InlineKeyboardMarkup:
+# One page of history. Ten rows plus the navigation still fits a phone
+# screen without turning the keyboard into a scroll of its own.
+HISTORY_PAGE = 8
+
+
+def history_kb(views: list[SessionView], key: str = "", page: int = 0,
+               pages: int = 1) -> InlineKeyboardMarkup:
+    """One page of one directory's closed sessions.
+
+    Without *key* the caption carries the directory, because the list then
+    spans several of them.
+    """
     kb = InlineKeyboardBuilder()
     for v in views:
+        # Inside one directory the path is the same on every row: spending a
+        # third of the caption on it would cost the part that tells them apart.
+        where = "" if key else f" · {v.dir_name}"
         kb.row(InlineKeyboardButton(
-            text=_fit(f"{v.when_short} · {v.dir_name} · {v.name}"),
-            callback_data=f"res:{sid8(v.session_id)}",
+            text=_fit(f"{v.when_short}{where} · {v.name}"),
+            callback_data=f"res:{sid8(v.session_id)}:{key}:{page}",
+        ))
+    if key and pages > 1:
+        row = []
+        if page > 0:
+            row.append(InlineKeyboardButton(
+                text="◀️", callback_data=f"hd:{key}:{page - 1}"))
+        row.append(InlineKeyboardButton(
+            text=_("page {page} of {pages}").format(page=page + 1, pages=pages),
+            callback_data=f"hd:{key}:{page}"))
+        if page + 1 < pages:
+            row.append(InlineKeyboardButton(
+                text="▶️", callback_data=f"hd:{key}:{page + 1}"))
+        kb.row(*row)
+    kb.row(
+        InlineKeyboardButton(text=_("📁 Another directory"),
+                             callback_data="hdirs"),
+        InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
+    )
+    return kb.as_markup()
+
+
+def history_dirs_kb(dirs: list[DirStat]) -> InlineKeyboardMarkup:
+    """Directories that hold closed sessions, with how many and how recent."""
+    kb = InlineKeyboardBuilder()
+    for d in dirs:
+        kb.row(InlineKeyboardButton(
+            text=_fit(f"📁 {d.dir_name} · {d.count}", d.when_short),
+            callback_data=f"hd:{d.key}:0",
         ))
     kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
     return kb.as_markup()
