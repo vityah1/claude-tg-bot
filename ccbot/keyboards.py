@@ -67,6 +67,11 @@ def sid8(session_id: str) -> str:
     return session_id[:8]
 
 
+def _named(v: SessionView) -> str:
+    """A row's name, marked when it is the one the user gave it themselves."""
+    return f"✏️ {v.name}" if v.saved_name else v.name
+
+
 def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
                 active: str | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
@@ -368,7 +373,7 @@ def history_kb(views: list[SessionView], key: str = "", page: int = 0,
         # third of the caption on it would cost the part that tells them apart.
         where = "" if key else f" · {v.dir_name}"
         kb.row(InlineKeyboardButton(
-            text=_fit(f"{v.when_short}{where} · {v.name}"),
+            text=_fit(f"{v.when_short}{where} · {_named(v)}"),
             callback_data=f"res:{sid8(v.session_id)}:{key}:{page}",
         ))
     if key and pages > 1:
@@ -384,10 +389,38 @@ def history_kb(views: list[SessionView], key: str = "", page: int = 0,
                 text="▶️", callback_data=f"hd:{key}:{page + 1}"))
         kb.row(*row)
     kb.row(
+        InlineKeyboardButton(text=_("🔍 Find"), callback_data="hfind"),
         InlineKeyboardButton(text=_("📁 Another directory"),
                              callback_data="hdirs"),
-        InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
     )
+    kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
+    return kb.as_markup()
+
+
+def search_kb(views: list[SessionView], page: int = 0,
+              pages: int = 1) -> InlineKeyboardMarkup:
+    """Search results: every directory at once, so each row carries its own."""
+    kb = InlineKeyboardBuilder()
+    for v in views:
+        kb.row(InlineKeyboardButton(
+            text=_fit(f"{v.when_short} · {v.dir_name} · {_named(v)}"),
+            callback_data=f"res:{sid8(v.session_id)}:q:{page}",
+        ))
+    if pages > 1:
+        row = []
+        if page > 0:
+            row.append(InlineKeyboardButton(text="◀️", callback_data=f"hq:{page - 1}"))
+        row.append(InlineKeyboardButton(
+            text=_("page {page} of {pages}").format(page=page + 1, pages=pages),
+            callback_data=f"hq:{page}"))
+        if page + 1 < pages:
+            row.append(InlineKeyboardButton(text="▶️", callback_data=f"hq:{page + 1}"))
+        kb.row(*row)
+    kb.row(
+        InlineKeyboardButton(text=_("🔍 Search again"), callback_data="hfind"),
+        InlineKeyboardButton(text=_("📁 Directories"), callback_data="hdirs"),
+    )
+    kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
     return kb.as_markup()
 
 
@@ -399,5 +432,6 @@ def history_dirs_kb(dirs: list[DirStat]) -> InlineKeyboardMarkup:
             text=_fit(f"📁 {d.dir_name} · {d.count}", d.when_short),
             callback_data=f"hd:{d.key}:0",
         ))
+    kb.row(InlineKeyboardButton(text=_("🔍 Find"), callback_data="hfind"))
     kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
     return kb.as_markup()

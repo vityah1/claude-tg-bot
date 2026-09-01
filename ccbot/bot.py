@@ -58,6 +58,7 @@ from .keyboards import (
     lang_kb,
     project_dirs_kb,
     restart_confirm_kb,
+    search_kb,
     service_kb,
     session_kb,
     sessions_kb,
@@ -102,6 +103,9 @@ _RESTART_VERSION_WAIT = 25.0
 # How much of the changelog one message may carry. Below the rich-message
 # document cap, with room for the heading and the "and N older" tail.
 _NEWS_LIMIT = 24000
+# How much of a name a card's heading may take before it is trimmed; the rest
+# of it still reaches the reader, on the "it started with" line.
+_CARD_HEAD = 80
 # A half-finished prompt ("send me a path") expires rather than lingering.
 _PENDING_TTL = 180.0
 
@@ -433,6 +437,9 @@ class CCBot:
         # reach Claude as one prompt.
         self.inbox: dict[int, _Inbox] = {}
         self.dir_choices: list[str] = []
+        # The last history search per chat: a query does not fit in 64 bytes
+        # of callback_data, so paging through the results needs it kept here.
+        self.searches: dict[int, str] = {}
         self.dp.update.outer_middleware(logsetup.UpdateLogMiddleware(cfg.allowed))
         # Per-update language, read from the settings first and from the
         # sender's Telegram profile second.
@@ -1505,6 +1512,11 @@ class CCBot:
             else:
                 await m.answer(_("That directory is already on the list"))
             return
+        # A command typed instead of a search word is a change of mind, not a
+        # search for "/sessions": let it through to its own handler.
+        if pend and pend[0] == "hfind" and not text.startswith("/"):
+            await self._search_from_text(m, text)
+            return
         if pend and pend[0] == "rename":
             _kind, session_id, _ts = pend
             mgd = self.store.get(session_id)
@@ -1567,7 +1579,7 @@ class CCBot:
         chat_id = msg.chat.id
         # Pressing anything else abandons a half-finished prompt, so a later
         # message is not swallowed as a directory path.
-        if not data.startswith("nd:manual") and not data.startswith("dt:"):
+        if not data.startswith(("nd:manual", "dt:", "hfind")):
             self.pending.pop(chat_id, None)
 
         if data.startswith("grp:"):
@@ -1641,6 +1653,24 @@ class CCBot:
                                      page=int(page or 0))
             return
 
+        if data == "hfind":
+            self.pending[chat_id] = ("hfind", time.time())
+            await c.answer()
+            await msg.answer(_("🔍 Send a word to look for — it is matched "
+                               "against the session's name, its first prompt "
+                               "and its last one, in every directory."))
+            return
+
+        if data.startswith("hq:"):
+            query = self.searches.get(chat_id, "")
+            if not query:
+                await c.answer(_("That search is gone — press 🔍 again"),
+                               show_alert=True)
+                return
+            await c.answer(_("Looking…"))
+            await self._show_search(msg, query, page=int(data[3:] or 0))
+            return
+
         if data == "foreign":   # legacy entry point, kept harmless
             await c.answer()
             views = await sess.foreign_views(self.store)
@@ -1706,7 +1736,12 @@ class CCBot:
             if not v:
                 await c.answer(self._closed_gone(short), show_alert=True)
                 return
-            back = f"hd:{origin}" if origin else "hist"
+            # "q:<page>" means the card was opened from a search.
+            back = "hist"
+            if origin.startswith("q:"):
+                back = f"hq:{origin[2:]}"
+            elif origin:
+                back = f"hd:{origin}"
             await c.answer()
             await self._safe_edit(
                 msg,
@@ -2089,6 +2124,43 @@ class CCBot:
                                     pages=pages),
         )
 
+    async def _search_from_text(self, m: Message, text: str) -> None:
+        """Run a history search typed in answer to the 🔍 button."""
+        query = text.strip()
+        if len(query) < 2:
+            await m.answer(_("Too short to search for — send at least two "
+                             "characters."))
+            return
+        self.searches[m.chat.id] = query
+        note = await m.answer(_("🔍 Looking for «{query}»…").format(
+            query=html.escape(query)), parse_mode="HTML")
+        await self._show_search(note, query, page=0)
+
+    async def _show_search(self, msg: Message, query: str,
+                           page: int = 0) -> None:
+        views = await sess.closed_all(self.store, self.roots, None, query)
+        if not views:
+            await self._safe_edit(
+                msg,
+                _("🔍 Nothing matches «{query}».\n<i>The search covers names "
+                  "and the first and last prompt of every closed session — "
+                  "not the whole conversation.</i>").format(
+                      query=html.escape(query)),
+                parse_mode="HTML", reply_markup=search_kb([]),
+            )
+            return
+        pages = max(1, -(-len(views) // HISTORY_PAGE))
+        page = max(0, min(page, pages - 1))
+        shown = views[page * HISTORY_PAGE:(page + 1) * HISTORY_PAGE]
+        count = ngettext("{n} session", "{n} sessions", len(views)).format(
+            n=len(views))
+        await self._safe_edit(
+            msg,
+            _("🔍 «{query}» — {count}.\n<i>time · directory · topic</i>").format(
+                query=html.escape(query), count=count),
+            parse_mode="HTML", reply_markup=search_kb(shown, page, pages),
+        )
+
     async def _show_history_dirs(self, msg: Message) -> None:
         dirs = await sess.closed_dirs(self.store, roots=self.roots)
         if not dirs:
@@ -2153,12 +2225,21 @@ class CCBot:
         return "\n".join(lines)
 
     def _closed_details(self, v) -> str:
-        lines = [f"🕘 <b>{html.escape(v.name)}</b>", ""]
+        # A heading is a heading: when the name is only the first prompt, it
+        # can run to a paragraph, and the whole of it belongs further down.
+        name = v.name if len(v.name) <= _CARD_HEAD else \
+            v.name[:_CARD_HEAD].rstrip() + "…"
+        head = ("✏️ " if v.saved_name else "") + html.escape(name)
+        lines = [f"🕘 <b>{head}</b>", ""]
         lines.append(f"📁 <code>{html.escape(v.cwd)}</code>")
         lines.append(_("🕘 Last active: {when}").format(when=v.when))
-        if v.title and v.opening:
+        if v.opening and v.opening != name:
             lines.append(_("💬 It started with: {text}").format(
                 text=html.escape(v.opening)))
+        # And what it stopped on — which is what "where was I" really asks.
+        if v.last and v.last != v.opening:
+            lines.append(_("⏹ It stopped on: {text}").format(
+                text=html.escape(v.last)))
         if v.size:
             lines.append(
                 _("📦 Transcript: {size} MB").format(

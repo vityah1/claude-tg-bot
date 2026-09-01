@@ -148,9 +148,31 @@ count each:
 The button format is `time · what the session is about`; in the by-directory
 list it is `path · how many · last activity`. Inside one directory the path is
 left off the rows — it is the same on all of them, and the caption is better
-spent on what tells them apart. The name comes from the session's AI title, or
-from the first prompt when there is none, because a bare UUID says nothing at
-all.
+spent on what tells them apart.
+
+The name itself comes from the first of these that exists:
+
+1. **what you called it** — `/rename` keeps the name in a table of its own, so
+   it survives the session ending and comes back with `--resume`. Such a row is
+   marked `✏️`.
+2. **`claude -n`, when a person wrote it** — the bot's own `pay4say-7fda` is
+   recognised and skipped.
+3. **the AI title** Claude Code invents.
+4. **the first prompt** — with the wrapping the bot itself added stripped off,
+   so a photo sent from the phone reads as its caption rather than as
+   `Take a look at these 3 images: /home/…/media/…`.
+
+Fourth is the common case: Claude Code has all but stopped writing `ai-title`
+(one of the sixteen sessions on 31.08.2026 had one), which is exactly why the
+other three exist.
+
+`🔍 Find` searches every directory at once — names, first prompt, last prompt.
+Not the body of the conversation: that would mean reading two hundred files of
+a megabyte each per query, while the four fields are already in the scan cache
+and answer in milliseconds.
+
+A card adds `⏹ It stopped on:` next to `💬 It started with:`. Of the two, the
+last prompt is usually the one that says which session this was.
 
 The page a card was opened from travels in its `callback_data`
 (`res:<sid8>:<dir key>:<page>`), so "⬅️ Back" returns to page 7 rather than to

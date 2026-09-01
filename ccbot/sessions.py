@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -98,6 +99,60 @@ def short_dir(path: str, budget: int = _DIR_BUDGET) -> str:
     return "…/" + tail
 
 
+_PATH_LINE = re.compile(r"^(?:\d+\.\s*)?[~/][^\s]*$")
+# What `util.default_name` produces: the folder plus four hex characters.
+_AUTO_NAME = re.compile(r"^.+-[0-9a-f]{4}$")
+
+
+def clean_prompt(text: str) -> str:
+    """The user's own words, with the wrapping the bot itself added removed.
+
+    An attachment reaches Claude as "Take a look at these 3 images:" followed
+    by the paths and only then the caption, and a forwarded batch as a heading
+    followed by "who: what" lines. Taken as a caption, both say nothing about
+    the session — on 2026-09-01 six of the newest twenty-four rows in pay4say
+    read as a media path. The headings are matched structurally, never by
+    their wording: they are translated, and a Ukrainian install would slip
+    straight past an English pattern.
+    """
+    lines = [ln.rstrip() for ln in (text or "").splitlines()]
+    i = 0
+    # A heading that introduces a list of paths, and the paths themselves.
+    while i < len(lines):
+        ln = lines[i].strip()
+        if not ln:
+            i += 1
+            continue
+        if _PATH_LINE.match(ln):
+            i += 1
+            continue
+        if ln.endswith(":") and any(
+                _PATH_LINE.match(x.strip())
+                for x in lines[i + 1:i + 4] if x.strip()):
+            i += 1
+            continue
+        break
+    rest = [ln for ln in lines[i:] if ln.strip()]
+    if not rest:
+        return (text or "").strip()
+    # A forwarded dump: drop its heading, keep what people actually wrote.
+    if rest[0].strip().endswith(":") and len(rest) > 1 and ": " in rest[1]:
+        rest = rest[1:]
+    # Everything that is left, not just its first line: a prompt that opens
+    # with "у нас есть в АПИ" and explains itself below would otherwise be
+    # captioned by the half that says nothing.
+    return "\n".join(rest).strip() or (text or "").strip()
+
+
+def hand_written(name: str | None, cwd: str | None) -> str:
+    """The launch name (`claude -n`), unless the bot generated it itself."""
+    n = (name or "").strip()
+    if not n or _AUTO_NAME.match(n):
+        return ""
+    # A name the bot made for another directory is still no use as a label.
+    return "" if n == Path(cwd or "").name else n
+
+
 def dir_key(path: str) -> str:
     """Stable short id for a directory, for use in callback_data.
 
@@ -138,6 +193,9 @@ class SessionView:
     started_at: float = 0.0
     pid: int = 0
     work_dir: str = ""   # where it is working now, if that differs
+    saved_name: str = ""  # what the user called it, kept past the session
+    launched: str = ""    # `claude -n`, when a human wrote it
+    last: str = ""        # the prompt it stopped on
 
     @property
     def when(self) -> str:
@@ -324,25 +382,49 @@ async def foreign_views(store: Store) -> list[SessionView]:
     return out
 
 
-def _scan_file(path: Path, store: Store) -> tuple[str | None, str | None, str | None, str | None]:
-    """Return (session_id, cwd, name), using the cache when possible.
+@dataclass
+class Scan:
+    """What one transcript says about itself."""
+    session_id: str | None = None
+    cwd: str | None = None
+    title: str | None = None        # the AI-generated one, when there is one
+    opening: str | None = None      # first prompt, cleaned
+    launched: str | None = None     # `claude -n`, only when a human wrote it
+    last: str | None = None         # the prompt the session stopped on
 
-    The name is the AI-generated title when there is one; otherwise the opening
-    prompt, because a bare UUID tells the reader nothing.
-    """
+
+# Long enough for the detail card to say something; a button trims further.
+_CAPTION_LIMIT = 200
+
+
+def _caption(text: str | None) -> str | None:
+    if not text:
+        return None
+    cleaned = " ".join(clean_prompt(text).split())
+    return cleaned[:_CAPTION_LIMIT] or None
+
+
+def _json_field(line: str, key: str) -> str | None:
+    try:
+        value = json.loads(line).get(key)
+    except ValueError:
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _scan_file(path: Path, store: Store) -> Scan:
+    """Everything a list row and a detail card need, cached per (path, mtime, size)."""
     try:
         st = path.stat()
     except OSError:
-        return None, None, None, None
+        return Scan()
     hit = store.cached_history(str(path), st.st_mtime, st.st_size)
     if hit:
-        return hit["session_id"], hit["cwd"], hit["title"], hit["opening"]
+        return Scan(hit["session_id"], hit["cwd"], hit["title"], hit["opening"],
+                    hit["launched"], hit["last"])
 
     sid = path.stem
-    cwd = None
-    title = None
-    opening = None
-    custom = None
+    cwd = title = opening = launched = last = None
     try:
         with path.open("rb") as fh:
             # Streamed rather than slurped: the opening prompt sits behind a
@@ -354,18 +436,17 @@ def _scan_file(path: Path, store: Store) -> tuple[str | None, str | None, str | 
                     break
                 line = raw.decode("utf-8", "replace")
                 if cwd is None and '"cwd"' in line:
-                    try:
-                        cwd = json.loads(line).get("cwd")
-                    except ValueError:
-                        cwd = None
+                    cwd = _json_field(line, "cwd")
                 if opening is None and '"type":"user"' in line.replace(" ", ""):
-                    opening = transcript.prompt_from_line(line)
-                if custom is None and '"custom-title"' in line:
-                    try:
-                        custom = json.loads(line).get("customTitle")
-                    except ValueError:
-                        custom = None
-                if cwd and opening:
+                    opening = transcript.prompt_text(line)
+                if launched is None and '"custom-title"' in line:
+                    launched = _json_field(line, "customTitle")
+                # Claude Code writes the title it invents early in the file,
+                # not at the end: looking only at the tail found it in a
+                # handful of transcripts and missed it in the rest.
+                if '"ai-title"' in line:
+                    title = _json_field(line, "aiTitle") or title
+                if cwd and opening and launched and title:
                     break
             if st.st_size > _TAIL_BYTES:
                 fh.seek(-_TAIL_BYTES, 2)
@@ -374,22 +455,46 @@ def _scan_file(path: Path, store: Store) -> tuple[str | None, str | None, str | 
                 fh.seek(0)
             for line in fh.read().decode("utf-8", "replace").splitlines():
                 if '"ai-title"' in line:
-                    try:
-                        t = json.loads(line).get("aiTitle")
-                    except ValueError:
-                        t = None
-                    if t:
-                        title = t       # keep the last one
+                    title = _json_field(line, "aiTitle") or title
+                if '"type":"user"' in line.replace(" ", ""):
+                    # The prompt it stopped on says more about a session than
+                    # the one it started with — that is what "where was I"
+                    # actually means.
+                    last = transcript.prompt_text(line) or last
     except OSError:
         pass
-    # `custom` (the -n name) is deliberately not used as a label: a session
-    # that only has a name and no prompt has nothing worth reviving.
-    store.cache_history(str(path), st.st_mtime, st.st_size, sid, cwd, title, opening)
-    return sid, cwd, title, opening
+    # Cleaned while the line breaks are still there, then flattened: the
+    # caption is one line, but the layout is what tells a path from a caption.
+    opening = _caption(opening)
+    last = _caption(last)
+    launched = hand_written(launched, cwd) or None
+    store.cache_history(str(path), st.st_mtime, st.st_size, sid, cwd, title,
+                        opening, launched, last)
+    return Scan(sid, cwd, title, opening, launched, last)
+
+
+def _closed_view(scan: Scan, mtime: float, size: int, saved: str) -> SessionView:
+    """A closed session as a row, named by the best of what is known.
+
+    The order is what the reader recognises soonest: the name they gave it
+    themselves, then a name a human typed at `claude -n`, then the title
+    Claude Code invents, and only then the first thing that was asked. The
+    last is the weakest — Claude Code stopped writing `ai-title` for most
+    sessions in late August 2026, so it is also the most common.
+    """
+    name = (saved or scan.launched or scan.title or scan.opening
+            or _("untitled"))
+    return SessionView(
+        session_id=scan.session_id or "", name=name, cwd=scan.cwd or "",
+        kind="closed", status="closed", title=scan.title, mtime=mtime,
+        size=size, opening=scan.opening or "", saved_name=saved,
+        launched=scan.launched or "", last=scan.last or "",
+    )
 
 
 async def closed_all(store: Store, roots: tuple[str, ...] = (),
-                     cwd: str | None = None) -> list[SessionView]:
+                     cwd: str | None = None,
+                     query: str = "") -> list[SessionView]:
     """Every resumable transcript, newest first.
 
     The whole list, not a page of it: the caller needs the total to page
@@ -403,7 +508,9 @@ async def closed_all(store: Store, roots: tuple[str, ...] = (),
     # old transcript to look closed. Resuming that one would take over the
     # database row of a session that is still in a tmux window.
     live_ids |= {m.session_id for m in store.all_managed()}
+    saved_names = store.saved_names()
     want = cwd.rstrip("/") if cwd else None
+    needle = query.strip().casefold()
     files = []
     for p in PROJECTS_DIR.glob("*/*.jsonl"):
         try:
@@ -416,27 +523,40 @@ async def closed_all(store: Store, roots: tuple[str, ...] = (),
     for mtime, path in files:
         if path.stem in live_ids:
             continue
-        sid, cwd_, title, opening = _scan_file(path, store)
-        if not sid or not cwd_:
+        scan = _scan_file(path, store)
+        if not scan.session_id or not scan.cwd:
             continue
-        if not under_roots(cwd_, roots):
+        if not under_roots(scan.cwd, roots):
             continue
-        if want is not None and cwd_.rstrip("/") != want:
+        if want is not None and scan.cwd.rstrip("/") != want:
+            continue
+        # Judge by content, not size: a session that only ran /exit still
+        # weighs hundreds of KB because of its file-history snapshot.
+        if not scan.title and not scan.opening:
+            continue
+        saved = saved_names.get(scan.session_id, "")
+        if needle and not _matches(scan, saved, needle):
             continue
         try:
             size = path.stat().st_size
         except OSError:
             size = 0
-        # Judge by content, not size: a session that only ran /exit still
-        # weighs hundreds of KB because of its file-history snapshot.
-        if not title and not opening:
-            continue
-        views.append(SessionView(
-            session_id=sid, name=(title or opening or _("untitled")), cwd=cwd_,
-            kind="closed", status="closed", title=title, mtime=mtime,
-            size=size, opening=opening or "",
-        ))
+        views.append(_closed_view(scan, mtime, size, saved))
     return views
+
+
+def _matches(scan: Scan, saved: str, needle: str) -> bool:
+    """Whether a session answers a search.
+
+    Everything the scan already holds is searched — the names, the first
+    prompt and the last one. Not the transcript itself: reading two hundred
+    files of a megabyte each on every keystroke-sized query is the difference
+    between a search and a wait.
+    """
+    haystack = " ".join(filter(None, (
+        saved, scan.launched, scan.title, scan.opening, scan.last,
+        scan.session_id)))
+    return needle in haystack.casefold()
 
 
 async def closed_views(store: Store, limit: int = _HISTORY_LIMIT,
@@ -494,20 +614,18 @@ async def closed_view(store: Store, short: str,
     path = find_transcript(short)
     if path is None:
         return None
-    sid, cwd, title, opening = _scan_file(path, store)
-    if not sid or not cwd or not under_roots(cwd, roots):
+    scan = _scan_file(path, store)
+    if not scan.session_id or not scan.cwd or not under_roots(scan.cwd, roots):
         return None
-    if store.get(sid) or sid in {a.get("sessionId") for a in await live_agents()}:
+    if (store.get(scan.session_id)
+            or scan.session_id in {a.get("sessionId") for a in await live_agents()}):
         return None
     try:
         st = path.stat()
     except OSError:
         return None
-    return SessionView(
-        session_id=sid, name=(title or opening or _("untitled")), cwd=cwd,
-        kind="closed", status="closed", title=title, mtime=st.st_mtime,
-        size=st.st_size, opening=opening or "",
-    )
+    return _closed_view(scan, st.st_mtime, st.st_size,
+                        store.saved_name(scan.session_id) or "")
 
 
 async def recent_dirs(store: Store, limit: int = 12,

@@ -36,8 +36,11 @@ CREATE TABLE IF NOT EXISTS active (
 -- can show both. v3: scans now reach past the file-history preamble, so the
 -- misses cached by v2 have to go. Renamed rather than migrated — it is only
 -- a cache, and its rows are keyed by a path that never changes.
+-- v4: the scan now also reads the launch name and the last prompt, and a
+-- row cached without them would keep answering "nothing there".
 DROP TABLE IF EXISTS history_cache;
 DROP TABLE IF EXISTS history_cache2;
+DROP TABLE IF EXISTS history_cache3;
 -- Which session each outgoing message came from, so a Telegram reply can be
 -- routed back to it regardless of which session is currently active.
 CREATE TABLE IF NOT EXISTS msg_routes (
@@ -45,14 +48,25 @@ CREATE TABLE IF NOT EXISTS msg_routes (
     session_id TEXT NOT NULL,
     created_at REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS history_cache3 (
+CREATE TABLE IF NOT EXISTS history_cache4 (
     path       TEXT PRIMARY KEY,
     mtime      REAL NOT NULL,
     size       INTEGER NOT NULL,
     session_id TEXT,
     cwd        TEXT,
     title      TEXT,
-    opening    TEXT
+    opening    TEXT,
+    launched   TEXT,
+    last       TEXT
+);
+-- A name the user gave a session outlives the session. `managed` is emptied
+-- when a session ends, so a name kept only there is lost exactly when it
+-- starts being useful — in the list of closed sessions one has to be found in.
+CREATE TABLE IF NOT EXISTS session_names (
+    session_id TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    cwd        TEXT,
+    updated_at REAL NOT NULL
 );
 """
 
@@ -144,11 +158,15 @@ class Store:
 
     # -- managed sessions -------------------------------------------------
     def add(self, session_id: str, window_id: str, cwd: str, name: str) -> None:
+        # A resumed session brings its name back with it: the row in `managed`
+        # is new, but the one in `session_names` was never deleted.
         self.conn.execute(
             "INSERT OR REPLACE INTO managed"
-            " (session_id, window_id, cwd, name, created_at, offset, title)"
-            " VALUES (?,?,?,?,?,0,NULL)",
-            (session_id, window_id, cwd, name, time.time()),
+            " (session_id, window_id, cwd, name, created_at, offset, title,"
+            "  custom_name)"
+            " VALUES (?,?,?,?,?,0,NULL,?)",
+            (session_id, window_id, cwd, name, time.time(),
+             self.saved_name(session_id)),
         )
         self.conn.commit()
 
@@ -184,10 +202,39 @@ class Store:
 
     def set_custom_name(self, session_id: str, name: str | None) -> None:
         """Set (or clear, with None) the name the user picked for a session."""
-        self.conn.execute(
-            "UPDATE managed SET custom_name=? WHERE session_id=?", (name, session_id)
-        )
-        self.conn.commit()
+        mgd = self.get(session_id)
+        with self.conn:
+            self.conn.execute(
+                "UPDATE managed SET custom_name=? WHERE session_id=?",
+                (name, session_id),
+            )
+            if name:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO session_names"
+                    " (session_id, name, cwd, updated_at) VALUES (?,?,?,?)",
+                    (session_id, name, mgd.cwd if mgd else None, time.time()),
+                )
+            else:
+                self.conn.execute(
+                    "DELETE FROM session_names WHERE session_id=?", (session_id,)
+                )
+
+    # -- names that outlive their session ----------------------------------
+    def saved_name(self, session_id: str) -> str | None:
+        r = self.conn.execute(
+            "SELECT name FROM session_names WHERE session_id=?", (session_id,)
+        ).fetchone()
+        return r["name"] if r else None
+
+    def saved_names(self) -> dict[str, str]:
+        """Every name the user has given, by session id.
+
+        Read in one go: the history list asks about a couple of hundred
+        sessions at a time, and a query each would be a query each tick.
+        """
+        return {r["session_id"]: r["name"]
+                for r in self.conn.execute(
+                    "SELECT session_id, name FROM session_names")}
 
     def rebind(self, old_id: str, new_id: str) -> None:
         """Follow a session that got a new id — /clear starts a fresh transcript.
@@ -207,6 +254,15 @@ class Store:
             )
             self.conn.execute(
                 "UPDATE msg_routes SET session_id=? WHERE session_id=?",
+                (new_id, old_id),
+            )
+            # The name follows the session, not the transcript: after /clear
+            # the work carries on under the new id, and that is what the
+            # history list will show. The old transcript keeps no name — it is
+            # a different, earlier stretch of work.
+            self.conn.execute(
+                "UPDATE OR REPLACE session_names SET session_id=?"
+                " WHERE session_id=?",
                 (new_id, old_id),
             )
 
@@ -261,17 +317,19 @@ class Store:
     # -- history scan cache ------------------------------------------------
     def cached_history(self, path: str, mtime: float, size: int) -> sqlite3.Row | None:
         return self.conn.execute(
-            "SELECT * FROM history_cache3 WHERE path=? AND mtime=? AND size=?",
+            "SELECT * FROM history_cache4 WHERE path=? AND mtime=? AND size=?",
             (path, mtime, size),
         ).fetchone()
 
     def cache_history(self, path: str, mtime: float, size: int,
                       session_id: str | None, cwd: str | None,
-                      title: str | None, opening: str | None) -> None:
+                      title: str | None, opening: str | None,
+                      launched: str | None = None,
+                      last: str | None = None) -> None:
         self.conn.execute(
-            "INSERT OR REPLACE INTO history_cache3"
-            " (path, mtime, size, session_id, cwd, title, opening)"
-            " VALUES (?,?,?,?,?,?,?)",
-            (path, mtime, size, session_id, cwd, title, opening),
+            "INSERT OR REPLACE INTO history_cache4"
+            " (path, mtime, size, session_id, cwd, title, opening, launched, last)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (path, mtime, size, session_id, cwd, title, opening, launched, last),
         )
         self.conn.commit()

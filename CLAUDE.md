@@ -195,6 +195,30 @@ is still alive, too. That is why rows are read tolerantly
   file name (the id *is* the file name), never by scanning the newest N; and
   the directory in `callback_data` is a hash of the path (`sessions.dir_key`),
   never its position in the list, which moves as sessions open and close.
+- 🔴 **A name the user gave outlives the session that had it.** `/rename`
+  writes both to `managed.custom_name` and to `session_names`, which
+  `Store.remove()` does *not* touch — a name kept only in `managed` is lost
+  exactly when it becomes useful, in the list of closed sessions. `rebind`
+  moves it to the new id (the work continues there, `/clear` or no `/clear`),
+  and `Store.add()` reads it back, so a resumed session comes up under its own
+  name. Everything else about the row is disposable; this is not.
+- 🔴 **A row's caption has four sources, in this order**
+  (`sessions._closed_view`): the saved name, then `claude -n` **when a human
+  wrote it** (`hand_written` rejects the bot's own `folder-1a2b`), then
+  `ai-title`, then the first prompt. The order matters because the last one is
+  the usual case: Claude Code all but stopped writing `ai-title` in late
+  August 2026 — 0 of 9 sessions on 30.08, 1 of 16 on 31.08 — and it writes it
+  near the *start* of the transcript, so a tail-only scan finds almost none.
+- 🔴 **A prompt is cleaned before it becomes a caption**
+  (`sessions.clean_prompt`, on text that still has its line breaks — hence
+  `transcript.prompt_text` next to `prompt_from_line`). The bot's own wrapping
+  is what would otherwise be shown: an attachment prompt opens with a heading
+  and the media paths, a forwarded batch with "Forwarded from Telegram, 8
+  messages". Six of the newest twenty-four pay4say rows read as a media path
+  on 2026-09-01. The headings are matched **structurally** (a line that is a
+  path; a heading followed by paths) and never by their wording — they are
+  translated, and an English pattern would slip straight past a Ukrainian
+  install.
 - **Three kinds of session.** `managed` — in tmux, full control; `foreign` —
   somebody else's terminal, view only (stdin is out of reach; "move" means
   SIGTERM + `--resume`); `closed` — a transcript, brought back with `--resume`.

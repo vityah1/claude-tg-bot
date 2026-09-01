@@ -46,8 +46,14 @@ def find_transcript(session_id: str) -> Path | None:
     return hits[0] if hits else None
 
 
-def prompt_from_line(line: str, limit: int = 60) -> str | None:
-    """The user's typed message, if this JSONL line carries one."""
+def prompt_text(line: str) -> str | None:
+    """The user's typed message as written, line breaks and all.
+
+    Kept apart from `prompt_from_line` because the layout carries meaning: an
+    attachment prompt is a heading, then paths, then the caption, and the
+    caption cannot be told from the paths once it has all been flattened onto
+    one line (`sessions.clean_prompt`).
+    """
     try:
         rec = json.loads(line)
     except ValueError:
@@ -61,10 +67,16 @@ def prompt_from_line(line: str, limit: int = 60) -> str | None:
                         if isinstance(b, dict) and b.get("type") == "text"), None)
     if not isinstance(content, str):
         return None
-    text = " ".join(content.split())
+    text = content.strip()
     if not text or text.startswith("/") or text.startswith(_INJECTED_PREFIXES):
         return None
-    return text[:limit]
+    return text
+
+
+def prompt_from_line(line: str, limit: int = 60) -> str | None:
+    """The user's typed message, flattened onto one line for a caption."""
+    text = prompt_text(line)
+    return " ".join(text.split())[:limit] if text else None
 
 
 def first_prompt(session_id: str, limit: int = 60) -> str | None:
