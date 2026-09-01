@@ -585,6 +585,25 @@ The ⬆️ ⬇️ ✅ buttons page through the list, and the message is **edited
 than duplicated. The arrows also reach options with no number ("Chat about
 this") that no digit corresponds to.
 
+### Questions with checkboxes
+
+A multi-select question (`AskUserQuestion` with `multiSelect`) is not a list of
+answers but a list of **ticks**, and its digits behave accordingly: pressing "1"
+ticks the first box and leaves the question standing. What sends the ticked set
+is an unnumbered row under the list — captioned `Submit` on the last section of
+a question, `Next` while sections remain — and no digit reaches it.
+
+So the chat gets a button of its own for that row ("✅ Send 2 choices" /
+"➡️ Next question"), the buttons carry ☑ / ☐, and pressing one edits the card
+instead of retiring it. Under the button the cursor is walked onto the row and
+the screen re-read after every move: Enter on the wrong row would answer with
+that single option instead of the set. Whatever follows — the
+"Ready to submit your answers?" review — is confirmed by the bot itself, since
+the chat has just confirmed the same thing.
+
+Without that button the question dead-ended: the boxes could be ticked from the
+phone and there was no way to send them.
+
 ## Attachments
 
 Anything Telegram can carry — a photo, an album, a document of any type, a

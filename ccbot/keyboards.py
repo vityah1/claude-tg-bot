@@ -5,7 +5,7 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .i18n import _, language_name, offered
+from .i18n import _, language_name, ngettext, offered
 from .screen import Dialog
 from .sessions import DirStat, SessionView
 
@@ -178,7 +178,16 @@ def choice_kb(session_id: str, kind: str, current: str = "") -> InlineKeyboardMa
 
 
 def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
-    """One button per option; free-text options route to a reply prompt."""
+    """One button per option; free-text options route to a reply prompt.
+
+    A multi-select question works differently and the keyboard has to say so:
+    its digits *tick* a box instead of answering, and nothing reaches Claude
+    until the unnumbered row under the list is pressed. So the ticks are drawn
+    on the buttons, and that row gets a button of its own — without it the
+    boxes could be ticked from the chat and the answer never sent. The row
+    moves to the next section rather than sending when the question has more
+    of them, and the button says which it is doing.
+    """
     s = sid8(session_id)
     kb = InlineKeyboardBuilder()
     for opt in dialog.options:
@@ -189,9 +198,25 @@ def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
             ))
         else:
             mark = "▸ " if opt.selected else ""
+            box = "" if opt.checked is None else ("☑ " if opt.checked else "☐ ")
+            # A tick is not an answer: it goes down a route that keeps the
+            # keyboard alive instead of retiring the card.
+            kind = "d" if opt.checked is None else "dm"
             kb.row(InlineKeyboardButton(
-                text=f"{mark}{opt.number}. {label}", callback_data=f"d:{s}:{opt.number}",
+                text=f"{mark}{box}{opt.number}. {label}",
+                callback_data=f"{kind}:{s}:{opt.number}",
             ))
+    if dialog.submit_index is not None:
+        n = len(dialog.checked)
+        if dialog.submit_label.lower() == "next":
+            # TRANSLATORS: a multi-part question — this moves to its next part.
+            text = (_("➡️ Next question ({n} ticked)").format(n=n) if n
+                    else _("➡️ Next question"))
+        else:
+            # TRANSLATORS: sends the ticked options of a multi-select question.
+            text = (ngettext("✅ Send {n} choice", "✅ Send {n} choices", n).format(n=n)
+                    if n else _("✅ Send answer"))
+        kb.row(InlineKeyboardButton(text=text, callback_data=f"sub:{s}"))
     # Arrow keys reach options the digit shortcuts cannot: unnumbered entries
     # like "Chat about this", and previews that only render for the highlighted
     # row.

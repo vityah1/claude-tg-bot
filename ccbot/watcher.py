@@ -447,7 +447,10 @@ class Watcher:
         # warrants a new message; the second only edits the existing one, so
         # walking a list with the arrow buttons does not spam the chat.
         sig = dialog.question + "|" + "|".join(o.label for o in dialog.options)
-        state = str([o.number for o in dialog.options if o.selected])
+        # Ticks belong to the state, not to the question: a checkbox changes
+        # with every press, and reading that as a new question would answer
+        # one multi-select list with a chat full of copies of it.
+        state = str([(o.number, o.selected, o.checked) for o in dialog.options])
         if sig == rt.last_dialog_sig and state == rt.last_dialog_state:
             return
         same_question = sig == rt.last_dialog_sig
@@ -742,9 +745,15 @@ class Watcher:
         blocks: list[rich.Block] = [rich.para(*head), rich.para(dialog.question)]
         for o in dialog.options:
             mark = "▸ " if o.selected else ""
-            blocks.append(rich.para(mark, rich.bold(f"{o.number}. {o.label}")))
-            if o.description:
+            box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
+            blocks.append(rich.para(mark, box, rich.bold(f"{o.number}. {o.label}")))
+            if o.description and o.description != o.label:
                 blocks.append(rich.para(f"    {o.description}"))
+        if dialog.multi_select:
+            # TRANSLATORS: how a multi-select question is answered from a chat.
+            blocks.append(rich.para(
+                _("The numbered buttons only tick boxes — nothing goes to "
+                  "Claude until the button under them.")))
         if dialog.extras:
             # TRANSLATORS: options with no digit of their own, reachable only
             # by walking the list with the arrow buttons.
@@ -764,9 +773,15 @@ class Watcher:
         parts = [head, "", html.escape(dialog.question), ""]
         for o in dialog.options:
             mark = "▸ " if o.selected else ""
-            parts.append(f"{mark}<b>{o.number}. {html.escape(o.label)}</b>")
-            if o.description:
+            box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
+            parts.append(f"{mark}{box}<b>{o.number}. {html.escape(o.label)}</b>")
+            if o.description and o.description != o.label:
                 parts.append(f"    {html.escape(o.description)}")
+        if dialog.multi_select:
+            parts.append("")
+            # TRANSLATORS: how a multi-select question is answered from a chat.
+            parts.append(_("The numbered buttons only tick boxes — nothing "
+                           "goes to Claude until the button under them."))
         if dialog.extras:
             parts.append("")
             # TRANSLATORS: options with no digit of their own, reachable only

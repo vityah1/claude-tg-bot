@@ -35,6 +35,9 @@ _ESC_COMPANIONS = ("select", "amend", "explain", "confirm", "interrupt")
 _SUBMIT_MARKER = "Ready to submit your answers?"
 # Its section tabs: "←  ☒ Language  ☐ Style  ☐ Length  ✔ Submit  →".
 _TABS_RE = re.compile(r"^\s*[←‹]\s+.*[☐☑☒✓✔].*[→›]\s*$")
+# The section names out of that row, so the chat can head the question with
+# them instead of showing the row itself, arrows and ballot boxes and all.
+_TAB_CHIP_RE = re.compile(r"[☐☑☒]\s*([^☐☑☒✔→›]+)")
 # The mode line and the status line are drawn at the very bottom of the pane,
 # and an open dialog covers them. Seeing either one is proof that the bottom
 # belongs to the ordinary UI — however much the text above it may look like a
@@ -47,6 +50,15 @@ _UI_BOTTOM = ("mode on (shift+tab", "mode off (shift+tab", "claude v")
 _OPTION_RE = re.compile(
     r"^(?P<indent>\s*)(?P<cursor>[❯›>])?\s*(?P<num>\d+)[.)]\s+(?P<label>.+?)\s*$"
 )
+
+# A multi-select question puts a checkbox in front of every label ("1. [✔] Fix
+# parser"), and the only way to send the ticked set is an unnumbered row under
+# the list — no digit reaches it. The row reads "Submit" on the last section of
+# a question and "Next" while sections remain, and the caption is worth
+# keeping: a button that says "Send" where the terminal moves to another
+# question is a button that lies.
+_CHECKBOX_RE = re.compile(r"^\[(?P<mark>[ xX✓✔✗·]?)\]\s*(?P<rest>.*)$")
+_ACTION_ROW_RE = re.compile(r"^(?P<cursor>[❯›>])?\s*(?P<word>Submit|Next)\s*$")
 
 # Header chip above the question, e.g. "☐ Database"
 _HEADER_RE = re.compile(r"^\s*[☐☑✓·]\s+(?P<title>.+?)\s*$")
@@ -115,7 +127,8 @@ class Option:
     number: int
     label: str
     description: str = ""
-    selected: bool = False
+    selected: bool = False          # the cursor is on this row
+    checked: bool | None = None     # a multi-select tick; None = no checkbox
 
     @property
     def is_free_text(self) -> bool:
@@ -132,10 +145,25 @@ class Dialog:
     footer: str = ""
     preview: str = ""          # ASCII art shown beside the selected option
     extras: list[str] = field(default_factory=list)   # unnumbered choices
+    # Positions in navigation order (options, then the Submit row, then the
+    # unnumbered choices): where the cursor is, and where Submit sits. The
+    # distance between them is how many arrow presses reach it.
+    cursor_index: int | None = None
+    submit_index: int | None = None
+    submit_label: str = ""     # what that row is captioned: Submit or Next
 
     @property
     def allows_free_text(self) -> bool:
         return any(o.is_free_text for o in self.options)
+
+    @property
+    def multi_select(self) -> bool:
+        """Whether the options are checkboxes rather than one-of choices."""
+        return any(o.checked is not None for o in self.options)
+
+    @property
+    def checked(self) -> list[Option]:
+        return [o for o in self.options if o.checked]
 
 
 # Belt and braces: if column detection ever misses, strip a trailing chunk of
@@ -315,6 +343,10 @@ def find_dialog(screen: str) -> Dialog | None:
     options: list[Option] = []
     extras: list[str] = []
     cur_indent = 0
+    nav = 0                       # rows the cursor can stand on, in order
+    cursor_index: int | None = None
+    submit_index: int | None = None
+    submit_label = ""
 
     after_rule = False        # a rule separates the list from extra choices
     for ln in body:
@@ -324,25 +356,66 @@ def find_dialog(screen: str) -> Dialog | None:
             if options:
                 after_rule = True
             continue
+        if _TABS_RE.match(ln):
+            # The tab row is navigation furniture, not part of the question;
+            # its names are worth keeping, the arrows and boxes are not.
+            if title is None:
+                chips = [c.strip() for c in _TAB_CHIP_RE.findall(ln)]
+                chips = [c for c in chips if c and c.lower() != "submit"]
+                if chips:
+                    title = " · ".join(chips)
+            continue
         m = _OPTION_RE.match(ln)
         if m:
             cur_indent = len(m.group("indent"))
+            label = clean_label(m.group("label"))
+            checked: bool | None = None
+            box = _CHECKBOX_RE.match(label)
+            if box:
+                # Keep the state, drop the glyph: a label that carries its own
+                # checkbox changes on every tick, and the watcher would read
+                # each tick as a brand-new question.
+                checked = bool(box.group("mark").strip())
+                label = box.group("rest").strip()
+            if m.group("cursor"):
+                cursor_index = nav
             options.append(Option(
                 number=int(m.group("num")),
-                label=clean_label(m.group("label")),
+                label=label,
                 selected=bool(m.group("cursor")),
+                checked=checked,
             ))
+            nav += 1
             continue
+        if options and submit_index is None:
+            # The Submit/Next row of a multi-select list. It has to be caught
+            # here: it is indented deeper than the options, so the branch below
+            # would file it away as the description of the last one.
+            srow = _ACTION_ROW_RE.match(ln.strip())
+            if srow:
+                submit_index = nav
+                submit_label = srow.group("word")
+                if srow.group("cursor"):
+                    cursor_index = nav
+                nav += 1
+                continue
         indent = len(ln) - len(ln.lstrip())
-        if options and indent > cur_indent and not after_rule:
+        if options and indent >= cur_indent and not after_rule:
             opt = options[-1]
             opt.description = (opt.description + " " + ln.strip()).strip()
             continue
         if options:
             # Unnumbered choices ("Chat about this") sit below the list; they
             # have no digit shortcut and are reachable only by navigating.
-            if len(ln.strip()) <= 60:
-                extras.append(ln.strip())
+            choice = ln.strip()
+            cursored = choice[:1] in ("❯", "›", ">")
+            if cursored:
+                choice = choice[1:].strip()
+            if choice and len(choice) <= 60:
+                if cursored:
+                    cursor_index = nav
+                extras.append(choice)
+                nav += 1
             continue
         hm = _HEADER_RE.match(ln)
         if hm and title is None:
@@ -376,7 +449,21 @@ def find_dialog(screen: str) -> Dialog | None:
         footer=lines[footer_idx].strip() if footer_idx < len(lines) else "",
         preview=preview,
         extras=extras,
+        cursor_index=cursor_index,
+        submit_index=submit_index,
+        submit_label=submit_label,
     )
+
+
+def is_review(dialog: Dialog) -> bool:
+    """Whether *dialog* is the "Ready to submit your answers?" review step.
+
+    Pressing Submit on a multi-select list lands here, and the answers it
+    echoes are the ones the user has already confirmed from the chat — so the
+    bot answers it itself rather than sending a card that asks the same thing
+    twice.
+    """
+    return _SUBMIT_MARKER.lower() in dialog.question.lower()
 
 
 def unwrap(text: str) -> str:

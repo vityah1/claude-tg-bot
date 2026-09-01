@@ -228,6 +228,21 @@ is still alive, too. That is why rows are read tolerantly
   permission request from a tool or a `PreToolUse` hook). Options are searched
   **bottom-up from the footer to "1."** — top-down, the parser latches onto
   Claude's numbered prose. A Claude Code update breaks this file specifically.
+- 🔴 **A multi-select question answers on a row that has no digit.** Its
+  options are checkboxes ("1. [✔] Fix parser"), a digit *ticks* one, and the
+  ticked set leaves only when the unnumbered row under the list is pressed:
+  `Submit` on the last section, `Next` while sections remain (verified on the
+  live TUI, 2.1.252). Three things follow. The checkbox is parsed out of the
+  label into `Option.checked`, because a label that carries its own box changes
+  on every press and `Watcher._tick_session` would read each press as a new
+  question — hence the box lives in `state`, not in `sig`. The row is found
+  before the description branch (it is indented *deeper* than the options, so
+  it used to be filed away as the description of the last one) and its position
+  is kept in navigation order (`Dialog.submit_index` / `cursor_index`), which
+  is what `CCBot._submit_dialog` walks the cursor along, re-reading the screen
+  after every move. And the review page it leads to ("Ready to submit your
+  answers?") is answered by the bot: the chat has just confirmed the same
+  thing, so a card repeating it would make one answer cost two taps.
 - **One dialog has no footer at all**: the review step of a multi-part
   `AskUserQuestion`, which draws its section tabs
   (`←  ☒ Language  ☐ Style  ✔ Submit  →`), echoes the answers, and ends with

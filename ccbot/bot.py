@@ -52,6 +52,7 @@ from .keyboards import (
     cancel_rename_kb,
     choice_kb,
     confirm_kb,
+    dialog_kb,
     dirs_kb,
     history_dirs_kb,
     history_kb,
@@ -108,6 +109,10 @@ _NEWS_LIMIT = 24000
 _CARD_HEAD = 80
 # A half-finished prompt ("send me a path") expires rather than lingering.
 _PENDING_TTL = 180.0
+# How long the TUI needs to redraw a list after one key: a tick has to be read
+# back before the button can show it, and the cursor has to have moved before
+# the next step is worked out.
+_NAV_SETTLE = 0.5
 
 
 @dataclass
@@ -1546,6 +1551,11 @@ class CCBot:
             await tmux.send_keys(mgd.window_id, str(number))
             await asyncio.sleep(0.4)
             await self._send_prompt(mgd, text)
+            # In a multi-select list typing an answer only fills its own row:
+            # the list stays open and Submit is still what sends it. On an
+            # ordinary dialog there is no such row and this returns at once.
+            await asyncio.sleep(_NAV_SETTLE)
+            await self._submit_dialog(mgd)
             await self._ack(m, _("✏️ Answer sent to <b>{name}</b>").format(
                 name=html.escape(mgd.full_label)), mgd)
             return
@@ -1792,6 +1802,66 @@ class CCBot:
                     )
             await c.answer(_("Active: {name}").format(name=mgd.full_label))
             await self._show_session_card(c, mgd)
+            return
+
+        if data.startswith("dm:"):
+            # A checkbox of a multi-select question: ticking is not answering,
+            # so the card stays and the tick is drawn back onto its button —
+            # a press with nothing visible after it is the bug this fixes.
+            _kind, short, num = data.split(":", 2)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            await self._answer_dialog(mgd, int(num))
+            await asyncio.sleep(_NAV_SETTLE)
+            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+            opt = next((o for o in (dialog.options if dialog else [])
+                        if o.number == int(num)), None)
+            if opt is None:
+                await c.answer(_("Ticked {n}").format(n=num))
+            else:
+                await c.answer(f"{'☑' if opt.checked else '☐'} {opt.label}")
+            if dialog is not None:
+                try:
+                    await msg.edit_reply_markup(
+                        reply_markup=dialog_kb(mgd.session_id, dialog))
+                except Exception:
+                    log.debug("tick redraw skipped", exc_info=True)
+            return
+
+        if data.startswith("sub:"):
+            mgd = self._resolve(data[4:])
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+            if dialog is None or dialog.submit_index is None:
+                await c.answer(_("That question has left the screen"),
+                               show_alert=True)
+                return
+            if dialog.multi_select and not dialog.checked:
+                await c.answer(_("Tick at least one option first"),
+                               show_alert=True)
+                return
+            picked = ", ".join(o.label for o in dialog.checked)
+            more = dialog.submit_label.lower() == "next"
+            await c.answer(_("Sending…"))
+            if not await self._submit_dialog(mgd):
+                await msg.answer(_("⚠️ Could not press <b>{label}</b>. Open "
+                                   "🖥 Screen and press it by hand.").format(
+                                       label=html.escape(dialog.submit_label)),
+                                 parse_mode="HTML")
+            elif more:
+                # The next section arrives as its own question from the
+                # watcher; this only says the press landed.
+                await msg.answer(_("➡️ Moving on to the next question"))
+            else:
+                await msg.answer(
+                    _("✅ Answer sent: <b>{picked}</b>").format(
+                        picked=html.escape(picked)) if picked
+                    else _("✅ Answer sent"),
+                    parse_mode="HTML")
             return
 
         if data.startswith("d:") or data.startswith("dt:"):
@@ -2336,6 +2406,62 @@ class CCBot:
         for _step in range(number - 1):
             await tmux.send_keys(mgd.window_id, "Down")
         await tmux.send_keys(mgd.window_id, "Enter")
+
+    async def _submit_dialog(self, mgd) -> bool:
+        """Press the unnumbered Submit (or Next) row of a multi-select question.
+
+        The digits of such a list *tick* boxes, and no digit reaches that row —
+        it is only navigable, which is why answering one from the chat used to
+        dead-end with the boxes ticked and nothing sent. The cursor and the
+        row are both known in navigation order (`Dialog.cursor_index` /
+        `submit_index`), so their distance is the number of presses; the screen
+        is re-read after every move because Enter on the wrong row would answer
+        the question with that single option instead of the ticked set.
+        """
+        for _attempt in range(4):
+            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+            if dialog is None or dialog.submit_index is None:
+                return False
+            if dialog.cursor_index is None:
+                # Nothing highlighted: one press puts the cursor on the list.
+                self._typed(mgd)
+                await tmux.send_keys(mgd.window_id, "Down")
+                await asyncio.sleep(_NAV_SETTLE)
+                continue
+            delta = dialog.submit_index - dialog.cursor_index
+            if delta == 0:
+                self._typed(mgd)
+                await tmux.send_keys(mgd.window_id, "Enter")
+                await asyncio.sleep(_NAV_SETTLE)
+                await self._confirm_review(mgd)
+                log.info("submitted a multi-select dialog id=%s",
+                         mgd.session_id[:8])
+                return True
+            key = "Down" if delta > 0 else "Up"
+            self._typed(mgd)
+            for _step in range(abs(delta)):
+                await tmux.send_keys(mgd.window_id, key)
+            await asyncio.sleep(_NAV_SETTLE)
+        log.warning("could not reach Submit id=%s", mgd.session_id[:8])
+        return False
+
+    async def _confirm_review(self, mgd) -> None:
+        """Answer the review page that Submit leads to.
+
+        "Ready to submit your answers?" asks for exactly what the chat has
+        just confirmed, so leaving it to the user would make one answer cost
+        two taps. Only that page is answered on its own — it is recognised by
+        its marker (`screen.is_review`), never by an option merely captioned
+        "Submit".
+        """
+        dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+        if dialog is None or not screenmod.is_review(dialog):
+            return
+        opt = next((o for o in dialog.options
+                    if o.label.strip().lower().startswith("submit")), None)
+        if opt is None:
+            return
+        await self._answer_dialog(mgd, opt.number)
 
     async def _session_action(self, c: CallbackQuery, mgd, action: str) -> None:
         if action == "esc":
