@@ -192,7 +192,16 @@ def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for opt in dialog.options:
         label = opt.label if len(opt.label) <= 48 else opt.label[:47] + "…"
-        if opt.is_free_text:
+        if opt.is_chat_about:
+            # Dropping the question, not answering it: no text is collected up
+            # front, because Claude Code answers this row by asking what the
+            # user wants to clarify — a message sent with it would only be read
+            # after that question, which is how one clarification had to be
+            # typed twice.
+            kb.row(InlineKeyboardButton(
+                text=f"💬 {label}", callback_data=f"dc:{s}:{opt.number}",
+            ))
+        elif opt.is_free_text:
             kb.row(InlineKeyboardButton(
                 text=f"✏️ {label}", callback_data=f"dt:{s}:{opt.number}",
             ))

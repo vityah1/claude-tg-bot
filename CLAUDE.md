@@ -228,6 +228,30 @@ is still alive, too. That is why rows are read tolerantly
   permission request from a tool or a `PreToolUse` hook). Options are searched
   **bottom-up from the footer to "1."** — top-down, the parser latches onto
   Claude's numbered prose. A Claude Code update breaks this file specifically.
+- 🔴 **"Type something" and "Chat about this" are not the same escape hatch**
+  (measured on 2.1.252). The first is an **input line inside the dialog**: the
+  digit only moves the cursor onto that row, the text that follows is typed
+  into it, and Enter answers the question — one turn, and the transcript reads
+  `User answered … → <text>`. The second **answers nothing**: the digit alone
+  rejects the question with an instruction that tells Claude to *"start by
+  asking them what they would like to clarify"*, so Claude asks first and any
+  text sent with the press is only read after that answer. Collecting the text
+  up front and pressing "Chat about this" therefore cost a round trip and read
+  as "my message was ignored" (2026-09-01: cf0ab576, the reject at 13:53:35,
+  Claude's "Що саме уточнити?" at 13:53:38, the text delivered at 13:53:39).
+  So the two rows take different routes: `dt:` collects the text and types it
+  into the row, `dc:` presses and stops, saying that the next message goes
+  there.
+- 🔴 **Answering a question from its card makes that session active**
+  (`CCBot._focus`). What the user types next belongs to the thread they were
+  just answering, and the active session is what plain text follows. Without
+  it a clarification typed after a dialog button went wherever the active
+  session happened to point: on 2026-09-01 the second copy of a pay4say
+  clarification (cf0ab576) landed in a different pay4say session (05caad4f) 13
+  seconds later, which started working on a question never put to it. Every
+  dialog route — `d:`, `dt:`, `dc:`, `dm:`, `sub:`, `nav:` — focuses, and the
+  move is announced, because a silent change of target is how the next message
+  goes missing.
 - 🔴 **A multi-select question answers on a row that has no digit.** Its
   options are checkboxes ("1. [✔] Fix parser"), a digit *ticks* one, and the
   ticked set leaves only when the unnumbered row under the list is pressed:

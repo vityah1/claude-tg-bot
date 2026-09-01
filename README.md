@@ -585,6 +585,28 @@ The ⬆️ ⬇️ ✅ buttons page through the list, and the message is **edited
 than duplicated. The arrows also reach options with no number ("Chat about
 this") that no digit corresponds to.
 
+### The two ways out of a question
+
+A question offers two free-text rows, and they behave nothing alike.
+
+**"Type something"** is an input line *inside* the dialog: the digit moves the
+cursor onto the row, the text is typed into it, and Enter answers the question.
+One turn, and the answer is recorded as the answer. That is the route the
+✏️ button takes — it asks for the text first, then types it in.
+
+**"Chat about this"** answers nothing. The digit alone rejects the question,
+with an instruction that has Claude *ask what you would like to clarify* — so
+whatever is sent along with the press is read only after that question has been
+asked and answered. The 💬 button therefore presses and stops: the question is
+dropped, the session becomes the active one, and the next thing written in the
+chat goes there as an ordinary message. One message, one turn.
+
+Answering from a card also **makes that session active**. It has to: what
+follows an answer belongs to the same thread, and plain text goes to the active
+session. Before that, a clarification typed after pressing a dialog button
+could land in another session entirely — which happened on 2026-09-01, and the
+other session started working on a question nobody had asked it.
+
 ### Questions with checkboxes
 
 A multi-select question (`AskUserQuestion` with `multiSelect`) is not a list of

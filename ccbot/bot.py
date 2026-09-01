@@ -1320,6 +1320,33 @@ class CCBot:
         """
         self.watcher.note_input(mgd.session_id)
 
+    def _focus(self, chat_id: int, mgd) -> bool:
+        """Make *mgd* the session plain text goes to; True if that moved it.
+
+        Answering a question from its card is working *inside* that session,
+        and what the user types next belongs to the same thread. Without this
+        the next message went to whatever session happened to be active: on
+        2026-09-01 a clarification meant for one pay4say session (cf0ab576,
+        "Chat about this" pressed at 13:51) landed in another (05caad4f) 13
+        seconds later, which then started working on a question that was never
+        put to it.
+        """
+        previous = self.store.get_active(chat_id)
+        if previous == mgd.session_id:
+            return False
+        self.store.set_active(chat_id, mgd.session_id)
+        log.info("active switched by dialog: chat=%s -> %s (%s)",
+                 chat_id, mgd.full_label, mgd.session_id[:8])
+        return True
+
+    async def _say_focused(self, msg, mgd) -> None:
+        """Tell the chat where its text goes now. Silence here is a trap."""
+        with contextlib.suppress(Exception):
+            await msg.answer(
+                _("▶️ Text now goes to <b>{name}</b>").format(
+                    name=html.escape(mgd.full_label)),
+                parse_mode="HTML")
+
     async def _send_prompt(self, mgd, text: str) -> None:
         self._typed(mgd)
         log.info("prompt -> %s (%s): %r", mgd.full_label, mgd.session_id[:8], text[:120])
@@ -1549,14 +1576,22 @@ class CCBot:
                 return
             self._typed(mgd)
             await tmux.send_keys(mgd.window_id, str(number))
-            await asyncio.sleep(0.4)
-            await self._send_prompt(mgd, text)
-            # In a multi-select list typing an answer only fills its own row:
-            # the list stays open and Submit is still what sends it. On an
-            # ordinary dialog there is no such row and this returns at once.
             await asyncio.sleep(_NAV_SETTLE)
-            await self._submit_dialog(mgd)
-            await self._ack(m, _("✏️ Answer sent to <b>{name}</b>").format(
+            # "Type something" is a line inside the dialog: the digit only
+            # moves the cursor onto it, and what follows is typed into the row,
+            # so Enter answers the question itself. If the dialog has gone the
+            # row was not an input line and the text travels as a prompt.
+            in_dialog = screenmod.find_dialog(
+                await tmux.capture(mgd.window_id)) is not None
+            await self._send_prompt(mgd, text)
+            if in_dialog:
+                # A multi-select list keeps standing: the typed row is filled
+                # in, and Submit is still what sends the set.
+                await asyncio.sleep(_NAV_SETTLE)
+                await self._submit_dialog(mgd)
+            self._focus(m.chat.id, mgd)
+            await self._ack(m, _("✏️ Answer sent to <b>{name}</b> · it is the "
+                                 "active session now").format(
                 name=html.escape(mgd.full_label)), mgd)
             return
 
@@ -1804,6 +1839,28 @@ class CCBot:
             await self._show_session_card(c, mgd)
             return
 
+        if data.startswith("dc:"):
+            # "Chat about this": press it and stop there. The row rejects the
+            # question with "start by asking them what they would like to
+            # clarify", so Claude asks first and anything sent along with the
+            # press is read only after that — collecting the text here is what
+            # made the same message have to be typed twice.
+            _kind, short, num = data.split(":", 2)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            self._typed(mgd)
+            await tmux.send_keys(mgd.window_id, str(int(num)))
+            self._focus(chat_id, mgd)
+            await c.answer(_("Question dropped"))
+            await msg.answer(
+                _("💬 Question dropped in <b>{name}</b>. It is the active "
+                  "session now — write what you want to clarify and it goes "
+                  "there.").format(name=html.escape(mgd.full_label)),
+                parse_mode="HTML")
+            return
+
         if data.startswith("dm:"):
             # A checkbox of a multi-select question: ticking is not answering,
             # so the card stays and the tick is drawn back onto its button —
@@ -1813,11 +1870,14 @@ class CCBot:
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
+            moved = self._focus(chat_id, mgd)
             await self._answer_dialog(mgd, int(num))
             await asyncio.sleep(_NAV_SETTLE)
             dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
             opt = next((o for o in (dialog.options if dialog else [])
                         if o.number == int(num)), None)
+            if moved:
+                await self._say_focused(msg, mgd)
             if opt is None:
                 await c.answer(_("Ticked {n}").format(n=num))
             else:
@@ -1846,6 +1906,7 @@ class CCBot:
                 return
             picked = ", ".join(o.label for o in dialog.checked)
             more = dialog.submit_label.lower() == "next"
+            moved = self._focus(chat_id, mgd)
             await c.answer(_("Sending…"))
             if not await self._submit_dialog(mgd):
                 await msg.answer(_("⚠️ Could not press <b>{label}</b>. Open "
@@ -1856,6 +1917,8 @@ class CCBot:
                 # The next section arrives as its own question from the
                 # watcher; this only says the press landed.
                 await msg.answer(_("➡️ Moving on to the next question"))
+            elif moved:
+                await self._say_focused(msg, mgd)
             else:
                 await msg.answer(
                     _("✅ Answer sent: <b>{picked}</b>").format(
@@ -1871,13 +1934,19 @@ class CCBot:
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
+            moved = self._focus(chat_id, mgd)
             if free:
                 self.pending[chat_id] = ("dialog", mgd.session_id, int(num), time.time())
                 await c.answer()
-                await msg.answer(_("Write your own answer:"))
+                await msg.answer(_("Write your own answer — it goes to "
+                                   "<b>{name}</b>").format(
+                                       name=html.escape(mgd.full_label)),
+                                 parse_mode="HTML")
                 return
             await self._answer_dialog(mgd, int(num))
             await c.answer(_("Picked {n}").format(n=num))
+            if moved:
+                await self._say_focused(msg, mgd)
             with_kb = msg.reply_markup
             if with_kb:
                 await msg.edit_reply_markup(reply_markup=None)
@@ -1967,6 +2036,7 @@ class CCBot:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
             key = {"up": "Up", "down": "Down", "enter": "Enter"}[direction]
+            self._focus(chat_id, mgd)
             self._typed(mgd)
             await tmux.send_keys(mgd.window_id, key)
             await c.answer("⬆️" if key == "Up" else

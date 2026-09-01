@@ -94,8 +94,15 @@ _WRAPPED_AT = 120
 # ... unless what follows opens a list or a table row, which stands alone.
 _LIST_START_RE = re.compile(r"^\s*([-*•·→▸○◦]|\d+[.)]|[|┃])\s")
 
-# Free-text escape hatches Claude offers inside choice dialogs.
+# Free-text escape hatches Claude offers inside choice dialogs. They are not
+# the same thing, and the bot must not treat them as one (measured on 2.1.252):
+# "Type something" is an *input line inside the dialog* — the digit moves the
+# cursor onto it, what follows is typed into the row, and Enter answers the
+# question in one turn. "Chat about this" answers nothing: the digit alone
+# rejects the question with an instruction telling Claude to ask what the user
+# would like to clarify, so any text sent after it arrives a turn too late.
 _TEXT_OPTION_HINTS = ("type something", "chat about this", "other")
+_CHAT_OPTION_HINTS = ("chat about this",)
 
 # Shown while the model is generating. Not enough on its own: the hint only
 # joins the spinner line after the first few seconds, so a turn that has just
@@ -134,6 +141,13 @@ class Option:
     def is_free_text(self) -> bool:
         return self.label.strip().lower().rstrip(".") in (
             h.rstrip(".") for h in _TEXT_OPTION_HINTS
+        )
+
+    @property
+    def is_chat_about(self) -> bool:
+        """Whether picking this row drops the question instead of answering it."""
+        return self.label.strip().lower().rstrip(".") in (
+            h.rstrip(".") for h in _CHAT_OPTION_HINTS
         )
 
 
