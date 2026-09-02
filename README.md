@@ -103,7 +103,9 @@ log, whichever way you installed.
 ## Model, effort, permission mode
 
 The session card shows the current values (read off the TUI status line) and
-offers buttons to change them:
+offers buttons to change them. `/menu` opens that card for the session you are
+talking to — the buttons below used to be reachable only by walking through
+`/sessions` and tapping a row:
 
 * **🧠 Model** and **◉ Effort** open Claude Code's own dialogs — `/model` and
   `/effort` are sent to the session, and the card is the dialog itself, with
@@ -338,6 +340,7 @@ has to be typed by hand.
 | Command | What it does |
 |---|---|
 | `/sessions` | the session list, cards, controls |
+| `/menu` | one session's card, without the list in front of it: model, effort, permission mode, context, rename, end |
 | `/new` | start a session in a chosen directory |
 | `/usage` | quota and context, without asking Claude |
 | `/screen` | a text snapshot of the terminal |

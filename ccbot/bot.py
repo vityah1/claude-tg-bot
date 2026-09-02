@@ -75,9 +75,9 @@ log = logging.getLogger("ccbot.bot")
 
 # Commands the bot handles itself; anything else starting with "/" is forwarded
 # to Claude, so /model, /compact, /cost and friends keep working.
-OWN_COMMANDS = {"start", "help", "sessions", "new", "exit", "screen", "esc",
-                "usage", "clear", "log", "dirs", "rename", "service", "restart",
-                "lang", "update"}
+OWN_COMMANDS = {"start", "help", "sessions", "menu", "new", "exit", "screen",
+                "esc", "usage", "clear", "log", "dirs", "rename", "service",
+                "restart", "lang", "update"}
 
 # Telegram's Bot API refuses to serve files larger than this.
 _MAX_ATTACHMENT = 20 * 1024 * 1024
@@ -158,6 +158,11 @@ def help_text() -> str:
 
 <b>Sessions</b>
 /sessions — the session list, cards and controls
+/menu — the controls of one session, without the list in the
+   way: 🧠 model, ◉ effort, 🔐 permission mode, 📉 context,
+   ✏️ rename, 🚪 end. Without a reply it is the active session;
+   as a reply to a session's message, that one (which then
+   becomes active).
 /new — start a session (pick a directory)
 
 <b>Where things go</b>
@@ -477,6 +482,17 @@ class CCBot:
         async def _sessions(m: Message):
             if self._ok(m):
                 await self._show_sessions(m)
+
+        @dp.message(Command("menu"))
+        async def _menu(m: Message):
+            # The session card without the list in front of it: model, effort,
+            # mode and the rest used to be reachable only by walking through
+            # /sessions and tapping a row.
+            if not self._ok(m):
+                return
+            mgd, note = await self._target(m)
+            if mgd:
+                await self._send_session_card(m, mgd, note)
 
         @dp.message(Command("new"))
         async def _new(m: Message):
@@ -2516,15 +2532,19 @@ class CCBot:
         except tmux.TmuxError:
             return screenmod.Status()
 
-    async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
-        msg = _editable(c)
-        if msg is None:
-            await c.answer(_stale_card("/sessions"), show_alert=True)
-            return
+    async def _session_card(
+        self, mgd, note: str = "",
+    ) -> tuple[str, InlineKeyboardMarkup] | None:
+        """One managed session's card: its text and its controls.
+
+        Built apart from the sending because the card has two ways in — a tap
+        on a row of /sessions edits the list in place, and /menu sends a new
+        message. None means the session is no longer in the list.
+        """
         views = await sess.managed_views(self.store)
         view = next((v for v in views if v.session_id == mgd.session_id), None)
         if not view:
-            return
+            return None
         st = await self._status(mgd)
         # Permission mode lives only on screen; everything else is exact.
         u = status_feed.read(mgd.session_id)
@@ -2545,17 +2565,43 @@ class CCBot:
         if behind:
             bits.append(f"⬆️ {behind} → {updates.cached_installed()}")
         text = (_("▶️ Active session: <b>{name}</b>").format(
-                    name=html.escape(view.name))
+                    name=html.escape(view.name)) + note
                 + f"\n<code>{view.short_cwd}</code>\n"
                 + _("Status: {status}").format(
                     status=sess.status_label(view.status)))
         if bits:
             text += "\n" + " · ".join(bits)
+        return text, session_kb(view)
+
+    async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
+        msg = _editable(c)
+        if msg is None:
+            await c.answer(_stale_card("/sessions"), show_alert=True)
+            return
+        card = await self._session_card(mgd)
+        if card is None:
+            return
+        text, kb = card
         try:
-            await self._safe_edit(msg, text, reply_markup=session_kb(view),
-                                  parse_mode="HTML")
+            await self._safe_edit(msg, text, reply_markup=kb, parse_mode="HTML")
         except Exception:
-            await msg.answer(text, reply_markup=session_kb(view), parse_mode="HTML")
+            await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+    async def _send_session_card(self, m: Message, mgd, note: str = "") -> None:
+        """The same card as a new message — the way /menu opens the controls.
+
+        Registered like every other outgoing message: the card belongs to one
+        session, so a reply to it has to reach that one rather than whichever
+        happens to be active by then.
+        """
+        card = await self._session_card(mgd, note)
+        if card is None:
+            await m.answer(_("That session has already ended — see /sessions"))
+            return
+        text, kb = card
+        msg = await m.answer(text, reply_markup=kb, parse_mode="HTML")
+        if msg:
+            self.store.remember_message(msg.message_id, mgd.session_id)
 
     async def _open_picker(self, c: CallbackQuery, mgd, kind: str) -> None:
         """Ask the session for its own /model or /effort dialog.
@@ -2828,6 +2874,7 @@ class CCBot:
     # time, when no language has been chosen yet.
     MENU = [
         ("sessions", N_("Session list and controls")),
+        ("menu", N_("Controls of the session you are talking to")),
         ("new", N_("New session in a chosen directory")),
         ("usage", N_("Quota and context, without asking Claude")),
         ("screen", N_("Snapshot of the active session's terminal")),
