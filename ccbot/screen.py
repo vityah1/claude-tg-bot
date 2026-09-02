@@ -686,6 +686,34 @@ def unwrap(text: str) -> str:
     return "\n".join(out)
 
 
+def _after_tool_output(lines: list[str]) -> list[str] | None:
+    """What was said *below* the last tool output, or None if none printed.
+
+    A tool that has printed means the turn was recorded, and everything down
+    to that output has already reached the chat from the transcript. What
+    comes after it has not: that record is written when the next tool call
+    returns, and the next call is the question itself. Reading it used to be
+    given up on — so a summary written under a tool call reached the chat only
+    after the answer (2026-09-02, 2431 characters of finman analysis; the
+    session had run a query, and the "●" of the answer was no longer on the
+    pane at all, only its text was).
+
+    The output's own lines carry no "⎿" of their own — they are aligned under
+    it, deeper than the mark — so the end of it is the first line back at the
+    depth of the mark.
+    """
+    last = next((i for i in range(len(lines) - 1, -1, -1)
+                 if _TOOL_OUTPUT_MARK in lines[i]), None)
+    if last is None:
+        return None
+    depth = len(lines[last]) - len(lines[last].lstrip())
+    i = last + 1
+    while i < len(lines) and (not lines[i].strip()
+                              or len(lines[i]) - len(lines[i].lstrip()) > depth):
+        i += 1
+    return lines[i:]
+
+
 def _table_rows_to_markdown(lines: list[str]) -> list[str]:
     """Turn the TUI's drawn tables back into Markdown ones.
 
@@ -742,24 +770,37 @@ def said_above_dialog(screen: str) -> str:
     # step echoes every answer as "● question / → answer" — and its body is
     # prose too, so without this the question came back as its own preamble.
     span = _dialog_span(lines)
-    ceiling = span[0] if span else len(lines)
+    if span is None:
+        # No ordinary dialog on the pane: either nothing is blocking, or what
+        # is blocking is a settings picker, which has no rule to stop at and
+        # nothing said above it. Reading to the bottom of the pane hands back
+        # the input line and the status bars as if Claude had said them.
+        return ""
+    ceiling = span[0]
 
     marks = [i for i in range(floor, ceiling) if _SAID_RE.match(lines[i])]
     for n in range(len(marks) - 1, -1, -1):
         start = marks[n]
         block = lines[start:marks[n + 1] if n + 1 < len(marks) else ceiling]
-        if any(_TOOL_OUTPUT_MARK in ln for ln in block):
-            return ""
         head = _SAID_RE.match(block[0])
         first = head.group("text") if head else block[0]
-        if _TOOL_CALL_RE.match(first):
-            continue
+        rest = _after_tool_output(block)
+        if rest is not None:
+            # Below the output is all that is left to say; above it is on
+            # record already, so there is no looking further up either way.
+            if not any(ln.strip() for ln in rest):
+                return ""
+            first = ""
+        elif _TOOL_CALL_RE.match(first):
+            continue        # a permission prompt already shows the command
+        else:
+            rest = block[1:]
         # Box-drawing goes first, and every rule with it: the block ends at the
         # rule above the dialog, but a table is *made* of rules — one between
         # every pair of rows — and breaking at the first of them cut the answer
         # off at its first table (2026-09-02: 320 characters of a 4160-character
         # summary reached the chat, the rest of it after the answer).
-        body = [ln for ln in block[1:]
+        body = [ln for ln in rest
                 if not (_SEPARATOR_RE.match(ln) and ln.strip())]
         # "✻ Worked for 19s" is a footnote to the rule rather than part of what
         # was said, and it sits at the end of the block.

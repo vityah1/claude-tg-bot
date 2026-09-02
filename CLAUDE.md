@@ -321,7 +321,14 @@ is still alive, too. That is why rows are read tolerantly
   drops the transcript's own copy when it finally arrives (word overlap, not
   equality: the terminal renders markdown and wraps to its width). A tool call
   that has already printed output means the turn *was* recorded, so nothing is
-  read above it.
+  read above it — but everything *below* it is (`screen._after_tool_output`):
+  that text belongs to the next record, and the next record is written when
+  the question is answered. Giving up at the output instead cost a finman
+  session its whole 2431-character analysis, which reached the chat five
+  minutes later, under the answer (2026-09-02). The answer's own "●" can be
+  missing from the pane altogether — a redraw around a long tool output ate
+  it, scrollback and all — so the block start cannot be relied on; the end of
+  the output can (its lines are aligned under the "⎿", deeper than the mark).
 - 🔴 **What was said is bounded by the rule above the dialog — and a table is
   made of rules.** Breaking the block at the first box-drawing line cut every
   answer off at its first table: 320 characters of a 4160-character summary
@@ -338,7 +345,10 @@ is still alive, too. That is why rows are read tolerantly
   from the chat, nothing is said above them, and they draw no rule the reading
   could stop at — so `said_above_dialog` used to hand back a line of the
   picker's own state ("High effort (default) ←/→ to adjust") as the preamble to
-  it. `Watcher._tick_session` prefaces `kind == "choice"` only.
+  it. `Watcher._tick_session` prefaces `kind == "choice"` only, and
+  `said_above_dialog` returns nothing without a `_dialog_span` of its own:
+  with no rule to stop at it read down to the bottom of the pane and offered
+  the input line and the status bars as something Claude had said.
 - 🔴 **An unrecognised dialog has no right to be silence.** When
   `claude agents --json` says `waiting` and `find_dialog()` returned None,
   `Watcher._report_blocked` sends the screen with buttons (digits/arrows/Esc)
