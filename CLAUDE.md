@@ -230,6 +230,34 @@ is still alive, too. That is why rows are read tolerantly
   permission request from a tool or a `PreToolUse` hook). Options are searched
   **bottom-up from the footer to "1."** — top-down, the parser latches onto
   Claude's numbered prose. A Claude Code update breaks this file specifically.
+- 🔴 **The model list and the effort levels are never written down in the bot.**
+  They are read off `/model` and `/effort`, which are dialogs of their own
+  shape (`screen._model_dialog` / `_effort_dialog`, measured on 2.1.258) and
+  used to reach the chat as "a screen I do not understand". Both are worth
+  knowing exactly:
+  * The picker's footer is `Enter to set as default · s to use this session
+    only · Esc to cancel`, and its rows carry a label and a description on one
+    line, held apart by padding, with a `✔` on the one in force. **A digit
+    commits *and* saves the pick as the default for new sessions** — the same
+    thing `/model <alias>` does, which is what the old hard-coded buttons sent.
+    "This session only" is `s`, and `s` acts on **wherever the cursor stands**,
+    so that route has to walk the cursor there first (`CCBot._pick_model`).
+  * The slider's footer is `←/→ to adjust · Enter to confirm · s for this
+    session only`, it has **no digits at all**, and the level in force is the
+    one the `▲` sits over — matched by *column* against the centres of the
+    names under it. It does not wrap at the ends. **The set of levels is not
+    fixed**: `ultracode` was on it in one session and absent in another
+    (2026-09-02, the same build), which is the whole reason the list is read
+    rather than declared.
+  * The line under the names is a gloss that belongs to nothing in particular
+    — sometimes a zone of the scale ("xhigh + workflows" under `ultracode`),
+    sometimes a warning about the level the marker is on ("May use excessive
+    tokens…" on `max`). It goes under the list as `Dialog.note`; attributing
+    it to a level by column puts it on the wrong one.
+  * Both are guarded by `_ordinary_bottom`: seeing the mode/status line
+    anywhere on the pane means the bottom belongs to the ordinary UI, however
+    much the text above it looks like these footers. This file quotes both of
+    them, and a session working on this repository prints them.
 - 🔴 **"Type something" and "Chat about this" are not the same escape hatch**
   (measured on 2.1.252). The first is an **input line inside the dialog**: the
   digit only moves the cursor onto that row, the text that follows is typed

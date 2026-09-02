@@ -38,6 +38,27 @@ _TABS_RE = re.compile(r"^\s*[←‹]\s+.*[☐☑☒✓✔].*[→›]\s*$")
 # The section names out of that row, so the chat can head the question with
 # them instead of showing the row itself, arrows and ballot boxes and all.
 _TAB_CHIP_RE = re.compile(r"[☐☑☒]\s*([^☐☑☒✔→›]+)")
+# /model and /effort open dialogs of their own shape, and neither fits the
+# parse above. The model picker's footer offers two different commitments
+# ("Enter to set as default · s to use this session only"), so it carries none
+# of the markers; the effort slider has no numbered options at all — the digits
+# do nothing there, ←/→ move a marker along a scale. Both used to reach the
+# chat as "a screen I do not understand", which is why the model list in the
+# session menu was a hard-coded guess instead of what Claude Code offers.
+_MODEL_FOOTER = ("set as default", "session only")
+_EFFORT_FOOTER = ("to adjust", "session only")
+# Where the slider stands: "──────▲──────┆────" over the row of level names.
+_SLIDER_MARK = "\u25b2"
+# The picker also carries the effort level, adjusted with ←/→ right there:
+# "● High effort (default) ←/→ to adjust".
+_MODEL_EFFORT_RE = re.compile(r"^\s*(?P<text>[\u25cb\u25d0\u25cf\u25c9\u2726]"
+                              r"\s+\S[^\u2190\u2192]*effort[^\u2190\u2192]*)"
+                              r"[\u2190\u2192]")
+# The tick on the active row of the picker ("2. Opus (1M context) ✔").
+_TICK_CHARS = "\u2714\u2713"
+# A label and its description share the line, held apart by padding.
+_LABEL_SPLIT_RE = re.compile(r"\s{2,}")
+
 # The mode line and the status line are drawn at the very bottom of the pane,
 # and an open dialog covers them. Seeing either one is proof that the bottom
 # belongs to the ordinary UI — however much the text above it may look like a
@@ -136,6 +157,7 @@ class Option:
     description: str = ""
     selected: bool = False          # the cursor is on this row
     checked: bool | None = None     # a multi-select tick; None = no checkbox
+    current: bool = False           # the value in force now (a ✔ or a slider mark)
 
     @property
     def is_free_text(self) -> bool:
@@ -157,6 +179,11 @@ class Dialog:
     options: list[Option] = field(default_factory=list)
     title: str | None = None
     footer: str = ""
+    # "choice" — an ordinary question; "model" — the /model picker; "effort" —
+    # the /effort slider. The last two are answered differently (see
+    # CCBot._pick_model / _pick_effort), so the keyboard has to tell them apart.
+    kind: str = "choice"
+    note: str = ""             # a line of state that belongs to the dialog
     preview: str = ""          # ASCII art shown beside the selected option
     extras: list[str] = field(default_factory=list)   # unnumbered choices
     # Positions in navigation order (options, then the Submit row, then the
@@ -320,9 +347,166 @@ def _dialog_span(lines: list[str]) -> tuple[int, int, bool] | None:
     return top, footer_idx, footerless
 
 
+def _ordinary_bottom(lines: list[str]) -> bool:
+    """Whether the pane still shows the mode/status line under everything.
+
+    An open dialog covers the bottom of the terminal, so seeing that line is
+    proof the text above it is ordinary output — however much of a dialog it
+    may look like. This file's own documentation quotes both footers verbatim,
+    and a session working on this repository prints them.
+    """
+    low = "\n".join(lines).lower()
+    return any(m in low for m in _UI_BOTTOM)
+
+
+def _settings_footer(lines: list[str], marks: tuple[str, ...]) -> int | None:
+    """The lowest line that is the footer of one of the settings dialogs."""
+    for i in range(len(lines) - 1, -1, -1):
+        low = lines[i].lower()
+        if _ESC_MARKER.lower() in low and all(m in low for m in marks):
+            return i
+    return None
+
+
+def _model_dialog(lines: list[str]) -> Dialog | None:
+    """The /model picker: a numbered list plus the effort level it carries.
+
+    Parsed apart from the ordinary dialogs for two reasons. Its rows hold a
+    label and a description on one line, held apart by padding, so the generic
+    parse puts the whole row on a button; and the effort line under the list
+    is not an option — the generic parse would file it away as an unnumbered
+    choice and offer to press it.
+    """
+    footer = _settings_footer(lines, _MODEL_FOOTER)
+    if footer is None or _ordinary_bottom(lines):
+        return None
+    top = max(0, footer - _WINDOW)
+
+    rows: list[tuple[int, object]] = []
+    note = ""
+    for i in range(footer - 1, top - 1, -1):
+        ln = lines[i]
+        if not ln.strip():
+            continue
+        m = _OPTION_RE.match(ln)
+        if m:
+            rows.append((i, m))
+            if int(m.group("num")) == 1:
+                break
+            continue
+        em = _MODEL_EFFORT_RE.match(ln)
+        if em and not note:
+            note = em.group("text").strip()
+    if not rows or int(rows[-1][1].group("num")) != 1:   # type: ignore[union-attr]
+        return None
+
+    options: list[Option] = []
+    cursor_index: int | None = None
+    for _pos, m in reversed(rows):
+        label = clean_label(m.group("label"))            # type: ignore[union-attr]
+        parts = _LABEL_SPLIT_RE.split(label, maxsplit=1)
+        name, desc = parts[0], parts[1] if len(parts) > 1 else ""
+        current = any(t in name for t in _TICK_CHARS)
+        name = name.strip(_TICK_CHARS + " ")
+        if m.group("cursor"):                            # type: ignore[union-attr]
+            cursor_index = len(options)
+        options.append(Option(
+            number=int(m.group("num")),                  # type: ignore[union-attr]
+            label=name,
+            description=desc.strip(),
+            selected=bool(m.group("cursor")),            # type: ignore[union-attr]
+            current=current,
+        ))
+
+    head: list[str] = []
+    for i in range(rows[-1][0] - 1, top - 1, -1):
+        ln = lines[i].strip()
+        if not ln:
+            if head:
+                break
+            continue
+        if _SEPARATOR_RE.match(lines[i]):
+            break
+        head.append(ln)
+    head.reverse()
+    # The blurb under the title is not carried over: it says the pick becomes
+    # the default for new sessions, which on a card where the scope is a
+    # button would be a contradiction rather than a hint.
+    return Dialog(
+        question="",
+        options=options,
+        title=head[0] if head else None,
+        footer=lines[footer].strip(),
+        kind="model",
+        note=note,
+        cursor_index=cursor_index,
+    )
+
+
+def _effort_dialog(lines: list[str]) -> Dialog | None:
+    """The /effort slider: level names under a scale with a marker on one.
+
+    There is nothing numbered to answer here — a digit does nothing, ←/→ walk
+    the marker along the scale and Enter (or "s") commits where it stands. So
+    the levels become options whose *number* is a position rather than a key,
+    and the level in force is the one the marker sits over.
+    """
+    footer = _settings_footer(lines, _EFFORT_FOOTER)
+    if footer is None or _ordinary_bottom(lines):
+        return None
+    top = max(0, footer - _WINDOW)
+    scale = next((i for i in range(footer - 1, top - 1, -1)
+                  if _SLIDER_MARK in lines[i]), None)
+    if scale is None:
+        return None
+    values = next((i for i in range(scale + 1, footer) if lines[i].strip()), None)
+    if values is None:
+        return None
+    words = [(m.group(), m.start(), m.end())
+             for m in re.finditer(r"\S+", lines[values])]
+    if len(words) < 2:
+        return None
+
+    # The marker sits over the middle of the level it has reached.
+    col = lines[scale].index(_SLIDER_MARK)
+    centres = [(start + end - 1) / 2 for _w, start, end in words]
+    at = min(range(len(words)), key=lambda i: abs(centres[i] - col))
+
+    # The line under the names is a gloss, and which level it belongs to is
+    # not something a column can tell: sometimes it labels a zone of the scale
+    # ("xhigh + workflows" under ultracode), sometimes it warns about the
+    # level the marker is on ("May use excessive tokens…" on max). So it goes
+    # under the list as it is, attributed to nothing.
+    gloss = next((i for i in range(values + 1, footer) if lines[i].strip()), None)
+    note = lines[gloss].strip() if gloss is not None else ""
+
+    options = [
+        Option(number=i + 1, label=word, current=(i == at))
+        for i, (word, _start, _end) in enumerate(words)
+    ]
+    title = None
+    for i in range(scale - 1, top - 1, -1):
+        ln = lines[i].strip()
+        low = ln.lower()
+        if not ln or ("faster" in low and "smarter" in low):
+            continue
+        if _SEPARATOR_RE.match(lines[i]):
+            break
+        title = ln
+        break
+    return Dialog(question="", options=options, title=title,
+                  footer=lines[footer].strip(), kind="effort", note=note)
+
+
 def find_dialog(screen: str) -> Dialog | None:
     """Return the open dialog on screen, or None if nothing is blocking."""
     lines = _clean(screen.splitlines())
+
+    # The settings dialogs first: /model would parse as an ordinary question
+    # with its descriptions glued to the labels, and /effort not at all.
+    settings = _model_dialog(lines) or _effort_dialog(lines)
+    if settings is not None:
+        return settings
 
     span = _dialog_span(lines)
     if span is None:

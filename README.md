@@ -105,9 +105,18 @@ log, whichever way you installed.
 The session card shows the current values (read off the TUI status line) and
 offers buttons to change them:
 
-* **🧠 Model** and **◉ Effort** — through `/model <alias>` and
-  `/effort <level>`. Claude Code also keeps them as the default for new
-  sessions, which the UI warns about.
+* **🧠 Model** and **◉ Effort** open Claude Code's own dialogs — `/model` and
+  `/effort` are sent to the session, and the card is the dialog itself, with
+  one button per row it offers. Nothing is listed in the bot: a table in the
+  source went stale the day Fable 5.1 shipped, and `ultracode` is not always
+  on the slider at all. A `/model` you type yourself comes out as the same
+  card.
+
+  Under the list sits the choice the terminal's footer offers: **this
+  session** (`s`) or **+ new sessions** (Enter, which Claude Code saves as the
+  default for new sessions). It defaults to this session alone — pressing a
+  model used to move the default for every session started afterwards, with
+  only a warning to say so.
 * **🔐 Mode** — there is no slash command for it, so the bot presses Shift+Tab
   until the status line shows the mode you asked for. The cycle is
   `auto → manual → accept edits → plan`. `bypassPermissions` and `dontAsk` can

@@ -74,6 +74,7 @@ from .keyboards import (
     service_kb,
     session_kb,
     sessions_kb,
+    settings_kb,
     update_kb,
 )
 from .settings import Settings
@@ -1921,6 +1922,76 @@ class CCBot:
                     log.debug("tick redraw skipped", exc_info=True)
             return
 
+        if data.startswith("mdl:") or data.startswith("eff:"):
+            _kind, short, num, scope = data.split(":", 3)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            want = "model" if data.startswith("mdl:") else "effort"
+            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+            if dialog is None or dialog.kind != want:
+                await c.answer(_("That dialog has left the screen"),
+                               show_alert=True)
+                return
+            opt = next((o for o in dialog.options if o.number == int(num)), None)
+            if opt is None:
+                await c.answer(_("That option has left the screen"),
+                               show_alert=True)
+                return
+            # Answering from a card is working inside that session, so what
+            # the user types next belongs to it.
+            self._focus(chat_id, mgd)
+            await c.answer(_("Switching to {label}…").format(label=opt.label))
+            picked = (await self._pick_model(mgd, opt.number, scope)
+                      if want == "model"
+                      else await self._pick_effort(mgd, opt.number, scope))
+            # The card is this message from here on: the watcher must not
+            # redraw the list over the answer.
+            self.watcher.forget_dialog(mgd.session_id)
+            title = (_("🧠 Model") if want == "model"
+                     else _("◉ Reasoning effort"))
+            if not picked:
+                await msg.answer(
+                    _("⚠️ Could not set {title} to <b>{label}</b>. Open "
+                      "🖥 Screen and pick it by hand.").format(
+                          title=title, label=html.escape(opt.label)),
+                    parse_mode="HTML")
+                return
+            body = (_("{title} of <b>{name}</b> → <b>{label}</b>\n"
+                      "Only for this session; new sessions keep their default.")
+                    if scope == "s" else
+                    _("{title} of <b>{name}</b> → <b>{label}</b>\n"
+                      "Saved as the default for new sessions too."))
+            text = body.format(title=title, name=html.escape(mgd.full_label),
+                               label=html.escape(opt.label))
+            try:
+                await msg.edit_text(text, parse_mode="HTML")
+            except Exception:
+                await msg.answer(text, parse_mode="HTML")
+            return
+
+        if data.startswith("dsc:"):
+            # The scope switch on a settings card. Nothing is typed into the
+            # terminal here, so the dialog stays exactly as it was and only
+            # the keyboard is redrawn.
+            _kind, short, scope = data.split(":", 2)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+            if dialog is None or dialog.kind not in ("model", "effort"):
+                await c.answer(_("That dialog has left the screen"),
+                               show_alert=True)
+                return
+            await c.answer(_("Only this session") if scope == "s"
+                           else _("This session and new ones"))
+            with contextlib.suppress(Exception):
+                await msg.edit_reply_markup(
+                    reply_markup=settings_kb(mgd.session_id, dialog, scope))
+            return
+
         if data.startswith("sub:"):
             mgd = self._resolve(data[4:])
             if not mgd:
@@ -2021,28 +2092,23 @@ class CCBot:
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
-            st = await self._status(mgd)
-            u = status_feed.read(mgd.session_id)
-            current = {
-                "model": (u.model_id if u else "") or st.model,
-                "effort": (u.effort if u else "") or st.effort,
-                "mode": st.mode,
-            }[kind]
-            titles = {"model": _("🧠 Model"), "effort": _("◉ Reasoning effort"),
-                      "mode": _("🔐 Permission mode")}
-            note = ""
             if kind in ("model", "effort"):
-                # Claude Code persists these to ~/.claude/settings.json, so the
-                # change outlives the session it was made in.
-                note = "\n\n" + _("⚠️ Claude keeps this as the default for "
-                                   "<b>new</b> sessions too.")
+                # The list is Claude Code's own: /model and /effort are asked
+                # in the session and their dialog becomes the card (the
+                # watcher renders it). A table in the bot went stale the day
+                # Fable 5.1 shipped — it offered "Fable 5" and no way to
+                # reach ultracode at all.
+                await self._open_picker(c, mgd, kind)
+                return
+            st = await self._status(mgd)
             await c.answer()
             await msg.edit_text(
                 _("{title} for <b>{name}</b>\nCurrently: <code>{value}</code>"
-                  ).format(title=titles[kind],
+                  ).format(title=_("🔐 Permission mode"),
                            name=html.escape(mgd.full_label),
-                           value=current or "—") + note,
-                parse_mode="HTML", reply_markup=choice_kb(mgd.session_id, kind, current),
+                           value=st.mode or "—"),
+                parse_mode="HTML",
+                reply_markup=choice_kb(mgd.session_id, kind, st.mode),
             )
             return
 
@@ -2543,15 +2609,138 @@ class CCBot:
         except Exception:
             await msg.answer(text, reply_markup=session_kb(view), parse_mode="HTML")
 
+    async def _open_picker(self, c: CallbackQuery, mgd, kind: str) -> None:
+        """Ask the session for its own /model or /effort dialog.
+
+        The card is not built here: the dialog is a dialog like any other, so
+        the watcher renders it a tick later, with the buttons that belong to
+        it. That is also what makes a `/model` the user types by hand come out
+        as a card rather than as "a screen I do not understand".
+        """
+        raw = await tmux.capture(mgd.window_id)
+        open_now = screenmod.find_dialog(raw)
+        if open_now is not None and open_now.kind == kind:
+            # Already on screen, so its card is already in the chat: asking
+            # again would type "/model" into the dialog itself.
+            await c.answer(_("It is already open — scroll down to its card"))
+            return
+        if open_now is not None and open_now.kind in ("model", "effort"):
+            # The other settings dialog: close it rather than refusing, so
+            # moving from the model list to the effort slider takes one tap.
+            self._typed(mgd)
+            await tmux.send_keys(mgd.window_id, "Escape")
+            await asyncio.sleep(_NAV_SETTLE)
+        else:
+            busy = await self._busy_reason(mgd)
+            if busy:
+                await c.answer(busy, show_alert=True)
+                return
+        await c.answer(_("Asking Claude Code…"))
+        await self._send_prompt(mgd, f"/{kind}")
+
+    async def _busy_reason(self, mgd) -> str:
+        """Why the session cannot be asked a question right now, if it cannot.
+
+        Both sources are needed, as in `_restart_session`: the agent list
+        knows about dialogs the parser cannot read, the screen knows about
+        work the list has not caught up with.
+        """
+        agents = await sess.live_agents(force=True)
+        status = next((a.get("status", "") for a in agents
+                       if a.get("sessionId") == mgd.session_id), "")
+        if status == "busy":
+            return _("It is working right now — press ⏸ Esc or wait")
+        try:
+            raw = await tmux.capture(mgd.window_id)
+        except tmux.TmuxError:
+            return _("Its tmux window is gone")
+        if screenmod.is_busy(raw):
+            return _("It is working right now — press ⏸ Esc or wait")
+        if screenmod.find_dialog(raw) is not None or status == "waiting":
+            return _("It is waiting for an answer — deal with that first")
+        return ""
+
+    async def _pick_model(self, mgd, number: int, scope: str) -> bool:
+        """Commit option *number* of the /model picker.
+
+        Enter (and every digit, which presses it) saves the pick as the
+        default for new sessions; "s" keeps it to this session. Only the digit
+        is position-independent, so the session-only route has to walk the
+        cursor onto the row first, re-reading the screen after each move —
+        "s" on the wrong row switches the wrong model.
+        """
+        if scope == "d":
+            await self._answer_dialog(mgd, number)
+            return True
+        for _attempt in range(5):
+            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+            if dialog is None or dialog.kind != "model":
+                return False
+            target = next((i for i, o in enumerate(dialog.options)
+                           if o.number == number), None)
+            if target is None:
+                return False
+            if dialog.cursor_index is None:
+                self._typed(mgd)
+                await tmux.send_keys(mgd.window_id, "Down")
+                await asyncio.sleep(_NAV_SETTLE)
+                continue
+            delta = target - dialog.cursor_index
+            self._typed(mgd)
+            if delta == 0:
+                await tmux.send_literal(mgd.window_id, "s")
+                log.info("model set for this session only id=%s option=%d",
+                         mgd.session_id[:8], number)
+                return True
+            key = "Down" if delta > 0 else "Up"
+            for _step in range(abs(delta)):
+                await tmux.send_keys(mgd.window_id, key)
+            await asyncio.sleep(_NAV_SETTLE)
+        log.warning("could not reach model option %d id=%s",
+                    number, mgd.session_id[:8])
+        return False
+
+    async def _pick_effort(self, mgd, number: int, scope: str) -> bool:
+        """Walk the /effort slider to level *number* and commit it.
+
+        The slider has no digits at all: ←/→ move a marker between the level
+        names and Enter ("s" for this session) takes it. It stops at the ends
+        rather than wrapping, so the distance is honest — but the screen is
+        re-read after every move anyway, because committing one level off is
+        indistinguishable from success afterwards.
+        """
+        for _attempt in range(8):
+            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+            if dialog is None or dialog.kind != "effort":
+                return False
+            at = next((i for i, o in enumerate(dialog.options) if o.current),
+                      None)
+            target = next((i for i, o in enumerate(dialog.options)
+                           if o.number == number), None)
+            if at is None or target is None:
+                return False
+            delta = target - at
+            self._typed(mgd)
+            if delta == 0:
+                if scope == "d":
+                    await tmux.send_keys(mgd.window_id, "Enter")
+                else:
+                    await tmux.send_literal(mgd.window_id, "s")
+                log.info("effort set id=%s level=%d scope=%s",
+                         mgd.session_id[:8], number, scope)
+                return True
+            key = "Right" if delta > 0 else "Left"
+            for _step in range(abs(delta)):
+                await tmux.send_keys(mgd.window_id, key)
+            await asyncio.sleep(_NAV_SETTLE)
+        log.warning("could not reach effort level %d id=%s",
+                    number, mgd.session_id[:8])
+        return False
+
     async def _apply_setting(self, mgd, kind: str, value: str) -> bool:
-        if kind == "model":
-            await self._send_prompt(mgd, f"/model {value}")
-            await asyncio.sleep(2.0)
-            return True
-        if kind == "effort":
-            await self._send_prompt(mgd, f"/effort {value}")
-            await asyncio.sleep(2.0)
-            return True
+        # Only the permission mode comes through here: the model and the
+        # effort level are picked in Claude Code's own dialogs, which is the
+        # only way to choose between "this session" and "the default too".
         # Permission mode has no slash command — Shift+Tab cycles
         # auto → manual → accept edits → plan, so press until it matches.
         for _press in range(len(_MODE_CYCLE) + 1):

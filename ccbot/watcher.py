@@ -75,6 +75,23 @@ _ACT_GRACE = 8.0
 _BLOCKED_SETTLE = 5.0
 # Older than this, an agent-list reading says nothing about right now.
 _STATUS_MAX_AGE = 10.0
+# What heads a dialog card. The settings dialogs are not questions Claude is
+# asking — showing them under a "❓" read as one.
+_DIALOG_ICON = {"model": "🧠 ", "effort": "◉ "}
+
+
+def _dialog_title(dialog) -> str:
+    """What heads the card. A settings dialog gets a translated name.
+
+    Its own is the terminal's ("Select model", "Effort"), and a card is read
+    by the user rather than by the parser.
+    """
+    if dialog.kind == "model":
+        return _("Model")
+    if dialog.kind == "effort":
+        return _("Reasoning effort")
+    return dialog.title or ""
+
 # A dialog redraws in stages once a key lands: the chosen row disappears
 # before the rest of it does. Reporting a frame from inside that redraw is how
 # an answered question came back with only "Cancel" left on it.
@@ -194,6 +211,20 @@ class Watcher:
         if rt is not None:
             rt.acted_at = time.time()
             rt.blocked_since = 0.0
+
+    def forget_dialog(self, session_id: str) -> None:
+        """Let go of the dialog card, so the next tick never edits it again.
+
+        The bot answers a settings dialog by walking the cursor there, and
+        every move changes the state the card is drawn from — a tick that
+        captured the screen one move before the commit would then edit the
+        confirmation that has since replaced the card.
+        """
+        rt = self.runtimes.get(session_id)
+        if rt is not None:
+            rt.last_dialog_sig = None
+            rt.last_dialog_state = None
+            rt.dialog_msg_id = None
 
     def forget(self, session_id: str) -> None:
         self.runtimes.pop(session_id, None)
@@ -450,7 +481,8 @@ class Watcher:
         # Ticks belong to the state, not to the question: a checkbox changes
         # with every press, and reading that as a new question would answer
         # one multi-select list with a chat full of copies of it.
-        state = str([(o.number, o.selected, o.checked) for o in dialog.options])
+        state = str([(o.number, o.selected, o.checked, o.current)
+                     for o in dialog.options])
         if sig == rt.last_dialog_sig and state == rt.last_dialog_state:
             return
         same_question = sig == rt.last_dialog_sig
@@ -739,16 +771,35 @@ class Watcher:
         forget. The diagram is inline at any width now, because a preformatted
         block scrolls instead of wrapping.
         """
-        head = ["❓ ", rich.bold(name)]
-        if dialog.title:
-            head.append(f" · {dialog.title}")
-        blocks: list[rich.Block] = [rich.para(*head), rich.para(dialog.question)]
-        for o in dialog.options:
+        head = [_DIALOG_ICON.get(dialog.kind, "❓ "), rich.bold(name)]
+        title = _dialog_title(dialog)
+        if title:
+            head.append(f" · {title}")
+        blocks: list[rich.Block] = [rich.para(*head)]
+        if dialog.question:
+            blocks.append(rich.para(dialog.question))
+        if dialog.note:
+            blocks.append(rich.para(dialog.note))
+        # The slider's levels carry no description, so the buttons already
+        # say everything a list of them would.
+        for o in (dialog.options if dialog.kind != "effort" else []):
             mark = "▸ " if o.selected else ""
             box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
-            blocks.append(rich.para(mark, box, rich.bold(f"{o.number}. {o.label}")))
+            # A digit is a shortcut in an ordinary question and a lie in the
+            # settings dialogs: /effort has no digits at all, and in /model a
+            # digit also saves the pick as the default.
+            head_text = (f"{o.number}. {o.label}" if dialog.kind == "choice"
+                         else o.label)
+            if o.current:
+                head_text = f"✅ {head_text}"
+            blocks.append(rich.para(mark, box, rich.bold(head_text)))
             if o.description and o.description != o.label:
                 blocks.append(rich.para(f"    {o.description}"))
+        if dialog.kind in ("model", "effort"):
+            # TRANSLATORS: the row of two buttons under a settings dialog.
+            blocks.append(rich.para(
+                _("A button applies the choice. The switch under the list "
+                  "decides whether new sessions get it as their default too.")))
         if dialog.multi_select:
             # TRANSLATORS: how a multi-select question is answered from a chat.
             blocks.append(rich.para(
@@ -767,16 +818,31 @@ class Watcher:
         return blocks, dialog_kb(session_id, dialog)
 
     def _render_dialog(self, name: str, session_id: str, dialog):
-        head = f"❓ <b>{html.escape(name)}</b>"
-        if dialog.title:
-            head += f" · {html.escape(dialog.title)}"
-        parts = [head, "", html.escape(dialog.question), ""]
-        for o in dialog.options:
+        head = f"{_DIALOG_ICON.get(dialog.kind, '❓ ')}<b>{html.escape(name)}</b>"
+        title = _dialog_title(dialog)
+        if title:
+            head += f" · {html.escape(title)}"
+        parts = [head, ""]
+        if dialog.question:
+            parts += [html.escape(dialog.question), ""]
+        if dialog.note:
+            parts += [html.escape(dialog.note), ""]
+        for o in (dialog.options if dialog.kind != "effort" else []):
             mark = "▸ " if o.selected else ""
             box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
-            parts.append(f"{mark}{box}<b>{o.number}. {html.escape(o.label)}</b>")
+            head_text = (f"{o.number}. {o.label}" if dialog.kind == "choice"
+                         else o.label)
+            if o.current:
+                head_text = f"✅ {head_text}"
+            parts.append(f"{mark}{box}<b>{html.escape(head_text)}</b>")
             if o.description and o.description != o.label:
                 parts.append(f"    {html.escape(o.description)}")
+        if dialog.kind in ("model", "effort"):
+            parts.append("")
+            # TRANSLATORS: the row of two buttons under a settings dialog.
+            parts.append(_("A button applies the choice. The switch under the "
+                           "list decides whether new sessions get it as their "
+                           "default too."))
         if dialog.multi_select:
             parts.append("")
             # TRANSLATORS: how a multi-select question is answered from a chat.

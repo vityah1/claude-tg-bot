@@ -10,15 +10,11 @@ from .i18n import _, language_name, ngettext, offered
 from .screen import Dialog
 from .sessions import DirStat, SessionView
 
-# Aliases accepted by `/model`; the CLI resolves them to the latest release.
-MODELS = [
-    ("Opus 5", "opus"),
-    ("Opus 5 · 1M", "opus[1m]"),
-    ("Sonnet 5", "sonnet"),
-    ("Fable 5", "fable"),
-    ("Haiku 4.5", "haiku"),
-]
-EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+# Models and effort levels are NOT listed here. They are read off the live
+# /model and /effort dialogs (`screen._model_dialog` / `_effort_dialog`),
+# because a table in the source is a table that goes stale: this one still
+# offered "Fable 5" and five effort levels when Claude Code had moved on to
+# Fable 5.1 and six.
 # Shift+Tab cycles in this order; the bot presses it until the target is shown.
 MODES = [
     ("⏵⏵ auto", "auto"),
@@ -164,21 +160,75 @@ def session_kb(v: SessionView) -> InlineKeyboardMarkup:
 
 
 def choice_kb(session_id: str, kind: str, current: str = "") -> InlineKeyboardMarkup:
-    """Picker for model / effort / permission mode."""
+    """Picker for the permission mode — the one setting with no dialog of its own."""
     s = sid8(session_id)
     kb = InlineKeyboardBuilder()
-    if kind == "model":
-        items = MODELS
-    elif kind == "effort":
-        items = [(e, e) for e in EFFORTS]
-    else:
-        items = MODES
+    items = MODES
     for label, value in items:
         mark = "✅ " if value == current or (label.endswith(current) and current) else ""
         kb.row(InlineKeyboardButton(
             text=f"{mark}{label}", callback_data=f"set:{s}:{kind}:{value}",
         ))
     kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
+    return kb.as_markup()
+
+
+def _scope_row(s: str, scope: str) -> list[InlineKeyboardButton]:
+    """The two commitments the settings dialogs offer, as a visible choice.
+
+    Claude Code answers "s" with "for this session only" and Enter with "saved
+    as your default for new sessions" — a difference the bot used to hide: the
+    session menu sent `/model opus`, which quietly moved the default for every
+    session started afterwards. So the scope is on the card, it defaults to
+    this session alone, and the row says which one is armed.
+    """
+    return [
+        InlineKeyboardButton(
+            text=(_("✅ this session") if scope == "s" else _("this session")),
+            callback_data=f"dsc:{s}:s"),
+        InlineKeyboardButton(
+            text=(_("✅ + new sessions") if scope == "d" else _("+ new sessions")),
+            callback_data=f"dsc:{s}:d"),
+    ]
+
+
+def settings_kb(session_id: str, dialog: Dialog,
+                scope: str = "s") -> InlineKeyboardMarkup:
+    """Buttons for the /model picker and the /effort slider.
+
+    Neither is answered by a digit the way an ordinary question is: the picker
+    commits with "s" or Enter once the cursor is on a row, and the slider has
+    no digits at all. So the buttons carry the row (or the level) and the
+    scope, and the bot walks the terminal there itself.
+    """
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    if dialog.kind == "effort":
+        row: list[InlineKeyboardButton] = []
+        for opt in dialog.options:
+            row.append(InlineKeyboardButton(
+                text=f"{'◉ ' if opt.current else '○ '}{opt.label}",
+                callback_data=f"eff:{s}:{opt.number}:{scope}"))
+            if len(row) == 3:
+                kb.row(*row)
+                row = []
+        if row:
+            kb.row(*row)
+    else:
+        for opt in dialog.options:
+            # The label names the choice ("Fable"), the description names the
+            # model it resolves to ("Fable 5.1 · Most capable…") — and the
+            # second half is the answer to "which model is this, really".
+            model = opt.description.split("·")[0].strip()
+            caption = f"{opt.label} · {model}" if model else opt.label
+            kb.row(InlineKeyboardButton(
+                text=_fit(f"{'✅ ' if opt.current else ''}{caption}"),
+                callback_data=f"mdl:{s}:{opt.number}:{scope}"))
+    kb.row(*_scope_row(s, scope))
+    kb.row(
+        InlineKeyboardButton(text=_("✖️ Cancel"), callback_data=f"k:{s}:esc"),
+        InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
+    )
     return kb.as_markup()
 
 
@@ -193,6 +243,8 @@ def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
     moves to the next section rather than sending when the question has more
     of them, and the button says which it is doing.
     """
+    if dialog.kind in ("model", "effort"):
+        return settings_kb(session_id, dialog)
     s = sid8(session_id)
     kb = InlineKeyboardBuilder()
     for opt in dialog.options:
