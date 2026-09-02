@@ -29,7 +29,17 @@ from aiogram.types import (
     Update,
 )
 
-from . import logsetup, media, rich, service, status_feed, tmux, updates, util
+from . import (
+    logsetup,
+    media,
+    rich,
+    service,
+    status_feed,
+    tmux,
+    updates,
+    util,
+    winpower,
+)
 from . import screen as screenmod
 from . import sessions as sess
 from .config import Config
@@ -57,6 +67,7 @@ from .keyboards import (
     history_dirs_kb,
     history_kb,
     lang_kb,
+    power_kb,
     project_dirs_kb,
     restart_confirm_kb,
     search_kb,
@@ -67,7 +78,7 @@ from .keyboards import (
 )
 from .settings import Settings
 from .state import Store
-from .util import as_pre, split_text, usage_report
+from .util import as_pre, power_report, split_text, usage_report
 from .watcher import Watcher
 
 log = logging.getLogger("ccbot.bot")
@@ -76,7 +87,7 @@ log = logging.getLogger("ccbot.bot")
 # to Claude, so /model, /compact, /cost and friends keep working.
 OWN_COMMANDS = {"start", "help", "sessions", "new", "exit", "screen", "esc",
                 "usage", "clear", "log", "dirs", "rename", "service", "restart",
-                "lang", "update"}
+                "lang", "update", "power"}
 
 # Telegram's Bot API refuses to serve files larger than this.
 _MAX_ATTACHMENT = 20 * 1024 * 1024
@@ -517,6 +528,11 @@ class CCBot:
             if self._ok(m):
                 await self._show_langs(m)
 
+        @dp.message(Command("power"))
+        async def _power(m: Message):
+            if self._ok(m):
+                await self._show_power(m)
+
         @dp.message(Command("log"))
         async def _log(m: Message):
             if not self._ok(m):
@@ -903,6 +919,12 @@ class CCBot:
                 head += "\n\n" + _(
                     "⚠️ The list comes from <code>CCBOT_DIRS</code> in .env — "
                     "the buttons below will not change it.")
+            # The one directory that can never be on the list, and the one
+            # whose sessions used to vanish because of it.
+            head += "\n\n" + _(
+                "<code>~</code> counts as well: the home directory cannot be a "
+                "root — it would take in every project below it — but sessions "
+                "started there are offered and kept in 🕘 history.")
         else:
             head = _("📁 <b>Project directories</b>\n\nThe list is empty — "
                      "directories are discovered from your own Claude history.\n"
@@ -1648,6 +1670,15 @@ class CCBot:
             await self._show_sessions(c)
             return
 
+        if data.startswith("pwr:"):
+            action = data[4:]
+            if action == "show":
+                await c.answer(_("Reading…"))
+                await self._show_power(c)
+            else:
+                await self._set_power(c, action)
+            return
+
         if data.startswith("upd:"):
             action = data[4:]
             if action == "show":
@@ -1974,6 +2005,16 @@ class CCBot:
             await self._adopt_foreign(chat_id, v)
             return
 
+        if data.startswith("fx:"):
+            v = await self._find_foreign(data[3:])
+            if not v:
+                await c.answer(_("Session not found"), show_alert=True)
+                return
+            await c.answer(_("Ending it…"))
+            if await self._end_foreign(chat_id, v):
+                await self._show_sessions(c)
+            return
+
         if data.startswith("cfg:"):
             _kind, short, kind = data.split(":", 2)
             mgd = self._resolve(short)
@@ -2089,6 +2130,38 @@ class CCBot:
 
         await c.answer()
 
+    async def _show_power(self, target: Message | CallbackQuery) -> None:
+        """The laptop's power mode, with what it does not reach spelled out."""
+        here = _editable(target)
+        if here is None:
+            await target.answer(_stale_card("/power"), show_alert=True)
+            return
+        state = (await asyncio.to_thread(winpower.read)
+                 if winpower.available() else None)
+        text, kb = power_report(state), power_kb(state)
+        if isinstance(target, CallbackQuery):
+            await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await here.answer(text, reply_markup=kb, parse_mode="HTML")
+
+    async def _set_power(self, c: CallbackQuery, key: str) -> None:
+        """Move the overlay, then redraw the card from a fresh read.
+
+        Redrawn from the host rather than from the key that was pressed: if
+        powercfg refused, or the laptop changed power source between the press
+        and the write, only Windows knows what actually holds now.
+        """
+        if key not in winpower.LABEL:
+            await c.answer()
+            return
+        if not winpower.available():
+            await c.answer(_("Windows is out of reach from here"), show_alert=True)
+            return
+        ok = await asyncio.to_thread(winpower.apply, key)
+        await c.answer(_("Switched") if ok else _("powercfg refused — see /log"),
+                       show_alert=not ok)
+        await self._show_power(c)
+
     async def _show_langs(self, target: Message | CallbackQuery) -> None:
         """Offer the languages that are actually compiled and installed."""
         following = self.settings.language is None
@@ -2175,12 +2248,17 @@ class CCBot:
                            "to wait until it finishes."))
         return "\n".join(lines)
 
-    async def _adopt_foreign(self, chat_id: int, v) -> None:
-        """Stop a terminal session and bring it back up inside tmux."""
+    async def _stop_foreign(self, chat_id: int, v) -> Message | None:
+        """SIGTERM a session running in somebody else's terminal.
+
+        Returns the progress message, for the caller to say in it what happens
+        next; None when the process is still there, and then the reason is
+        already in the chat.
+        """
         if not v.pid:
             await self.bot.send_message(
-                chat_id, _("❌ Unknown PID — I cannot move this one"))
-            return
+                chat_id, _("❌ Unknown PID — I cannot stop this one"))
+            return None
         note = await self.bot.send_message(
             chat_id,
             _("⏳ Stopping {name} (PID {pid})…").format(name=v.name, pid=v.pid))
@@ -2190,7 +2268,7 @@ class CCBot:
             pass
         except PermissionError:
             await note.edit_text(_("❌ Not allowed to stop that process"))
-            return
+            return None
         for _tick in range(int(_EXIT_TIMEOUT / 0.5)):
             await asyncio.sleep(0.5)
             if not _pid_alive(v.pid):
@@ -2201,10 +2279,34 @@ class CCBot:
                   "session in the terminal and try again.").format(
                       pid=v.pid, seconds=f"{_EXIT_TIMEOUT:.0f}")
             )
+            return None
+        return note
+
+    async def _adopt_foreign(self, chat_id: int, v) -> None:
+        """Stop a terminal session and bring it back up inside tmux."""
+        note = await self._stop_foreign(chat_id, v)
+        if note is None:
             return
         await note.edit_text(_("✅ {name} stopped — bringing it up in tmux…"
                               ).format(name=v.name))
         await self._create(chat_id, v.cwd, resume=v.session_id)
+
+    async def _end_foreign(self, chat_id: int, v) -> bool:
+        """Stop a terminal session and leave it stopped.
+
+        The way out that "move into tmux" is not: ending a session from the
+        card would otherwise mean bringing it up again first, only to close it.
+        """
+        note = await self._stop_foreign(chat_id, v)
+        if note is None:
+            return False
+        await note.edit_text(
+            _("❌ Session <b>{name}</b> has ended.\n"
+              "The transcript stays — it can be brought back from 🕘 in "
+              "the list.").format(name=html.escape(v.name)),
+            parse_mode="HTML",
+        )
+        return True
 
     async def _find_closed(self, short: str):
         return await sess.closed_view(self.store, short, roots=self.roots)
@@ -2556,9 +2658,20 @@ class CCBot:
             await self._send_prompt(mgd, "/clear")
             await c.answer(_("/clear sent"))
         elif action == "close":
+            # Answered first: `/exit` and the wait for it can outlast
+            # Telegram's patience with an unanswered callback, and a button
+            # that does nothing for eight seconds gets pressed again.
+            await c.answer(_("Ending it…"))
+            name = mgd.full_label
             await self._close(mgd.session_id)
-            await c.answer(_("Closed"))
             await self._show_sessions(c)
+            await self.bot.send_message(
+                c.message.chat.id if c.message else self.cfg.owner,
+                _("❌ Session <b>{name}</b> has ended.\n"
+                  "The transcript stays — it can be brought back from 🕘 in "
+                  "the list.").format(name=html.escape(name)),
+                parse_mode="HTML",
+            )
         else:
             await c.answer()
 
@@ -2579,6 +2692,7 @@ class CCBot:
         ("lang", N_("Interface language")),
         ("log", N_("Last entries from the bot's journal")),
         ("update", N_("Claude Code version and session restarts")),
+        ("power", N_("Laptop power mode: quiet or fast")),
         ("service", N_("Bot state: uptime, version, restart")),
         ("help", N_("Help")),
     ]

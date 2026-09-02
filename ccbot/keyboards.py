@@ -5,6 +5,7 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from . import winpower
 from .i18n import _, language_name, ngettext, offered
 from .screen import Dialog
 from .sessions import DirStat, SessionView
@@ -120,15 +121,19 @@ def confirm_kb(session_id: str, kind: str,
             InlineKeyboardButton(text=_("⬅️ Back"), callback_data=back),
         )
     elif kind == "foreign":
+        # Ending is offered here as well: reaching it through "move into tmux"
+        # first would mean starting the session up again to stop it.
         kb.row(
             InlineKeyboardButton(text=_("🔗 Move into tmux"), callback_data=f"grab:{s}"),
-            InlineKeyboardButton(text=_("⬅️ Back"), callback_data="ls"),
+            InlineKeyboardButton(text=_("🚪 End"), callback_data=f"fx:{s}"),
         )
+        kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="ls"))
     else:
         kb.row(
             InlineKeyboardButton(text=_("▶️ Open"), callback_data=f"open:{s}"),
-            InlineKeyboardButton(text=_("⬅️ Back"), callback_data="ls"),
+            InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
         )
+        kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="ls"))
     return kb.as_markup()
 
 
@@ -363,6 +368,27 @@ def dirs_kb(dirs: list[str]) -> InlineKeyboardMarkup:
         kb.row(InlineKeyboardButton(text=f"📁 {label}", callback_data=f"nd:{i}"))
     kb.row(InlineKeyboardButton(text=_("✏️ Another path"), callback_data="nd:manual"))
     kb.row(InlineKeyboardButton(text=_("⬅️ Cancel"), callback_data="ls"))
+    return kb.as_markup()
+
+
+def power_kb(state: winpower.Power | None) -> InlineKeyboardMarkup:
+    """The laptop's power-mode picker.
+
+    The tick marks the overlay in force for the power source the laptop is
+    actually on; the other source is named on the card instead. A button can
+    only move the live one, and two ticks would quietly claim otherwise.
+    """
+    kb = InlineKeyboardBuilder()
+    active = state.active if state else None
+    if state is not None:
+        for key, _guid, label in winpower.MODES:
+            mark = "✅ " if key == active else ""
+            kb.row(InlineKeyboardButton(text=mark + _(label),
+                                        callback_data=f"pwr:{key}"))
+    kb.row(
+        InlineKeyboardButton(text=_("♻️ Refresh"), callback_data="pwr:show"),
+        InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
+    )
     return kb.as_markup()
 
 

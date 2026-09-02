@@ -29,6 +29,7 @@ from .state import Store
 
 log = logging.getLogger("ccbot.sessions")
 
+HOME = str(Path.home()).rstrip("/")
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 CLAUDE_JSON = Path.home() / ".claude.json"
 
@@ -164,12 +165,22 @@ def dir_key(path: str) -> str:
 
 
 def under_roots(path: str | None, roots: tuple[str, ...]) -> bool:
-    """True if *path* is one of *roots* or nested inside one of them."""
+    """True if *path* is one of *roots* or nested inside one of them.
+
+    The home directory passes as well, but only as an exact match. Sessions
+    do get started in `~`, and it is the one directory that cannot be put on
+    the shortlist: as a root it would swallow every project below it and
+    leave no shortlist at all. Without this its transcripts were invisible —
+    the history offered every project directory except the one they were all
+    inside.
+    """
     if not path:
         return False
     if not roots:
         return True
     p = path.rstrip("/")
+    if p == HOME:
+        return True
     for root in roots:
         r = root.rstrip("/")
         if p == r or p.startswith(r + "/"):

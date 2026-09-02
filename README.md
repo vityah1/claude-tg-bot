@@ -718,6 +718,12 @@ are nowhere hard-coded. There are three sources, in descending priority:
 The roots are always present, and under them the subdirectories worked in
 recently. A directory outside the list stays reachable through "✏️ Other path".
 
+The home directory is a fourth root, an implicit one, and only as an exact
+match: `~` cannot be put on the list — as a root it would take in every project
+below it and leave no shortlist at all — while sessions do get started there.
+Without it their transcripts were the one thing the history could not show,
+however many of them there were.
+
 ## Interface language
 
 The interface is not nailed to any one language: the strings live in gettext
