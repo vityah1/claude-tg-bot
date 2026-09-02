@@ -64,6 +64,7 @@ asymmetric:
 | The list of live sessions | `claude agents --json` | `sessions.py` |
 | Which Claude Code a session runs, and which is on disk | the payload's `version` / `claude --version` | `updates.py` |
 | Interface language (gettext, `locales/`) | a middleware on each update + a context in the watcher tick | `i18n.py` |
+| The laptop's Windows power mode | `powercfg.exe` / `reg.exe` over WSL interop | `winpower.py` |
 
 The `Watcher._tick()` loop (`watcher.py`, every `CCBOT_POLL_INTERVAL` seconds,
 1.5 by default): rebind after `/clear` → read the transcript into the buffer →
@@ -79,7 +80,8 @@ managed/foreign/closed; `keyboards.py` — inline keyboards and the
 `~/.config/ccbot/config.json`; `service.py` — the bot's own process (uptime,
 version, restart); `rich.py` (Bot API 10.x rich messages); `media.py`,
 `render.py` (ASCII→PNG, now only a fallback), `util.py`,
-`logsetup.py`.
+`logsetup.py`; `winpower.py` — the laptop's Windows power mode, reached
+from WSL through interop and inert anywhere else.
 
 ## The bot's state
 
