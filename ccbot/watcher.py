@@ -35,6 +35,12 @@ from .util import as_pre, as_pre_lines, gauges, split_text, usage_suffix
 log = logging.getLogger("ccbot.watcher")
 
 # Wait for a lull before flushing, so one reply is not split across messages.
+# A screen promised for later (`screen_when_idle`): how long to hold off
+# before the first look — a command needs a moment to start, and a session
+# read too early looks idle because nothing has begun yet — and when to give
+# up on a session that never goes quiet.
+_SCREEN_DELAY = 4.0
+_SCREEN_GIVEUP = 600.0
 _FLUSH_IDLE = 2.0
 _MAX_BUFFER_AGE = 25.0
 
@@ -179,6 +185,9 @@ class Watcher:
         self.chat_id = chat_id
         self.interval = interval
         self.runtimes: dict[str, SessionRuntime] = {}
+        # Sessions owed a screen once they go quiet, and the earliest moment
+        # each is worth looking at.
+        self.pending_screen: dict[str, float] = {}
         self._task: asyncio.Task | None = None
         # Last failure announced in the chat, so a fault that repeats every
         # 1.5 seconds does not become 2400 messages an hour.
@@ -212,6 +221,35 @@ class Watcher:
             rt.acted_at = time.time()
             rt.blocked_since = 0.0
 
+    def screen_when_idle(self, session_id: str) -> None:
+        """Promise a screen snapshot once this session has gone quiet.
+
+        `/context` and `/compact` are Claude Code's own commands: they print
+        their answer on the terminal and write nothing to the transcript that
+        reaches the chat (a local command is a `user` record, and only
+        assistant records are forwarded). A button that sends one and says
+        nothing else is a button that appears to do nothing — which is exactly
+        how «📉 Context breakdown» read. Immediately is no good either: a
+        compaction takes tens of seconds, and a screen captured while it runs
+        shows the spinner instead of the result.
+        """
+        self.pending_screen[session_id] = time.time() + _SCREEN_DELAY
+
+    async def _pending_screen(self, session_id: str, window_id: str, name: str,
+                              busy: bool, dialog: bool) -> None:
+        due = self.pending_screen.get(session_id)
+        if due is None:
+            return
+        if time.time() < due or busy or dialog:
+            if time.time() - due > _SCREEN_GIVEUP:
+                del self.pending_screen[session_id]
+                log.info("promised screen dropped, never idle id=%s",
+                         session_id[:8])
+            return
+        del self.pending_screen[session_id]
+        log.info("promised screen id=%s name=%s", session_id[:8], name)
+        await self.send_screen(window_id, name, session_id)
+
     def forget_dialog(self, session_id: str) -> None:
         """Let go of the dialog card, so the next tick never edits it again.
 
@@ -228,6 +266,7 @@ class Watcher:
 
     def forget(self, session_id: str) -> None:
         self.runtimes.pop(session_id, None)
+        self.pending_screen.pop(session_id, None)
         updates.forget(session_id)
 
     def adopt(self, session_id: str, skip_existing: bool = True) -> None:
@@ -463,6 +502,8 @@ class Watcher:
             await self._drop_pulse(rt)
             await self._emit(session_id, name, body, usage, status)
 
+        await self._pending_screen(session_id, window_id, name, busy,
+                                   dialog is not None)
         await self._pulse(session_id, name, raw, rt, dialog is not None)
 
         if dialog is None:

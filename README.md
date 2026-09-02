@@ -360,9 +360,17 @@ so the session can be brought back from 🕘 in the list.
 `/usage` is the bot's own summary, read off the status-line payload: how much of
 the 5-hour and 7-day quota is spent, how full the context is, plus model, effort
 and cost. It is instant, costs no tokens and does not disturb the session.
-"📉 Context breakdown" sends Claude's own `/context` into the session and asks
-*what* is filling the window — system prompt, tools, MCP, memory files — and
-that is a real turn.
+"📉 Context breakdown" runs Claude Code's own `/context` in the session and
+sends back the breakdown it draws — what is filling the window: system prompt,
+tools, MCP, memory files, messages. "🗜 /compact" next to it runs `/compact`:
+the conversation is summed up and the session carries on with the summary
+instead of the history, keeping its id, its name and its tmux window.
+
+Both of those print their answer on the terminal and nowhere else — a local
+command leaves no assistant record, and only assistant records are forwarded —
+so the bot promises a screen instead: the snapshot arrives once the session has
+gone quiet (`Watcher.screen_when_idle`), which for a compaction is when it has
+finished rather than when the key was pressed.
 
 Any other `/command` (`/model`, `/compact`, `/cost`, `/context`…) is passed to
 Claude unchanged.

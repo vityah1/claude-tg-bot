@@ -171,8 +171,13 @@ follow the same rule.
    how full this session's context is. Read off the status line,
    so it is instant, costs no tokens and does not disturb the
    session. Not to be confused with «📉 Context breakdown» on the
-   card: that one asks Claude itself <i>what</i> is filling the
-   context — and that is a real turn in the session.
+   card: that one runs Claude Code's own <code>/context</code> in
+   the session and sends back the breakdown it draws — which
+   files, tools and messages the context is spent on.
+   «🗜 /compact» next to it sums the conversation up and carries
+   on with the summary instead of the history: the session, its
+   name and its id all stay, and the screen with the result
+   arrives once it is done.
 /screen — a text snapshot of the terminal
 /esc — <b>interrupt what Claude is doing</b> (the Esc key).
    The session stays alive and its context is untouched.
@@ -2785,7 +2790,17 @@ class CCBot:
             )
         elif action == "ctx":
             await self._send_prompt(mgd, "/context")
-            await c.answer(_("/context sent"))
+            self.watcher.screen_when_idle(mgd.session_id)
+            await c.answer(_("/context sent — the breakdown comes back as a "
+                             "screen"))
+        elif action == "compact":
+            # Claude Code's own /compact: it summarises the context in place
+            # and keeps the session id, so nothing has to be rebound — and it
+            # says so on the terminal only, hence the promised screen.
+            await self._send_prompt(mgd, "/compact")
+            self.watcher.screen_when_idle(mgd.session_id)
+            await c.answer(_("/compact sent — the result comes back as a "
+                             "screen when it finishes"))
         elif action == "clear":
             await self._send_prompt(mgd, "/clear")
             await c.answer(_("/clear sent"))

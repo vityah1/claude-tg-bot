@@ -140,11 +140,13 @@ def session_kb(v: SessionView) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
         InlineKeyboardButton(text=_("📊 Limits"), callback_data=f"k:{s}:usage"),
     )
+    # The three context controls travel together, and "End" leaves the row
+    # they are in: it used to sit where the thumb lands for /clear.
     kb.row(
         InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
+        InlineKeyboardButton(text="🗜 /compact", callback_data=f"k:{s}:compact"),
         InlineKeyboardButton(text=_("📉 Context breakdown"),
                              callback_data=f"k:{s}:ctx"),
-        InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
     )
     kb.row(
         InlineKeyboardButton(text=_("🧠 Model"), callback_data=f"cfg:{s}:model"),
@@ -153,8 +155,9 @@ def session_kb(v: SessionView) -> InlineKeyboardMarkup:
     )
     kb.row(
         InlineKeyboardButton(text=_("✏️ Rename"), callback_data=f"ren:{s}"),
-        InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
+        InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
     )
+    kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
     return kb.as_markup()
 
 
