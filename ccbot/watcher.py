@@ -492,9 +492,13 @@ class Watcher:
             log.info("dialog id=%s title=%r options=%d preview=%s",
                      session_id[:8], dialog.title, len(dialog.options),
                      bool(dialog.preview))
-            if not should_flush:
+            if not should_flush and dialog.kind == "choice":
                 # The transcript said nothing this tick, which for a question
-                # is the normal case rather than silence — see _preface.
+                # is the normal case rather than silence — see _preface. The
+                # settings pickers are the exception: nothing is said above
+                # them (the chat opened them), and they draw no rule the
+                # reading could stop at, so it used to send a line of the
+                # picker's own state as the preamble to it.
                 await self._preface(session_id, window_id, name, rt, usage, status)
         rt.last_dialog_sig = sig
         rt.last_dialog_state = state

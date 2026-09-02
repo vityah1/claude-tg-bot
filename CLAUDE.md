@@ -322,6 +322,23 @@ is still alive, too. That is why rows are read tolerantly
   equality: the terminal renders markdown and wraps to its width). A tool call
   that has already printed output means the turn *was* recorded, so nothing is
   read above it.
+- 🔴 **What was said is bounded by the rule above the dialog — and a table is
+  made of rules.** Breaking the block at the first box-drawing line cut every
+  answer off at its first table: 320 characters of a 4160-character summary
+  reached the chat, and the rest of it arrived *after* the answer, which is the
+  one thing `_preface` exists to prevent (2026-09-02, five of six questions in
+  one finman session; the sixth had no table). So the rules are dropped
+  wholesale and the end of the block is found by trimming the tail (the rule,
+  the blank lines, the `✻ Worked for 19s` footnote). What is left of a table is
+  a run of adjacent `│ … │` rows, which `screen._table_rows_to_markdown` turns
+  back into a Markdown table — Telegram parses `| a | b |` plus a delimiter row
+  into a real table block (verified against the live API), where box-drawing
+  arrives ragged and column-less.
+- **The settings pickers get no preface.** `/model` and `/effort` are opened
+  from the chat, nothing is said above them, and they draw no rule the reading
+  could stop at — so `said_above_dialog` used to hand back a line of the
+  picker's own state ("High effort (default) ←/→ to adjust") as the preamble to
+  it. `Watcher._tick_session` prefaces `kind == "choice"` only.
 - 🔴 **An unrecognised dialog has no right to be silence.** When
   `claude agents --json` says `waiting` and `find_dialog()` returned None,
   `Watcher._report_blocked` sends the screen with buttons (digits/arrows/Esc)

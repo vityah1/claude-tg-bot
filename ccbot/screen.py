@@ -106,9 +106,14 @@ _TOOL_OUTPUT_MARK = "⎿"
 # nothing.
 _TOOL_CALL_RE = re.compile(r"^[A-Z][A-Za-z0-9_]*\(")
 _ECHOED_PROMPT_RE = re.compile(r"^\s*❯\s+(?!\d+[.)])\S")
+# A row of a table as the TUI draws it: "│ 243 Газ │ 121 │ 1 │". The rules
+# between the rows are separators (`_SEPARATOR_RE`) and go away with them.
+_TABLE_ROW_RE = re.compile(r"^\s*│(?P<body>.*)│\s*$")
 # Enough of the reasoning to decide by; the tail is the part that leads into
 # the question, so a longer wall of text loses its head rather than its point.
-_MAX_SAID = 4000
+# A summary that ends in a question is regularly 4000 characters of its own —
+# the limit is here to stop a runaway, not to trim.
+_MAX_SAID = 12000
 # A line this long was wrapped by the terminal, not written that way, so the
 # line under it continues the same sentence. Anything shorter ended by choice.
 _WRAPPED_AT = 120
@@ -681,6 +686,32 @@ def unwrap(text: str) -> str:
     return "\n".join(out)
 
 
+def _table_rows_to_markdown(lines: list[str]) -> list[str]:
+    """Turn the TUI's drawn tables back into Markdown ones.
+
+    Telegram renders a Markdown table as a table, and box-drawing characters
+    are not a letter wide in its monospace face — so the frame the terminal
+    drew arrives ragged and column-less, while "| a | b |" arrives as the grid
+    it was. The rules are gone by now (they were separators), which is what
+    makes a table a run of adjacent rows: the first one is the header, and the
+    delimiter Markdown wants goes under it.
+    """
+    out: list[str] = []
+    cols = 0
+    for ln in lines:
+        m = _TABLE_ROW_RE.match(ln)
+        if not m:
+            cols = 0
+            out.append(ln)
+            continue
+        cells = [c.strip() for c in m.group("body").split("│")]
+        out.append("| " + " | ".join(cells) + " |")
+        if not cols:
+            cols = len(cells)
+            out.append("| " + " | ".join(["---"] * cols) + " |")
+    return out
+
+
 def said_above_dialog(screen: str) -> str:
     """The last thing Claude *said* above the dialog, read off the terminal.
 
@@ -723,16 +754,19 @@ def said_above_dialog(screen: str) -> str:
         first = head.group("text") if head else block[0]
         if _TOOL_CALL_RE.match(first):
             continue
-        # The block ends at the rule above the dialog, and "✻ Worked for 19s"
-        # is a footnote to it rather than part of what was said.
-        body = []
-        for ln in block[1:]:
-            if _HARD_SPINNER_RE.match(ln):
-                break
-            if _SEPARATOR_RE.match(ln) and ln.strip():
-                break
-            body.append(ln)
-        said = unwrap(first + "\n" + textwrap.dedent("\n".join(body))).strip()
+        # Box-drawing goes first, and every rule with it: the block ends at the
+        # rule above the dialog, but a table is *made* of rules — one between
+        # every pair of rows — and breaking at the first of them cut the answer
+        # off at its first table (2026-09-02: 320 characters of a 4160-character
+        # summary reached the chat, the rest of it after the answer).
+        body = [ln for ln in block[1:]
+                if not (_SEPARATOR_RE.match(ln) and ln.strip())]
+        # "✻ Worked for 19s" is a footnote to the rule rather than part of what
+        # was said, and it sits at the end of the block.
+        while body and (not body[-1].strip() or _HARD_SPINNER_RE.match(body[-1])):
+            body.pop()
+        rows = _table_rows_to_markdown(textwrap.dedent("\n".join(body)).splitlines())
+        said = unwrap(first + "\n" + "\n".join(rows)).strip()
         while "\n\n\n" in said:
             said = said.replace("\n\n\n", "\n\n")
         if len(said) > _MAX_SAID:
