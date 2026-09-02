@@ -346,7 +346,6 @@ has to be typed by hand.
 | `/dirs` | the project directories offered when starting a session |
 | `/rename` | your own name for a session (`/rename -` gives the automatic one back) |
 | `/lang` | interface language (`en` and `uk` for now) |
-| `/power` | the laptop's Windows power mode — quiet, balanced, performance (WSL only) |
 | `/update` | which Claude Code each session runs, which one is on disk, and a restart that keeps the context |
 | `/exit` | **ends the session**: Claude shuts down on its own, then the tmux window closes |
 
@@ -733,55 +732,6 @@ match: `~` cannot be put on the list — as a root it would take in every projec
 below it and leave no shortlist at all — while sessions do get started there.
 Without it their transcripts were the one thing the history could not show,
 however many of them there were.
-
-## The laptop's power mode
-
-The bot runs in WSL, and WSL2 is a virtual machine: the fans belong to the
-embedded controller, and the EC belongs to Windows. Nothing inside the distro
-can reach it. What *can* cross is interop — the binfmt_misc handler that lets a
-Linux process exec a Windows binary — so `/power` is `powercfg.exe`, run on the
-host and read back out of the host's registry, in about 70 ms.
-
-```
-⚡ Режим живлення
-
-🔌 ⚖️ Збалансований · від мережі · діє зараз
-🔋 🚀 Продуктивний · від батареї 100%
-```
-
-Three buttons, a tick on the one in force. What they move is the Windows 11
-**power mode overlay** — the slider in Settings, from "best power efficiency"
-to "best performance" — and deliberately nothing else. It is the one lever that
-needs no elevation, and that was measured rather than assumed:
-`/overlaysetactive` returns 0 under the plain, unelevated token interop hands
-out. A custom scheme with its own `PROCTHROTTLEMAX`, or the vendor's fan curve,
-would each need an administrator, and a chat button is the wrong place to
-acquire one quietly.
-
-So this is **not** the vendor's Quiet/Performance mode, and the card says as
-much rather than letting the name mislead. The overlay moves the CPU's energy
-preference and its boost policy; that moves temperature; the fan curve in the EC
-follows temperature. It gets quieter by a longer route, and the fans are never
-commanded directly. On a Clevo-family machine the vendor's own modes go through
-the Control Center's ACPI driver (`AcpiBridge.sys`), which has no command line
-at all.
-
-Two details that are easy to get wrong:
-
-* the overlay is stored **per power source**, and `/overlaysetactive` writes
-  only the one in effect. Hence a card that shows mains and battery separately
-  and marks just one — Windows ships "best performance" on battery here, and a
-  card naming one line would read as if the other had moved too. Which source
-  is live comes from `/sys/class/power_supply`, which WSL does pass through, so
-  it costs no second trip to the host.
-* the systemd user unit's `PATH` has no Windows entries at all, so
-  `shutil.which("powercfg.exe")` finds nothing under the service even though it
-  works in a login shell. The path is resolved from `/proc/mounts` instead, and
-  by mount rather than by name: `/mnt/c` is only the default.
-
-Off WSL — plain Linux, macOS — `winpower.available()` is false and the card
-says the mode cannot be reached from here, rather than the command quietly
-going missing.
 
 ## Interface language
 

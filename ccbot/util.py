@@ -6,7 +6,6 @@ import html
 import re
 from pathlib import Path
 
-from . import winpower
 from .i18n import _, ngettext
 
 TG_LIMIT = 4096
@@ -157,38 +156,6 @@ def usage_report(name: str, usage, status=None) -> str:
             "read off the status line; exact figures appear once the "
             "statusline wrapper is in place"
         ) + "</i>")
-    return "\n".join(lines)
-
-
-def power_report(state: winpower.Power | None) -> str:
-    """The power card: both overlays, and which of them is live.
-
-    Both are shown because on a laptop they differ — Windows ships "best
-    performance" on battery here — and a card naming only one would read as if
-    the other had moved too.
-    """
-    if state is None:
-        return _("⚡ <b>Power mode</b>\n\nWindows is out of reach from here — "
-                 "this needs the bot to be running inside WSL, with interop "
-                 "enabled.")
-    charge = f" {state.battery_pct}%" if state.battery_pct is not None else ""
-    lines = [_("⚡ <b>Power mode</b>"), ""]
-    for icon, key, live, note in (
-        ("🔌", state.ac, state.on_mains is True, _("mains")),
-        ("🔋", state.dc, state.on_mains is False, _("battery") + charge),
-    ):
-        name = _(winpower.LABEL[key]) if key else _("a mode the bot does not know")
-        if live:
-            lines.append(f"{icon} <b>{name}</b> · {note} · " + _("in force now"))
-        else:
-            lines.append(f"{icon} {name} · {note}")
-    lines.append("")
-    lines.append("<i>" + _(
-        "Windows' own power mode: it moves the CPU's energy preference and its "
-        "turbo, and the fans follow the temperature. The vendor's Quiet and "
-        "Performance modes are not reachable from here — those go through the "
-        "Control Center driver."
-    ) + "</i>")
     return "\n".join(lines)
 
 

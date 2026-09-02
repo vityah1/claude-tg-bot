@@ -29,17 +29,7 @@ from aiogram.types import (
     Update,
 )
 
-from . import (
-    logsetup,
-    media,
-    rich,
-    service,
-    status_feed,
-    tmux,
-    updates,
-    util,
-    winpower,
-)
+from . import logsetup, media, rich, service, status_feed, tmux, updates, util
 from . import screen as screenmod
 from . import sessions as sess
 from .config import Config
@@ -67,7 +57,6 @@ from .keyboards import (
     history_dirs_kb,
     history_kb,
     lang_kb,
-    power_kb,
     project_dirs_kb,
     restart_confirm_kb,
     search_kb,
@@ -79,7 +68,7 @@ from .keyboards import (
 )
 from .settings import Settings
 from .state import Store
-from .util import as_pre, power_report, split_text, usage_report
+from .util import as_pre, split_text, usage_report
 from .watcher import Watcher
 
 log = logging.getLogger("ccbot.bot")
@@ -88,7 +77,7 @@ log = logging.getLogger("ccbot.bot")
 # to Claude, so /model, /compact, /cost and friends keep working.
 OWN_COMMANDS = {"start", "help", "sessions", "new", "exit", "screen", "esc",
                 "usage", "clear", "log", "dirs", "rename", "service", "restart",
-                "lang", "update", "power"}
+                "lang", "update"}
 
 # Telegram's Bot API refuses to serve files larger than this.
 _MAX_ATTACHMENT = 20 * 1024 * 1024
@@ -528,11 +517,6 @@ class CCBot:
         async def _lang(m: Message):
             if self._ok(m):
                 await self._show_langs(m)
-
-        @dp.message(Command("power"))
-        async def _power(m: Message):
-            if self._ok(m):
-                await self._show_power(m)
 
         @dp.message(Command("log"))
         async def _log(m: Message):
@@ -1671,15 +1655,6 @@ class CCBot:
             await self._show_sessions(c)
             return
 
-        if data.startswith("pwr:"):
-            action = data[4:]
-            if action == "show":
-                await c.answer(_("Reading…"))
-                await self._show_power(c)
-            else:
-                await self._set_power(c, action)
-            return
-
         if data.startswith("upd:"):
             action = data[4:]
             if action == "show":
@@ -2195,38 +2170,6 @@ class CCBot:
             return
 
         await c.answer()
-
-    async def _show_power(self, target: Message | CallbackQuery) -> None:
-        """The laptop's power mode, with what it does not reach spelled out."""
-        here = _editable(target)
-        if here is None:
-            await target.answer(_stale_card("/power"), show_alert=True)
-            return
-        state = (await asyncio.to_thread(winpower.read)
-                 if winpower.available() else None)
-        text, kb = power_report(state), power_kb(state)
-        if isinstance(target, CallbackQuery):
-            await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
-        else:
-            await here.answer(text, reply_markup=kb, parse_mode="HTML")
-
-    async def _set_power(self, c: CallbackQuery, key: str) -> None:
-        """Move the overlay, then redraw the card from a fresh read.
-
-        Redrawn from the host rather than from the key that was pressed: if
-        powercfg refused, or the laptop changed power source between the press
-        and the write, only Windows knows what actually holds now.
-        """
-        if key not in winpower.LABEL:
-            await c.answer()
-            return
-        if not winpower.available():
-            await c.answer(_("Windows is out of reach from here"), show_alert=True)
-            return
-        ok = await asyncio.to_thread(winpower.apply, key)
-        await c.answer(_("Switched") if ok else _("powercfg refused — see /log"),
-                       show_alert=not ok)
-        await self._show_power(c)
 
     async def _show_langs(self, target: Message | CallbackQuery) -> None:
         """Offer the languages that are actually compiled and installed."""
@@ -2881,7 +2824,6 @@ class CCBot:
         ("lang", N_("Interface language")),
         ("log", N_("Last entries from the bot's journal")),
         ("update", N_("Claude Code version and session restarts")),
-        ("power", N_("Laptop power mode: quiet or fast")),
         ("service", N_("Bot state: uptime, version, restart")),
         ("help", N_("Help")),
     ]
