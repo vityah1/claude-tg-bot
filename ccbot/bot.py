@@ -108,6 +108,11 @@ _NEWS_LIMIT = 24000
 # How much of a name a card's heading may take before it is trimmed; the rest
 # of it still reaches the reader, on the "it started with" line.
 _CARD_HEAD = 80
+# How many directories the "new session" list may offer. Configured roots
+# come first and are always kept, so a low cap makes each added root push a
+# real project off the tail: with seven roots a limit of ten left three
+# slots, and 7loc-client-web fell out of the list a tap could reach.
+_DIR_CHOICES = 14
 # A half-finished prompt ("send me a path") expires rather than lingering.
 _PENDING_TTL = 180.0
 # How long the TUI needs to redraw a list after one key: a tick has to be read
@@ -945,7 +950,7 @@ class CCBot:
             await here.answer(head, reply_markup=kb, parse_mode="HTML")
 
     async def _ask_dir(self, target: Message | CallbackQuery) -> None:
-        self.dir_choices = await sess.recent_dirs(self.store, 10, roots=self.roots)
+        self.dir_choices = await sess.recent_dirs(self.store, _DIR_CHOICES, roots=self.roots)
         text = _("📁 Which directory should the session start in?")
         kb = dirs_kb(self.dir_choices)
         here = _editable(target)
