@@ -243,6 +243,20 @@ That is exactly why renaming touches `custom_name` only: had it changed `name`,
 the thread would snap and the session would be lost after the very first
 `/clear`.
 
+The rebind moves the row, the active-session pointer and the reply routes to
+the new id — but not the buttons already sitting in the chat: a card carries
+the id it was printed with, cut to eight characters, inside its
+`callback_data`. So every control on a card older than the last `/clear` used
+to answer "that session is gone", which is what happens to the card you
+cleared *from*: press 🧹, then ✏️ Rename on the same card, and the rename was
+refused. Hence `session_aliases`, a table of "the id this one became", written
+by `Store.rebind` and read by `Store.find_prefix` (and by `Store.follow`, for
+the two places that write an id down outside the row — a half-finished rename
+and a dialog waiting for its text). Aliases already pointing at the old id are
+moved along with it, so a session cleared three times is still reachable from
+its very first card; they expire after 30 days. The "context cleared" note now
+also carries a 🎛 button to the fresh card.
+
 ## While Claude is thinking
 
 Claude writes the transcript in bursts, so a long turn with reasoning leaves
@@ -721,6 +735,42 @@ Two things deliberately skip the queue: a `/command` bound for Claude (it
 flushes whatever is waiting and then goes alone, because a command has to be
 the first thing on its line) and an answer to a question the bot asked
 ("send me a path", a dialog option), which is a conversation of its own.
+
+### A forwarded batch asks where it goes
+
+Forwarding a conversation is normally how a session is given the context it
+should *start* from, so its destination is a question rather than "whichever
+session is active": the batch is held (`_Parked`) and the chat is asked, with
+«▶️ Current: *name*», «📋 Another session» and «🗑 Discard». The picker behind
+the second one is the session list with every row a destination — the sessions
+in tmux, ➕ a new one in a directory you pick, 🕘 a closed one to bring back.
+Foreign sessions are left out: their stdin is out of reach, so nothing could be
+delivered there.
+
+Three details make it usable rather than merely correct:
+
+* **Everything sent while the question is open joins the same batch**, and the
+  question is deleted and asked again at the bottom. The comment that explains
+  a forward ("look at this") is part of the forward, and a question scrolled
+  above the new messages is one that gets answered for the wrong batch.
+* **Both "new" and "recent" go through `_create`**, which delivers the batch
+  itself once the session is up (`_deliver_after_launch`), so there is one
+  delivery path instead of three. It waits for the TUI first
+  (`screen.is_ready`, the mode line under the input box): `paste-buffer` does
+  not care whether Claude is running, and text pasted into the shell prompt a
+  fresh window shows for a second would be *run*. A directory Claude Code has
+  not seen before answers with "Is this a project you trust?" instead — that
+  is not readiness either, so the screen is sent, the batch stays parked and
+  the new session is now the active one, which makes «▶️ Current» the single
+  tap that finishes the job.
+* **A forward sent as a reply to a session's message is not asked about** —
+  the reply has already said where it goes — and the answer makes that session
+  active, because what the user types next belongs to the thread they have just
+  started. A batch nobody routes expires after an hour and says so; a file that
+  arrives before any session owns it is downloaded under `media/inbox`.
+
+Anything the user types themselves still goes straight to the active session:
+a question per message would make the ordinary case cost a tap.
 
 ## Project directories
 

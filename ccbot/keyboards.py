@@ -302,6 +302,66 @@ def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def route_kb(active: str = "") -> InlineKeyboardMarkup:
+    """Where a forwarded batch should go — asked before it is sent anywhere.
+
+    Forwarding a conversation is how a session is *started* on somebody
+    else's words, so the destination is a choice, not the session that
+    happens to be active. The active one is still offered first: it is the
+    one-tap answer, and its name is on the button because "current" alone
+    does not say which project that is.
+    """
+    kb = InlineKeyboardBuilder()
+    if active:
+        kb.row(InlineKeyboardButton(
+            text=_fit(_("▶️ Current: {name}").format(name=active)),
+            callback_data="fwd:cur"))
+    kb.row(InlineKeyboardButton(text=_("📋 Another session"),
+                                callback_data="fwd:list"))
+    kb.row(InlineKeyboardButton(text=_("🗑 Discard"), callback_data="fwd:drop"))
+    return kb.as_markup()
+
+
+def route_pick_kb(managed: list[SessionView],
+                  active: str | None = None) -> InlineKeyboardMarkup:
+    """The session list, but every row is a destination for the held batch.
+
+    Foreign sessions are left out on purpose: their stdin is out of reach, so
+    a batch could not be delivered there. A new session and the recent ones
+    are both offered, because "the context to start from" usually means
+    exactly that — a session that does not exist yet, or one to come back to.
+    """
+    kb = InlineKeyboardBuilder()
+    for v in managed:
+        icon = STATUS_ICON.get(v.status, "•")
+        label = _distinct_name(v.name, v.dir_name)
+        mark = "▶️" if v.session_id == active else icon
+        kb.row(InlineKeyboardButton(
+            text=_fit(f"{mark} {v.dir_name} · {label}",
+                      _("waiting") if v.status == "waiting" else ""),
+            callback_data=f"fwd:to:{sid8(v.session_id)}",
+        ))
+    kb.row(
+        InlineKeyboardButton(text=_("➕ New session"), callback_data="fwd:new"),
+        InlineKeyboardButton(text=_("🕘 Recent"), callback_data="fwd:hist"),
+    )
+    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="fwd:back"))
+    return kb.as_markup()
+
+
+def menu_kb(session_id: str) -> InlineKeyboardMarkup:
+    """A single way into the session's controls.
+
+    Sent under the "context cleared" note: the cards printed before the clear
+    are answered by the alias table, but the new id deserves a card of its
+    own — the buttons a person reaches for after a clear are right here.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("🎛 Session controls"),
+                                callback_data=f"s:{sid8(session_id)}"))
+    return kb.as_markup()
+
+
 def blocked_kb(session_id: str) -> InlineKeyboardMarkup:
     """Controls for a session that is waiting on something we could not parse.
 

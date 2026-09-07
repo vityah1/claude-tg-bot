@@ -26,7 +26,7 @@ from . import screen as screenmod
 from . import sessions as sess
 from .i18n import _, ngettext, resolve
 from .i18n import use as use_locale
-from .keyboards import blocked_kb, dialog_kb, update_notice_kb
+from .keyboards import blocked_kb, dialog_kb, menu_kb, update_notice_kb
 from .settings import Settings
 from .state import Store
 from .transcript import TranscriptReader
@@ -373,6 +373,7 @@ class Watcher:
                   "new id, and I am following it there.").format(
                       name=html.escape(m.full_label)),
                 session_id=fresh, parse_mode="HTML",
+                reply_markup=menu_kb(fresh),
             )
 
     async def _check_version(self) -> None:

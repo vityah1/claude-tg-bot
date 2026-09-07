@@ -13,6 +13,10 @@ from .util import default_name
 DB_PATH = paths.STATE_DB
 # Claude's own titles are a sentence long; a chat header is not.
 _LABEL_LIMIT = 48
+# How long an id a session has left behind still resolves to it. Long
+# enough that a card scrolled far up the chat keeps working, short enough
+# that the table does not grow for years.
+_ALIAS_TTL = 30 * 24 * 3600.0
 _LEGACY_DB = Path(__file__).resolve().parent.parent / "state.db"
 
 _SCHEMA = """
@@ -67,6 +71,15 @@ CREATE TABLE IF NOT EXISTS session_names (
     name       TEXT NOT NULL,
     cwd        TEXT,
     updated_at REAL NOT NULL
+);
+-- Where an id a card was printed with has moved to. `/clear` hands the
+-- session a new id (Watcher._rebind_cleared follows it), and every button
+-- already in the chat still carries the old one in its callback_data — so the
+-- old id has to keep resolving to the session it became.
+CREATE TABLE IF NOT EXISTS session_aliases (
+    old_id     TEXT PRIMARY KEY,
+    new_id     TEXT NOT NULL,
+    created_at REAL NOT NULL
 );
 """
 
@@ -265,6 +278,58 @@ class Store:
                 " WHERE session_id=?",
                 (new_id, old_id),
             )
+            # Cards printed before the clear keep the old id in their
+            # buttons; this is what lets those buttons still find the
+            # session. Aliases already pointing at old_id are moved along
+            # with it, so a session cleared three times is still reachable
+            # from its very first card.
+            self.conn.execute(
+                "UPDATE session_aliases SET new_id=? WHERE new_id=?",
+                (new_id, old_id),
+            )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO session_aliases"
+                " (old_id, new_id, created_at) VALUES (?,?,?)",
+                (old_id, new_id, time.time()),
+            )
+            self.conn.execute(
+                "DELETE FROM session_aliases WHERE created_at < ?",
+                (time.time() - _ALIAS_TTL,),
+            )
+
+    def follow(self, session_id: str) -> str:
+        """The id *session_id* has become, or itself.
+
+        Anything that remembers an id outside the row — a half-finished
+        rename, a dialog waiting for its text — was written before the clear
+        that renamed the session, and would otherwise look ended.
+        """
+        r = self.conn.execute(
+            "SELECT new_id FROM session_aliases WHERE old_id=?", (session_id,)
+        ).fetchone()
+        return r["new_id"] if r else session_id
+
+    def find_prefix(self, short: str) -> Managed | None:
+        """A managed session by the id prefix a button carries (`sid8`).
+
+        The prefix is matched against the live rows first and only then
+        against the ids they used to have: a fresh card must never be
+        answered by an alias of somebody else's.
+        """
+        if not short:
+            return None
+        for m in self.all_managed():
+            if m.session_id.startswith(short):
+                return m
+        rows = self.conn.execute(
+            "SELECT new_id FROM session_aliases WHERE old_id LIKE ?"
+            " ORDER BY created_at DESC", (short + "%",),
+        ).fetchall()
+        for r in rows:
+            mgd = self.get(r["new_id"])
+            if mgd:
+                return mgd
+        return None
 
     def set_title(self, session_id: str, title: str) -> None:
         self.conn.execute(

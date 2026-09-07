@@ -107,6 +107,16 @@ is still alive, too. That is why rows are read tolerantly
   very first `/clear`.
 - **session_id is not stable.** Never cache it outside `Store`; after a rebind
   the offset resets to zero and `title` to NULL.
+- 🔴 **A button carries the id it was printed with, so an id a session has
+  left behind has to keep resolving.** `/clear` rebinds the row to a new id,
+  and every card already in the chat still says the old one in its
+  `callback_data` — including the card the clear was pressed on, whose next
+  button ("✏️ Rename") answered "that session is gone". `Store.rebind` records
+  the move in `session_aliases`; `Store.find_prefix` (behind `CCBot._resolve`,
+  which every callback goes through) falls back to it, and `Store.follow` does
+  the same for the two ids written down outside the row — the pending rename
+  and the pending dialog text. Aliases are re-pointed on a second clear, so
+  the *first* card still works, and expire after 30 days.
 - **Register every outgoing message with `store.remember_message()`**
   (`Watcher._say`/`_say_html`, `CCBot._ack`). That is what makes reply
   addressable; a message that was not recorded is "blind", and a reply to it
@@ -131,6 +141,23 @@ is still alive, too. That is why rows are read tolerantly
   keeps its author from `forward_origin`, which is also what tells a forwarded
   batch from the user's own typing (`media.build_batch_prompt`). Anything that
   sends a prompt outside this path is back to one Enter per message.
+- 🔴 **A forwarded batch is not sent until the chat says where it goes.**
+  Forwarding is how a session is given its starting context, so the active
+  session is a guess: `_flush_inbox` parks the batch (`_Parked`) and
+  `_ask_route` asks — «▶️ Current», «📋 Another session» (the tmux sessions, ➕
+  a new one, 🕘 a closed one), «🗑 Discard». Four rules hold it together.
+  Anything sent while the question is open **joins that batch** and the
+  question is re-asked at the bottom (a card above the new messages is
+  answered for the wrong batch). «New» and «Recent» only set
+  `_Parked.await_new` and hand over to the ordinary pickers — `_create`
+  delivers the batch itself (`_deliver_after_launch`), so there is one
+  delivery path, not three. That path **waits for the TUI**
+  (`screen.is_ready`): `paste-buffer` into the shell prompt a fresh window
+  shows would *run* the prompt, and a directory Claude Code has not seen
+  before draws "Is this a project you trust?" — no digits, so `find_dialog`
+  does not see it, hence the screen is sent and the batch stays parked. And a
+  batch that names a session by replying to its message is **never** asked
+  about. Own typing keeps going straight to the active session.
 - 🔴 **An attachment is never filtered by format.** `_attachment()` takes every
   kind Telegram has (photo, document, video, audio, voice, video note,
   animation, sticker) and hands the path over whatever the MIME type says: a

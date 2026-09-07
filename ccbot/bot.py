@@ -59,6 +59,8 @@ from .keyboards import (
     lang_kb,
     project_dirs_kb,
     restart_confirm_kb,
+    route_kb,
+    route_pick_kb,
     search_kb,
     service_kb,
     session_kb,
@@ -115,6 +117,17 @@ _CARD_HEAD = 80
 _DIR_CHOICES = 14
 # A half-finished prompt ("send me a path") expires rather than lingering.
 _PENDING_TTL = 180.0
+# How long a forwarded batch waits for someone to say where it goes. It has to
+# outlast a phone call, but not a night: a message typed tomorrow belongs to
+# tomorrow's conversation, not to yesterday's forward.
+_PARKED_TTL = 3600.0
+# Where an attachment lands while no session owns it yet — a forwarded batch
+# is downloaded before the chat has said which session it is for.
+_INBOX_DIR = "inbox"
+# How long a freshly launched session is given to draw its TUI before a batch
+# is pasted into it. A launch takes 3-8 seconds; the rest is room for a loaded
+# machine, and text pasted into a shell prompt would run as a command.
+_LAUNCH_READY = 45.0
 # How long the TUI needs to redraw a list after one key: a tick has to be read
 # back before the button can show it, and the cursor has to have moved before
 # the next step is worked out.
@@ -225,6 +238,14 @@ bot download 20 MB at most; for anything bigger, send the path.
 📨 Messages that arrive together become <b>one</b> prompt: a
 forwarded conversation, an album, a thought written in three
 goes. A forwarded message keeps the name of whoever wrote it.
+
+↪️ <b>Forwarded</b> messages ask where they should go, instead of
+going to the active session: «▶️ Current», «📋 Another session»
+(the sessions in tmux, ➕ a new one, 🕘 a closed one to bring
+back) or «🗑 Discard». Anything you send while the question is
+open joins the same batch, so the words that explain a forward
+travel with it. Forwarding as a reply to a session's message
+needs no question — the reply has already said where.
 
 When Claude asks a question, buttons with the options arrive.""")
 
@@ -416,6 +437,27 @@ class _Item:
 
 
 @dataclass
+class _Parked:
+    """A batch held back until the chat says which session it belongs to.
+
+    Forwarding a conversation is how a session is given the context it should
+    start from, so its destination is a question — and everything sent while
+    that question is open joins the same batch, because the comment that
+    explains a forward ("look at this") is part of it.
+    """
+
+    items: list[_Item] = field(default_factory=list)
+    # The question in the chat. It is deleted and asked again at the bottom
+    # when the batch grows: a card scrolled above the new messages is a card
+    # that gets answered for the wrong batch.
+    ask_id: int | None = None
+    at: float = 0.0
+    # Set by "new session" and by "recent": whichever session `_create` brings
+    # up next is the destination.
+    await_new: bool = False
+
+
+@dataclass
 class _Inbox:
     """One chat's messages waiting to leave as a single prompt.
 
@@ -457,6 +499,11 @@ class CCBot:
         # forwarded conversation, an album and the sentence that explains it
         # reach Claude as one prompt.
         self.inbox: dict[int, _Inbox] = {}
+        # Forwarded batches waiting for a destination, one per chat.
+        self.parked: dict[int, _Parked] = {}
+        # Notices sent from a synchronous check (an expired batch): kept only
+        # so the task is not garbage-collected while it is still speaking.
+        self.expiries: set[asyncio.Task] = set()
         self.dir_choices: list[str] = []
         # The last history search per chat: a query does not fit in 64 bytes
         # of callback_data, so paging through the results needs it kept here.
@@ -736,10 +783,14 @@ class CCBot:
         return self.cfg.dirs or tuple(self.settings.dirs)
 
     def _resolve(self, short: str):
-        for mgd in self.store.all_managed():
-            if mgd.session_id.startswith(short):
-                return mgd
-        return None
+        """The session a button's `sid8` points at, after /clear included.
+
+        A card keeps the id it was printed with, and `/clear` hands the
+        session a new one — so every button on a card older than the last
+        clear used to answer "that session is gone". `Store.find_prefix`
+        falls back to the ids the session has left behind.
+        """
+        return self.store.find_prefix(short)
 
     async def _active(self, chat_id: int):
         sid = self.store.get_active(chat_id)
@@ -962,7 +1013,15 @@ class CCBot:
             await here.answer(text, reply_markup=kb)
 
     # ---------------------------------------------------------- session ops
-    async def _create(self, chat_id: int, cwd: str, resume: str | None = None) -> None:
+    async def _create(self, chat_id: int, cwd: str,
+                      resume: str | None = None) -> str | None:
+        """Start (or resume) a session in *cwd*; the new id, or None.
+
+        The id is returned because a forwarded batch may be waiting for
+        exactly this session — see `_deliver_after_launch`, which is called
+        from here so that both routes into a new session ("new" and a resume
+        from the history list) deliver it.
+        """
         cwd = str(Path(cwd).expanduser())
         if not Path(cwd).is_dir():
             log.warning("create rejected: no such directory %r", cwd)
@@ -974,7 +1033,7 @@ class CCBot:
                       path=html.escape(cwd[:200]), button=_("✏️ Another path")),
                 parse_mode="HTML",
             )
-            return
+            return None
         session_id = resume or str(uuid.uuid4())
         name = util.default_name(cwd, session_id)
         wid = await tmux.create_window(name, cwd)
@@ -995,6 +1054,11 @@ class CCBot:
                 command=tmux.attach_hint(wid)),
             parse_mode="HTML",
         )
+        # "Send the forwarded messages to a new session" ends here: the
+        # session exists now, so the batch that was waiting for one goes in as
+        # soon as its TUI is up.
+        await self._deliver_after_launch(chat_id, session_id)
+        return session_id
 
     async def _close(self, session_id: str, graceful: bool = True) -> None:
         """End a session and drop its window.
@@ -1444,7 +1508,8 @@ class CCBot:
             return
         items = [box.items[mid] for mid in sorted(box.items)]
         paths = [i.path for i in items if i.path]
-        if paths and not any(i.text.strip() for i in items):
+        parked = self._parked_of(chat_id)
+        if paths and not any(i.text.strip() for i in items) and parked is None:
             # Attachments with nothing said about them wait for the words:
             # a photo now and the question about it a minute later is a normal
             # way to use a phone.
@@ -1460,9 +1525,39 @@ class CCBot:
         # Nothing was awaited since the batch was read, so this pop makes the
         # flush single-winner: a second caller finds an empty inbox.
         self.inbox.pop(chat_id, None)
-        mgd, note = await self._batch_target(items)
+        routed = await self._explicit_route(items)
+        if parked is not None:
+            # A batch is already waiting for a destination, so whatever
+            # arrives now is part of it — the comment on a forward, a second
+            # burst — rather than something of its own.
+            parked.items.extend(items)
+            parked.at = time.time()
+            log.info("parked batch grew to %d item(s): chat=%s",
+                     len(parked.items), chat_id)
+            if routed and routed[0]:
+                await self._deliver_parked(chat_id, routed[0], routed[1])
+            elif routed:
+                return          # the replied-to session has ended; it said so
+            else:
+                await self._ask_route(chat_id)
+            return
+        if routed is None and any(i.sender for i in items):
+            # Nothing said where this goes and it came from somewhere else:
+            # forwarding a conversation is how a session is given the context
+            # it starts from, so the active one is a guess, not an answer.
+            self.parked[chat_id] = _Parked(items=list(items), at=time.time())
+            log.info("forwarded batch parked: chat=%s items=%d",
+                     chat_id, len(items))
+            await self._ask_route(chat_id)
+            return
+        mgd, note = routed if routed else await self._target(items[-1].message)
         if not mgd:
             return
+        await self._send_batch(items, mgd, note)
+
+    async def _send_batch(self, items: list[_Item], mgd, note: str = "") -> None:
+        """Fold a batch into one prompt, send it, and say where it went."""
+        paths = [i.path for i in items if i.path]
         pieces = [media.Piece(text=i.text, path=i.path, sender=i.sender)
                   for i in items]
         await self._send_prompt(mgd, media.build_batch_prompt(pieces))
@@ -1482,18 +1577,255 @@ class CCBot:
             mgd,
         )
 
-    async def _batch_target(self, items: list[_Item]) -> tuple:
-        """Where a whole batch goes: the first reply naming a session wins.
+    async def _explicit_route(self, items: list[_Item]) -> tuple | None:
+        """The session a batch names itself, by replying to one of ours.
 
-        A forwarded message often replies to another forwarded message, which
-        is no route at all — hence the check that the reply is one of the
-        bot's own cards before it decides anything.
+        None means nothing named one. A forwarded message often replies to
+        another forwarded message, which is no route at all — hence the check
+        that the reply is one of the bot's own cards before it decides
+        anything. The tuple may carry no session at all: the reply named one
+        that has meanwhile ended, and `_target` has already said so.
         """
         for item in items:
             replied = getattr(item.message, "reply_to_message", None)
             if replied and self.store.session_of_message(replied.message_id):
                 return await self._target(item.message)
+        return None
+
+    async def _batch_target(self, items: list[_Item]) -> tuple:
+        """Where a whole batch goes: the first reply naming a session wins."""
+        routed = await self._explicit_route(items)
+        if routed is not None:
+            return routed
         return await self._target(items[-1].message)
+
+    # ---------------------------------------------------------------- routing
+    def _parked_of(self, chat_id: int) -> _Parked | None:
+        """The batch this chat is holding, if it is still current.
+
+        An expired one is dropped here rather than delivered: a forward from
+        yesterday must not swallow today's first message.
+        """
+        parked = self.parked.get(chat_id)
+        if parked is None:
+            return None
+        if time.time() - parked.at <= _PARKED_TTL:
+            return parked
+        self.parked.pop(chat_id, None)
+        log.info("parked batch expired: chat=%s items=%d",
+                 chat_id, len(parked.items))
+        task = asyncio.create_task(self._say_parked_expired(chat_id, parked))
+        self.expiries.add(task)
+        task.add_done_callback(self.expiries.discard)
+        return None
+
+    async def _say_parked_expired(self, chat_id: int, parked: _Parked) -> None:
+        """Silence here would read as "the forward was delivered"."""
+        with contextlib.suppress(Exception):
+            if parked.ask_id:
+                await self.bot.delete_message(chat_id, parked.ask_id)
+        with contextlib.suppress(Exception):
+            await self.bot.send_message(chat_id, ngettext(
+                "⌛️ The forwarded message that was waiting for a session has "
+                "expired — it went nowhere. Forward it again if it is still "
+                "needed.",
+                "⌛️ The {count} forwarded messages that were waiting for a "
+                "session have expired — they went nowhere. Forward them again "
+                "if they are still needed.",
+                len(parked.items)).format(count=len(parked.items)))
+
+    async def _ask_route(self, chat_id: int) -> None:
+        """Ask where the held batch goes, always at the bottom of the chat."""
+        parked = self.parked.get(chat_id)
+        if parked is None:
+            return
+        if parked.ask_id:
+            # The batch has grown since the question was asked, and the answer
+            # has to sit under the messages it is about.
+            with contextlib.suppress(Exception):
+                await self.bot.delete_message(chat_id, parked.ask_id)
+            parked.ask_id = None
+        files = sum(1 for i in parked.items if i.path)
+        head = ngettext("📥 <b>{count} forwarded message</b> is waiting",
+                        "📥 <b>{count} forwarded messages</b> are waiting",
+                        len(parked.items)).format(count=len(parked.items))
+        if files:
+            head += " · " + ngettext("{count} file", "{count} files",
+                                     files).format(count=files)
+        active = self._active_managed(chat_id)
+        text = head + "\n\n" + _("Which session should they go to? Anything "
+                                 "you send meanwhile joins them.")
+        msg = await self.bot.send_message(
+            chat_id, text, parse_mode="HTML",
+            reply_markup=route_kb(active.full_label if active else ""))
+        if msg:
+            parked.ask_id = msg.message_id
+
+    def _active_managed(self, chat_id: int):
+        """The active session, or None — without saying anything about it."""
+        sid = self.store.get_active(chat_id)
+        return self.store.get(sid) if sid else None
+
+    async def _deliver_parked(self, chat_id: int, mgd, note: str = "") -> None:
+        """Send the held batch to *mgd*, and make that session the active one.
+
+        Answering the question is working inside that session, so what the
+        user types next belongs to it — the same rule as answering a dialog
+        from its card.
+        """
+        parked = self.parked.pop(chat_id, None)
+        if parked is None or not parked.items:
+            return
+        if parked.ask_id:
+            # It has been answered; leaving it standing invites a second tap.
+            with contextlib.suppress(Exception):
+                await self.bot.delete_message(chat_id, parked.ask_id)
+        if self._focus(chat_id, mgd) and not note:
+            note = " · " + _("now active")
+        log.info("parked batch delivered: chat=%s -> %s items=%d",
+                 chat_id, mgd.session_id[:8], len(parked.items))
+        await self._send_batch(parked.items, mgd, note)
+
+    async def _deliver_after_launch(self, chat_id: int, session_id: str) -> None:
+        """Hand the held batch to a session that has just been launched.
+
+        `tmux paste-buffer` does not care whether Claude is up yet: for the
+        first seconds the window still shows a shell prompt, and a prompt
+        pasted there would be run as a command. So the TUI is waited for, and
+        if it never appears the batch stays parked with the question asked
+        again — by then the new session is the active one, so "Current" is the
+        single tap that finishes the job.
+        """
+        mgd = self.store.get(session_id)
+        parked = self.parked.get(chat_id)
+        if mgd is None or parked is None or not parked.await_new:
+            return
+        if not await self._wait_ready(mgd):
+            # The usual reason is not slowness but a question: a directory
+            # Claude Code has not seen before is met with "Is this a project
+            # you trust?", which no amount of waiting answers. So the screen
+            # is sent along — that question has to be dealt with first — and
+            # the batch stays parked, with the new session now the active one,
+            # so «▶️ Current» is the single tap that finishes the job.
+            log.warning("launched session not ready for the parked batch: %s",
+                        session_id[:8])
+            parked.await_new = False
+            with contextlib.suppress(Exception):
+                await self.bot.send_message(chat_id, _(
+                    "⏳ <b>{name}</b> is not taking text yet — it has just "
+                    "started, or it is asking something first (a new "
+                    "directory is asked about). Here is its screen: deal with "
+                    "that, then press «{button}».").format(
+                        name=html.escape(mgd.full_label),
+                        button=_("▶️ Current: {name}").format(
+                            name=mgd.full_label)),
+                    parse_mode="HTML")
+            with contextlib.suppress(Exception):
+                await self.watcher.send_screen(
+                    mgd.window_id, mgd.full_label, mgd.session_id)
+            await self._ask_route(chat_id)
+            return
+        parked.await_new = False
+        await self._deliver_parked(chat_id, mgd)
+
+    async def _wait_ready(self, mgd, timeout: float = _LAUNCH_READY) -> bool:
+        """Wait until the window shows Claude Code's input box.
+
+        A dialog covers the bottom of the pane, so this is False while one is
+        open — which is right: a session with a question on the screen would
+        read a pasted prompt as the answer to it.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if screenmod.is_ready(await tmux.capture(mgd.window_id)):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.5)
+
+    async def _route_callback(self, c: CallbackQuery, msg: Message,
+                              chat_id: int, arg: str) -> None:
+        """The `fwd:` buttons — where a held batch goes, or that it does not.
+
+        Both "new session" and "recent" hand the choice over to the ordinary
+        pickers (`nd:` and the history list) and only mark the batch as
+        waiting: whichever session `_create` brings up next takes it, so
+        there is one delivery path instead of three.
+        """
+        parked = self._parked_of(chat_id)
+        if parked is None:
+            await c.answer(_("Those messages are no longer waiting"),
+                           show_alert=True)
+            with contextlib.suppress(Exception):
+                await msg.edit_reply_markup(reply_markup=None)
+            return
+        if arg == "drop":
+            self.parked.pop(chat_id, None)
+            await c.answer(_("Discarded"))
+            await self._safe_edit(msg, ngettext(
+                "🗑 The forwarded message was discarded — it went to no "
+                "session.",
+                "🗑 The {count} forwarded messages were discarded — they went "
+                "to no session.",
+                len(parked.items)).format(count=len(parked.items)))
+            return
+        if arg == "cur":
+            mgd = self._active_managed(chat_id)
+            if mgd is None:
+                await c.answer(_("No active session — pick one below"),
+                               show_alert=True)
+                await self._show_route_picker(msg, chat_id)
+                return
+            await c.answer(_("Sending…"))
+            await self._deliver_parked(chat_id, mgd)
+            return
+        if arg == "list":
+            await c.answer()
+            await self._show_route_picker(msg, chat_id)
+            return
+        if arg == "back":
+            # Asked again rather than edited back: `_ask_route` is the one
+            # place that words the question, and it puts it at the bottom,
+            # under whatever has arrived meanwhile.
+            await c.answer()
+            await self._ask_route(chat_id)
+            return
+        if arg.startswith("to:"):
+            mgd = self._resolve(arg[3:])
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                await self._show_route_picker(msg, chat_id)
+                return
+            await c.answer(_("Sending…"))
+            await self._deliver_parked(chat_id, mgd)
+            return
+        # Both pickers below open in a message of their own, leaving the
+        # question standing: one that had been replaced by a directory list
+        # would leave the batch with no visible destination if the user backed
+        # out of that list.
+        if arg == "new":
+            parked.await_new = True
+            await c.answer()
+            await self._ask_dir(msg)
+            return
+        if arg == "hist":
+            parked.await_new = True
+            await c.answer(_("Looking…"))
+            holder = await msg.answer(_("🕘 Looking through the transcripts…"))
+            await self._show_history(holder, chat_id)
+            return
+        await c.answer()
+
+    async def _show_route_picker(self, msg: Message, chat_id: int) -> None:
+        """The session list, as a list of destinations for the held batch."""
+        views = await sess.managed_views(self.store)
+        active = self.store.get_active(chat_id)
+        text = _("📋 <b>Where should the forwarded messages go?</b>\n\n"
+                 "A session in tmux takes them straight away. ➕ starts a new "
+                 "one in a directory you pick, 🕘 brings a closed one back — "
+                 "either way they are sent as soon as it is up.")
+        await self._safe_edit(msg, text, parse_mode="HTML",
+                              reply_markup=route_pick_kb(views, active))
 
     # ----------------------------------------------------------------- media
     async def _on_media(self, m: Message) -> None:
@@ -1512,9 +1844,14 @@ class CCBot:
         """Fetch the file behind *m*; say what went wrong and return None."""
         # A photo sent as a reply switches the active session too, so the
         # caption that follows it lands in the same place.
-        mgd, _note = await self._target(m)
-        if not mgd:
-            return None
+        mgd = None
+        if getattr(m, "reply_to_message", None) or self._active_managed(m.chat.id):
+            mgd, _note = await self._target(m)
+        # No session yet is not a reason to refuse the file: a forwarded batch
+        # is held until the chat says where it goes, and that may well be a
+        # session created afterwards. The id only names the folder the file
+        # lands in — Claude is given the absolute path either way.
+        owner = mgd.session_id if mgd else _INBOX_DIR
 
         att = _attachment(m)
         if att is None or not att.file_id:
@@ -1534,7 +1871,7 @@ class CCBot:
             if not tg_file.file_path:
                 raise RuntimeError(f"Telegram returned no path for {att.file_id}")
             suffix = media.guess_suffix(tg_file.file_path, att.mime, att.fallback)
-            path = media.new_path(mgd.session_id, suffix, index, att.name)
+            path = media.new_path(owner, suffix, index, att.name)
             await self.bot.download_file(tg_file.file_path, destination=path)
         except Exception:
             log.exception("attachment download failed")
@@ -1584,7 +1921,9 @@ class CCBot:
             return
         if pend and pend[0] == "rename":
             _kind, session_id, _ts = pend
-            mgd = self.store.get(session_id)
+            # `follow`: /clear may have renamed the session while the name was
+            # being typed, and the row moved to a new id.
+            mgd = self.store.get(self.store.follow(session_id))
             if not mgd:
                 await m.answer(_("That session is gone"))
                 return
@@ -1603,7 +1942,7 @@ class CCBot:
                 return
         elif pend and pend[0] == "dialog":
             _kind, session_id, number, _ts = pend
-            mgd = self.store.get(session_id)
+            mgd = self.store.get(self.store.follow(session_id))
             if not mgd:
                 await m.answer(_("That session is gone"))
                 return
@@ -1707,6 +2046,12 @@ class CCBot:
                 await self._show_update(c)
             else:
                 await c.answer()
+            return
+
+        if data.startswith("fwd:"):
+            # Where a held forwarded batch goes. Kept above the ordinary
+            # pickers because two of its buttons hand over to them.
+            await self._route_callback(c, msg, chat_id, data[4:])
             return
 
         if data == "new":

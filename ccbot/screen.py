@@ -816,6 +816,24 @@ def said_above_dialog(screen: str) -> str:
     return ""
 
 
+def is_ready(screen: str) -> bool:
+    """Whether the TUI is up in this window and would take a prompt.
+
+    A freshly launched session shows a shell prompt for a few seconds, and
+    text pasted into that runs as a shell command instead of reaching Claude
+    — so anything sending a prompt to a session it has just created has to
+    wait for this. The mode/status line under the input box is the proof:
+    nothing else on the pane is drawn only by a running Claude Code.
+
+    An open dialog covers that line, so a session asking something is not
+    "ready" either — and a brand new directory is asked about before
+    anything else ("Is this a project you trust?", footer "Enter to confirm ·
+    Esc to cancel", options with no digits, so `find_dialog` does not see
+    it). A prompt pasted into that would be read as the answer.
+    """
+    return _ordinary_bottom(screen.splitlines())
+
+
 def is_busy(screen: str) -> bool:
     """True while Claude is generating.
 
