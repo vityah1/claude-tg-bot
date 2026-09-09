@@ -246,6 +246,19 @@ is still alive, too. That is why rows are read tolerantly
   path; a heading followed by paths) and never by their wording — they are
   translated, and an English pattern would slip straight past a Ukrainian
   install.
+- 🔴 **A window that vanishes with the whole tmux server is not an ending.**
+  `_tick_session` drops the row of a window somebody closed; a reboot closes
+  every window at once, and deleting those rows throws away the only record of
+  what to resume (nine at once on 2026-09-09). `Watcher._check_host` runs
+  first in the tick and **moves** the rows instead (`Store.orphan` → `orphans`),
+  then sends one 🔌 card with a button per session. The event is recognised by
+  the boot id in `meta` having changed, or by `tmux.server_pid()` answering 0
+  — never by "several windows went missing", which is also what closing three
+  cards in a row looks like. Each row is still checked with `window_exists`,
+  so a session that outlived the event is not filed as a casualty of it. A
+  restore goes through `_create(resume=...)` like every other launch, and it
+  is `Store.add` that takes the row off the list — which is what makes a
+  session resumed from 🕘 history stop being offered here too.
 - **Three kinds of session.** `managed` — in tmux, full control; `foreign` —
   somebody else's terminal, view only (stdin is out of reach; "move" means
   SIGTERM + `--resume`); `closed` — a transcript, brought back with `--resume`.

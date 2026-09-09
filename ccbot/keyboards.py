@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from .i18n import _, language_name, ngettext, offered
 from .screen import Dialog
 from .sessions import DirStat, SessionView
+from .state import Orphan
 
 # Models and effort levels are NOT listed here. They are read off the live
 # /model and /effort dialogs (`screen._model_dialog` / `_effort_dialog`),
@@ -69,7 +70,8 @@ def _named(v: SessionView) -> str:
 
 
 def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
-                active: str | None = None) -> InlineKeyboardMarkup:
+                active: str | None = None,
+                stopped: int = 0) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     # The two kinds look alike in a list of rows, so they are split by a
     # divider row. Telegram centres a caption, which makes dashes read as a
@@ -97,6 +99,13 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
             text=_fit(f"🔗 {v.dir_name} · {v.name}", hint),
             callback_data=f"f:{sid8(v.session_id)}",
         ))
+    # The card the watcher sends after a reboot scrolls away; without a way
+    # back to it the restore is reachable for as long as one keeps the chat
+    # open, and no longer.
+    if stopped:
+        kb.row(InlineKeyboardButton(
+            text=_("🔌 Restore stopped sessions ({count})").format(count=stopped),
+            callback_data="orph:show"))
     kb.row(
         InlineKeyboardButton(text=_("➕ New session"), callback_data="new"),
         InlineKeyboardButton(text=_("🕘 Recent"), callback_data="hist"),
@@ -346,6 +355,31 @@ def route_pick_kb(managed: list[SessionView],
         InlineKeyboardButton(text=_("🕘 Recent"), callback_data="fwd:hist"),
     )
     kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="fwd:back"))
+    return kb.as_markup()
+
+
+def restore_kb(orphans: list[Orphan]) -> InlineKeyboardMarkup:
+    """The 🔌 card: bring the stopped sessions back, all of them or some.
+
+    "All" comes first because after a reboot it is what the answer usually
+    is, and with nine rows below it the one button that ends the whole
+    business should not be the tenth. Every row says the project it belongs
+    to: after a restart the names alone are a list of things one no longer
+    remembers starting.
+    """
+    kb = InlineKeyboardBuilder()
+    if len(orphans) > 1:
+        kb.row(InlineKeyboardButton(
+            text=_("↩️ Restore all ({count})").format(count=len(orphans)),
+            callback_data="orph:all"))
+    for o in orphans:
+        label = _distinct_name(o.label, o.folder)
+        kb.row(InlineKeyboardButton(
+            text=_fit(f"↩️ {o.folder} · {label}"),
+            callback_data=f"orph:one:{sid8(o.session_id)}",
+        ))
+    kb.row(InlineKeyboardButton(text=_("🗑 Forget them"),
+                                callback_data="orph:drop"))
     return kb.as_markup()
 
 

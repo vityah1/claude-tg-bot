@@ -26,7 +26,7 @@ from . import screen as screenmod
 from . import sessions as sess
 from .i18n import _, ngettext, resolve
 from .i18n import use as use_locale
-from .keyboards import blocked_kb, dialog_kb, menu_kb, update_notice_kb
+from .keyboards import blocked_kb, dialog_kb, menu_kb, restore_kb, update_notice_kb
 from .settings import Settings
 from .state import Store
 from .transcript import TranscriptReader
@@ -54,6 +54,11 @@ _TITLE_RETRY = 30.0
 
 # How long the same watcher failure stays quiet after it has been reported.
 _FAIL_REPEAT = 3600.0
+
+# The kernel's id for the current boot. It is rewritten on every start of the
+# machine and never otherwise, which is what tells a reboot from a window
+# somebody closed.
+_BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
 # How often to ask what version of Claude Code is on disk. It only moves when
 # the background updater has been at work, and asking spawns a node process.
@@ -84,6 +89,14 @@ _STATUS_MAX_AGE = 10.0
 # What heads a dialog card. The settings dialogs are not questions Claude is
 # asking — showing them under a "❓" read as one.
 _DIALOG_ICON = {"model": "🧠 ", "effort": "◉ "}
+
+
+def _boot_id() -> str:
+    """This boot's id, or "" where the kernel does not publish one."""
+    try:
+        return _BOOT_ID.read_text().strip()
+    except OSError:
+        return ""
 
 
 def _dialog_title(dialog) -> str:
@@ -411,7 +424,52 @@ class Watcher:
         await self._say_html(f"{head}\n\n{body}\n\n{tail}",
                              reply_markup=update_notice_kb())
 
+    async def _check_host(self) -> None:
+        """Keep the sessions a reboot took down, instead of burying them.
+
+        One window that disappears was closed by somebody, and
+        `_tick_session` is right to drop the row. A whole tmux server that
+        disappears is an accident: on 2026-09-09 Windows restarted itself and
+        the bot answered with nine tombstones, having deleted the very rows
+        that could have brought the sessions back. Two signals say it was the
+        machine and not a person — the boot id changed, or the tmux server is
+        not there at all (`tmux kill-server`, no reboot). The first run ever
+        has no boot id written down; that is a bot that has never run here,
+        not a restart, so it reports nothing.
+        """
+        boot = _boot_id()
+        seen = self.store.meta_get("boot_id")
+        if boot and boot != seen:
+            self.store.meta_set("boot_id", boot)
+        rebooted = bool(boot) and bool(seen) and boot != seen
+        managed = self.store.all_managed()
+        if not managed:
+            return
+        if not rebooted and await tmux.server_pid():
+            return
+        lost = []
+        for m in managed:
+            # Checked one by one all the same: the reason to keep a row is
+            # that its window is gone, and a session that somehow outlived
+            # the event must not be filed away as a casualty of it.
+            if await tmux.window_exists(m.window_id):
+                continue
+            row = self.store.orphan(m.session_id)
+            if row is None:
+                continue
+            lost.append(row)
+            self.forget(m.session_id)
+        if not lost:
+            return
+        log.info("host death (%s): %d session(s) kept for restore",
+                 "reboot" if rebooted else "no tmux server", len(lost))
+        await self._say_html(sess.restore_text(lost),
+                             reply_markup=restore_kb(lost))
+
     async def _tick(self) -> None:
+        # Before anything reads the session rows: what follows would take a
+        # dead tmux server for a chatful of closed windows.
+        await self._check_host()
         await self._check_version()
         await self._rebind_cleared()
         live = {a.get("sessionId"): a for a in await sess.live_agents()}

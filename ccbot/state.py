@@ -17,6 +17,10 @@ _LABEL_LIMIT = 48
 # enough that a card scrolled far up the chat keeps working, short enough
 # that the table does not grow for years.
 _ALIAS_TTL = 30 * 24 * 3600.0
+# How long a session the machine took down stays on offer. A restore is worth
+# doing the same day and rarely the next week; after that the transcript is
+# still in 🕘 history, which is where an old one belongs.
+_ORPHAN_TTL = 7 * 24 * 3600.0
 _LEGACY_DB = Path(__file__).resolve().parent.parent / "state.db"
 
 _SCHEMA = """
@@ -81,19 +85,39 @@ CREATE TABLE IF NOT EXISTS session_aliases (
     new_id     TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+-- Sessions the machine took down: the tmux server died with everything in it
+-- (a reboot, `tmux kill-server`), which is an accident and not an ending. The
+-- row is moved here instead of being deleted, because everything needed to
+-- put the session back — the id, the directory, both names — is in it.
+CREATE TABLE IF NOT EXISTS orphans (
+    session_id  TEXT PRIMARY KEY,
+    cwd         TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    custom_name TEXT,
+    title       TEXT,
+    died_at     REAL NOT NULL
+);
+-- Facts about the host that have to outlive the process. The boot id is what
+-- tells a reboot from a window somebody closed.
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
-@dataclass
-class Managed:
-    session_id: str
-    window_id: str
+class _Named:
+    """How a session is called — shared by a live one and a stopped one.
+
+    A session waiting to be restored is shown in the same lists as a live
+    one, under the same name, so the naming rules cannot live in only one of
+    the two dataclasses.
+    """
+
     cwd: str
     name: str
-    created_at: float
-    offset: int
     title: str | None
-    custom_name: str | None = None
+    custom_name: str | None
 
     @property
     def is_auto_named(self) -> bool:
@@ -132,6 +156,30 @@ class Managed:
         if not folder or label.lower().startswith(folder.lower()):
             return label
         return f"{folder} · {label}"
+
+
+@dataclass
+class Managed(_Named):
+    session_id: str
+    window_id: str
+    cwd: str
+    name: str
+    created_at: float
+    offset: int
+    title: str | None
+    custom_name: str | None = None
+
+
+@dataclass
+class Orphan(_Named):
+    """A managed session that was taken down with the tmux server."""
+
+    session_id: str
+    cwd: str
+    name: str
+    title: str | None
+    custom_name: str | None
+    died_at: float
 
 
 class Store:
@@ -181,6 +229,9 @@ class Store:
             (session_id, window_id, cwd, name, time.time(),
              self.saved_name(session_id)),
         )
+        # However it came back — the restore card, a resume from history — a
+        # session that is running again has nothing left to restore.
+        self.conn.execute("DELETE FROM orphans WHERE session_id=?", (session_id,))
         self.conn.commit()
 
     @staticmethod
@@ -340,6 +391,79 @@ class Store:
     def remove(self, session_id: str) -> None:
         self.conn.execute("DELETE FROM managed WHERE session_id=?", (session_id,))
         self.conn.execute("DELETE FROM active WHERE session_id=?", (session_id,))
+        self.conn.commit()
+
+    # -- sessions the machine took down ------------------------------------
+    def orphan(self, session_id: str) -> Orphan | None:
+        """Move a managed row to the restore list instead of deleting it.
+
+        A window that goes away because somebody closed it is an ending. A
+        window that goes away with the whole tmux server is an accident, and
+        `remove()` would throw out the only thing that can undo it.
+        """
+        mgd = self.get(session_id)
+        if mgd is None:
+            return None
+        row = Orphan(session_id=mgd.session_id, cwd=mgd.cwd, name=mgd.name,
+                     title=mgd.title, custom_name=mgd.custom_name,
+                     died_at=time.time())
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO orphans"
+                " (session_id, cwd, name, custom_name, title, died_at)"
+                " VALUES (?,?,?,?,?,?)",
+                (row.session_id, row.cwd, row.name, row.custom_name,
+                 row.title, row.died_at),
+            )
+            self.conn.execute(
+                "DELETE FROM managed WHERE session_id=?", (session_id,))
+            self.conn.execute(
+                "DELETE FROM active WHERE session_id=?", (session_id,))
+            self.conn.execute(
+                "DELETE FROM orphans WHERE died_at < ?",
+                (time.time() - _ORPHAN_TTL,))
+        return row
+
+    @staticmethod
+    def _row_to_orphan(row: sqlite3.Row) -> Orphan:
+        """Build an Orphan from a row — tolerantly, see `_row_to_managed`."""
+        known = {f.name for f in fields(Orphan)}
+        return Orphan(**{k: v for k, v in dict(row).items() if k in known})
+
+    def orphans(self) -> list[Orphan]:
+        """Sessions waiting to be restored, the most recent loss first."""
+        rows = self.conn.execute(
+            "SELECT * FROM orphans WHERE died_at >= ? ORDER BY died_at DESC",
+            (time.time() - _ORPHAN_TTL,),
+        ).fetchall()
+        return [self._row_to_orphan(r) for r in rows]
+
+    def find_orphan(self, short: str) -> Orphan | None:
+        """One of them by the id prefix a button carries (`sid8`)."""
+        if not short:
+            return None
+        for o in self.orphans():
+            if o.session_id.startswith(short):
+                return o
+        return None
+
+    def drop_orphan(self, session_id: str) -> None:
+        self.conn.execute("DELETE FROM orphans WHERE session_id=?", (session_id,))
+        self.conn.commit()
+
+    def drop_orphans(self) -> None:
+        self.conn.execute("DELETE FROM orphans")
+        self.conn.commit()
+
+    # -- notes about the host ----------------------------------------------
+    def meta_get(self, key: str) -> str | None:
+        r = self.conn.execute(
+            "SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return r["value"] if r else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)", (key, value))
         self.conn.commit()
 
     # -- per-chat active session ------------------------------------------

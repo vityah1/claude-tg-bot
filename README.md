@@ -950,6 +950,42 @@ Hence `KillMode=process` in the unit: only the bot gets the signal, and sessions
 carry on. tmux panes, incidentally, already live in their own
 `tmux-spawn-*.scope`, but without this option the server dies along with the bot.
 
+### When the machine goes down
+
+`KillMode=process` saves the sessions from a bot restart; nothing saves them
+from a restart of the machine. The tmux server dies with everything in it, and
+the bot — which comes back with the unit — used to answer that with a tombstone
+per session ("💀 *name* is gone (its tmux window was closed)") and delete the
+row that named it. Nine of them arrived at once when Windows rebooted itself on
+2026-09-09, and with the rows went the only record of what had been running
+where.
+
+Nothing about it is unrecoverable, though: the transcripts are on disk, and
+`claude --resume <id>` brings a session back with its whole context. What was
+missing was the id, the directory and the names — all of which are in the row
+that was being thrown away. So a row is now **moved, not deleted**
+(`Store.orphan` → the `orphans` table), and the chat gets one card instead of
+nine tombstones: «🔌 N sessions were stopped», with a button per session, «↩️
+Restore all» and «🗑 Forget them». A restore is the ordinary launch path
+(`_create` with `--resume`), so a session comes back under its own name, and
+«all» works through the list one at a time, waiting for each TUI — nine node
+processes started at once are nine node processes fighting over one CPU, and a
+directory Claude Code has not seen before stops on "Is this a project you
+trust?".
+
+Two signals tell a machine restart from a window somebody closed: the kernel's
+boot id (`/proc/sys/kernel/random/boot_id`, kept in the `meta` table) has
+changed, or the tmux server is not answering at all (`tmux kill-server`, no
+reboot). One window disappearing on a live server is still an ending, and still
+gets its tombstone. The offer expires after seven days, and it also goes away by
+itself when the session is resumed from 🕘 history instead — `Store.add` clears
+the row. The card scrolls away like any other message, so `/sessions` grows a
+«🔌 Restore stopped sessions (N)» row for as long as any are waiting.
+
+A restored session opens on an empty prompt. The context is all there, but work
+that was running at the moment of the crash is not picked up again, and a
+question that was on the screen is gone with the screen.
+
 ### Driving it from the phone
 
 | Command | What it shows / does |

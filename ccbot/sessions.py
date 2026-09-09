@@ -24,8 +24,8 @@ from datetime import datetime
 from pathlib import Path
 
 from . import status_feed, tmux, transcript
-from .i18n import N_, _
-from .state import Store
+from .i18n import N_, _, ngettext
+from .state import Orphan, Store
 
 log = logging.getLogger("ccbot.sessions")
 
@@ -54,6 +54,28 @@ _STATUS_LABELS = {
     "gone": N_("window is gone"),
     "closed": N_("closed"),
 }
+
+
+def restore_text(orphans: list[Orphan]) -> str:
+    """The 🔌 card: what the machine stopped, and what bringing it back means.
+
+    Worded for both ways the tmux server can die — a reboot and a
+    `kill-server` — because the card is redrawn after every restore and a
+    reason quoted once would then be repeated as a guess.
+    """
+    head = ngettext(
+        "🔌 <b>{count} session was stopped</b> — the tmux server went down "
+        "with it (the machine restarted, most likely).",
+        "🔌 <b>{count} sessions were stopped</b> — the tmux server went down "
+        "with them (the machine restarted, most likely).",
+        len(orphans)).format(count=len(orphans))
+    body = _("Nothing is lost: each one comes back with its whole context, in "
+             "a new tmux window.")
+    warn = _("A restored session opens on an empty prompt — work that was "
+             "running at that moment is not picked up again, and a question "
+             "that was on the screen is gone.")
+    tail = _("Anything not restored stays in 🕘 history.")
+    return f"{head}\n\n{body} {warn}\n\n{tail}"
 
 
 def status_label(status: str) -> str:

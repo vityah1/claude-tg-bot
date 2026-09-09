@@ -59,6 +59,7 @@ from .keyboards import (
     lang_kb,
     project_dirs_kb,
     restart_confirm_kb,
+    restore_kb,
     route_kb,
     route_pick_kb,
     search_kb,
@@ -69,7 +70,7 @@ from .keyboards import (
     update_kb,
 )
 from .settings import Settings
-from .state import Store
+from .state import Orphan, Store
 from .util import as_pre, split_text, usage_report
 from .watcher import Watcher
 
@@ -128,6 +129,10 @@ _INBOX_DIR = "inbox"
 # is pasted into it. A launch takes 3-8 seconds; the rest is room for a loaded
 # machine, and text pasted into a shell prompt would run as a command.
 _LAUNCH_READY = 45.0
+# How long one session may hold up the queue while «Restore all» works
+# through it. Shorter than a single launch on purpose: a session stuck on a
+# question of its own must not keep the other eight waiting.
+_RESTORE_READY = 30.0
 # How long the TUI needs to redraw a list after one key: a tick has to be read
 # back before the button can show it, and the cursor has to have moved before
 # the next step is worked out.
@@ -962,7 +967,8 @@ class CCBot:
         disk = await updates.installed()
         behind = sum(1 for v in managed if updates.stale(v.session_id, disk))
         text = _sessions_text(managed, foreign, active, behind)
-        kb = sessions_kb(managed, foreign, active)
+        kb = sessions_kb(managed, foreign, active,
+                         stopped=len(self.store.orphans()))
         if isinstance(target, CallbackQuery):
             await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
         else:
@@ -1059,6 +1065,101 @@ class CCBot:
         # soon as its TUI is up.
         await self._deliver_after_launch(chat_id, session_id)
         return session_id
+
+    async def _restore_one(self, chat_id: int, o: Orphan) -> bool:
+        """Put one stopped session back: a new window, `claude --resume`.
+
+        `_create` is the single launch path, so the restore card, the history
+        list and «new session» all bring a session up the same way — and it
+        is `Store.add` inside it that takes the row off the restore list,
+        which is what makes a session resumed straight from 🕘 history stop
+        being offered here too. Only the title has to be carried over by
+        hand: a resumed row starts with none, and the chat would call the
+        session by its launch name until the watcher dug the opening prompt
+        out of the transcript again.
+        """
+        sid = await self._create(chat_id, o.cwd, resume=o.session_id)
+        if sid is None:
+            return False
+        if o.title:
+            self.store.set_title(sid, o.title)
+        return True
+
+    async def _restore_all(self, chat_id: int, msg: Message | None) -> None:
+        """Bring every stopped session back, one at a time.
+
+        Sequentially, and each one is waited for: nine `claude` processes
+        started at once are nine node processes fighting over the same CPU,
+        and a directory Claude Code has not seen before stops on "Is this a
+        project you trust?" — a screen the next launch must not bury.
+        """
+        for o in self.store.orphans():
+            if not await self._restore_one(chat_id, o):
+                continue
+            mgd = self.store.get(o.session_id)
+            if mgd is not None:
+                await self._wait_ready(mgd, timeout=_RESTORE_READY)
+        await self._redraw_restore(msg)
+
+    async def _redraw_restore(self, msg: Message | None) -> None:
+        """Update the card to what is still waiting, or close it."""
+        if msg is None:
+            return
+        left = self.store.orphans()
+        if not left:
+            with contextlib.suppress(Exception):
+                await self._safe_edit(
+                    msg, _("✅ Every stopped session is back."),
+                    reply_markup=None)
+            return
+        with contextlib.suppress(Exception):
+            await self._safe_edit(msg, sess.restore_text(left),
+                                  parse_mode="HTML",
+                                  reply_markup=restore_kb(left))
+
+    async def _restore_callback(self, c: CallbackQuery, msg: Message,
+                                chat_id: int, arg: str) -> None:
+        """The 🔌 card — which of the stopped sessions come back.
+
+        Every button answers with something visible: a restore prints the
+        session's own "✅ Resumed" card, and the list of what is left is
+        redrawn under it.
+        """
+        if arg == "show":
+            left = self.store.orphans()
+            await c.answer()
+            if not left:
+                await self._safe_edit(
+                    msg, _("✅ Nothing is waiting to be restored."),
+                    reply_markup=None)
+                return
+            await self._safe_edit(msg, sess.restore_text(left),
+                                  parse_mode="HTML",
+                                  reply_markup=restore_kb(left))
+            return
+        if arg == "drop":
+            self.store.drop_orphans()
+            await c.answer(_("Forgotten"))
+            await self._safe_edit(
+                msg, _("🗑 The stopped sessions are off the list — their "
+                       "transcripts are still in 🕘 history."),
+                reply_markup=None)
+            return
+        if arg == "all":
+            await c.answer(_("Bringing them up…"))
+            await self._restore_all(chat_id, msg)
+            return
+        if arg.startswith("one:"):
+            o = self.store.find_orphan(arg[4:])
+            if o is None:
+                await c.answer(_("That one is already back"), show_alert=True)
+                await self._redraw_restore(msg)
+                return
+            await c.answer(_("Bringing it up…"))
+            await self._restore_one(chat_id, o)
+            await self._redraw_restore(msg)
+            return
+        await c.answer()
 
     async def _close(self, session_id: str, graceful: bool = True) -> None:
         """End a session and drop its window.
@@ -2046,6 +2147,10 @@ class CCBot:
                 await self._show_update(c)
             else:
                 await c.answer()
+            return
+
+        if data.startswith("orph:"):
+            await self._restore_callback(c, msg, chat_id, data[5:])
             return
 
         if data.startswith("fwd:"):
