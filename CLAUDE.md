@@ -320,6 +320,22 @@ is still alive, too. That is why rows are read tolerantly
   dialog route — `d:`, `dt:`, `dc:`, `dm:`, `sub:`, `nav:` — focuses, and the
   move is announced, because a silent change of target is how the next message
   goes missing.
+- 🔴 **A digit does not answer a question whose options carry a preview.**
+  There the digit only walks the cursor onto the row so the drawing beside it
+  can be read, and the question stays open — the footer says so
+  (`Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel`,
+  measured on 2.1.278) and promises no digits at all, where an ordinary
+  question commits on the digit itself. So `_answer_dialog` reads the screen
+  back and presses the Enter itself, and it answers with a **bool**: the card
+  keeps its buttons when the press did not land. Retiring them on a press that
+  went nowhere left a pay4say session waiting on its question with no way back
+  to it from the chat — the press at 15:47 on 2026-09-22 reached the
+  transcript at 15:56, typed by hand, and the watcher stayed silent because
+  the cursor had already been on that row, so nothing about the screen
+  changed. The confirmation compares the **question**, not "is a dialog
+  there": a multi-part `AskUserQuestion` draws its next section the instant
+  the previous one is answered, and an Enter meant for the old row would
+  answer the new one blind.
 - 🔴 **A multi-select question answers on a row that has no digit.** Its
   options are checkboxes ("1. [✔] Fix parser"), a digit *ticks* one, and the
   ticked set leaves only when the unnumbered row under the list is pressed:

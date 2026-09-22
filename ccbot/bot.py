@@ -2354,7 +2354,7 @@ class CCBot:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
             moved = self._focus(chat_id, mgd)
-            await self._answer_dialog(mgd, int(num))
+            await self._answer_dialog(mgd, int(num), confirm=False)
             await asyncio.sleep(_NAV_SETTLE)
             dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
             opt = next((o for o in (dialog.options if dialog else [])
@@ -2496,10 +2496,23 @@ class CCBot:
                                        name=html.escape(mgd.full_label)),
                                  parse_mode="HTML")
                 return
-            await self._answer_dialog(mgd, int(num))
-            await c.answer(_("Picked {n}").format(n=num))
+            landed = await self._answer_dialog(mgd, int(num))
+            await c.answer(_("Picked {n}").format(n=num) if landed
+                           else _("It did not go through"))
             if moved:
                 await self._say_focused(msg, mgd)
+            if not landed:
+                # The question is still standing, so the card keeps its
+                # buttons: retiring them here is what left a session waiting
+                # with no way back to it from the chat.
+                await msg.answer(
+                    _("⚠️ Option <b>{n}</b> did not go through — the question "
+                      "is still open in <b>{name}</b>. The buttons still "
+                      "work: press it again, or walk the list with ⬆️⬇️ and "
+                      "confirm with ✅.").format(
+                          n=num, name=html.escape(mgd.full_label)),
+                    parse_mode="HTML")
+                return
             with_kb = msg.reply_markup
             if with_kb:
                 await msg.edit_reply_markup(reply_markup=None)
@@ -3119,7 +3132,7 @@ class CCBot:
         "s" on the wrong row switches the wrong model.
         """
         if scope == "d":
-            await self._answer_dialog(mgd, number)
+            await self._answer_dialog(mgd, number, confirm=False)
             return True
         for _attempt in range(5):
             dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
@@ -3201,21 +3214,89 @@ class CCBot:
             await asyncio.sleep(0.7)
         return (await self._status(mgd)).mode == value
 
-    async def _answer_dialog(self, mgd, number: int) -> None:
-        """Pick option *number*.
+    async def _answer_dialog(self, mgd, number: int,
+                             confirm: bool = True) -> bool:
+        """Pick option *number*, and report whether the question actually went.
 
         Digits select directly, which is immune to where the cursor happens to
         be. Beyond 9 there is no digit shortcut, so walk the list explicitly.
+
+        🔴 A digit does not answer every question. When the options carry a
+        preview, the digit only walks the cursor onto that row so the drawing
+        beside it can be read, and the question stays open — measured on the
+        live TUI, 2.1.278, whose footer says `Enter to select · ↑/↓ to
+        navigate · n to add notes · Esc to cancel` and promises no digits at
+        all. Pressing it and calling that an answer left the session sitting
+        on the question with the card's buttons already retired: on
+        2026-09-22 the press at 15:47 reached the transcript at 15:56, typed
+        by hand, and the two presses before it went the same way.
+
+        So the screen is read back. Gone, or showing a different question,
+        means the answer landed; still showing this one with the cursor on
+        the row means the row is only highlighted and wants its Enter.
+        `confirm=False` is for the callers whose digit is not meant to close
+        anything — a checkbox tick, the /model picker's default.
         """
+        before = await self._dialog_now(mgd)
         self._typed(mgd)
         if 1 <= number <= 9:
             await tmux.send_keys(mgd.window_id, str(number))
-            return
-        for _step in range(30):
-            await tmux.send_keys(mgd.window_id, "Up")
-        for _step in range(number - 1):
-            await tmux.send_keys(mgd.window_id, "Down")
-        await tmux.send_keys(mgd.window_id, "Enter")
+        else:
+            for _step in range(30):
+                await tmux.send_keys(mgd.window_id, "Up")
+            for _step in range(number - 1):
+                await tmux.send_keys(mgd.window_id, "Down")
+            await tmux.send_keys(mgd.window_id, "Enter")
+        if not confirm:
+            return True
+        return await self._confirm_pick(mgd, number, before)
+
+    async def _dialog_now(self, mgd):
+        """The dialog on the screen right now, or None if the read failed."""
+        try:
+            return screenmod.find_dialog(await tmux.capture(mgd.window_id))
+        except tmux.TmuxError:
+            return None
+
+    @staticmethod
+    def _dialog_sig(dialog) -> str:
+        """Which question this is — the watcher's signature, same rule."""
+        if dialog is None:
+            return ""
+        return dialog.question + "|" + "|".join(o.label for o in dialog.options)
+
+    async def _confirm_pick(self, mgd, number: int, before) -> bool:
+        """Make sure the digit answered, and press Enter for it when it did not.
+
+        Comparing the question, not merely "is a dialog there", is what keeps
+        the extra Enter off the *next* question: a multi-part AskUserQuestion
+        draws its following section the moment the previous one is answered,
+        and an Enter meant for the old row would answer the new one blind.
+        A checkbox list is left alone for the same reason — its digits tick
+        rather than answer, and Enter there is `_submit_dialog`'s business.
+        """
+        sig = self._dialog_sig(before)
+        for _attempt in range(3):
+            await asyncio.sleep(_NAV_SETTLE)
+            dialog = await self._dialog_now(mgd)
+            if dialog is None or self._dialog_sig(dialog) != sig:
+                return True
+            if dialog.multi_select:
+                return True
+            opt = next((o for o in dialog.options if o.number == number), None)
+            if opt is not None and opt.checked is not None:
+                return True          # a checkbox: ticking is not answering
+            if opt is None or not opt.selected:
+                # The digit moved nothing: this list does not take digits and
+                # the cursor is elsewhere. Walking it there is `nav:`'s job.
+                log.warning("digit %d did not reach its row id=%s",
+                            number, mgd.session_id[:8])
+                return False
+            self._typed(mgd)
+            await tmux.send_keys(mgd.window_id, "Enter")
+        log.warning("option %d would not commit id=%s", number,
+                    mgd.session_id[:8])
+        return False
 
     async def _submit_dialog(self, mgd) -> bool:
         """Press the unnumbered Submit (or Next) row of a multi-select question.
