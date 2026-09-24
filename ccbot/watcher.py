@@ -26,7 +26,7 @@ from . import screen as screenmod
 from . import sessions as sess
 from .i18n import _, ngettext, resolve
 from .i18n import use as use_locale
-from .keyboards import blocked_kb, dialog_kb, menu_kb, restore_kb, update_notice_kb
+from .keyboards import blocked_kb, dialog_kb, done_kb, menu_kb, restore_kb, update_notice_kb
 from .settings import Settings
 from .state import Store
 from .transcript import TranscriptReader
@@ -275,6 +275,16 @@ class Watcher:
         if rt is not None:
             rt.last_dialog_sig = None
             rt.last_dialog_state = None
+            rt.dialog_msg_id = None
+
+    def release_dialog(self, session_id: str) -> None:
+        """The chat has answered this card and marked it: hands off.
+
+        Unlike `forget_dialog` the question is kept, so the frames of its
+        departure are not taken for a new one.
+        """
+        rt = self.runtimes.get(session_id)
+        if rt is not None:
             rt.dialog_msg_id = None
 
     def forget(self, session_id: str) -> None:
@@ -846,20 +856,22 @@ class Watcher:
             log.debug("pulse edit skipped", exc_info=True)
 
     async def _retire_dialog(self, rt: SessionRuntime) -> None:
-        """Strip the buttons off a card whose question has left the screen.
+        """Settle a card whose question has left the screen some other way.
 
-        However it was answered — a digit from the chat, «Chat about this»,
-        Submit, the user's own text, a key pressed in the terminal, the next
-        section of a multi-part question — the buttons left on it now act on
-        nothing, or on whatever question stands there next. The card keeps its
-        text: it is the record of what was asked.
+        A key pressed in the terminal, Esc, the next section of a multi-part
+        question: the buttons left on the card would now act on nothing, or on
+        whatever question stands there next. The card keeps its text — the
+        record of what was asked — and one button saying it is closed.
+        Answers given from the chat never get here: the handler marks the card
+        with the choice itself and lets go of it first (`release_dialog`).
         """
         if rt.dialog_msg_id is None:
             return
         msg_id, rt.dialog_msg_id = rt.dialog_msg_id, None
         try:
             await self.bot.edit_message_reply_markup(
-                chat_id=self.chat_id, message_id=msg_id, reply_markup=None)
+                chat_id=self.chat_id, message_id=msg_id,
+                reply_markup=done_kb(_("⏹ Question closed")))
         except Exception:
             # Already stripped by the handler that answered it, or too old.
             log.debug("dialog card retire skipped", exc_info=True)

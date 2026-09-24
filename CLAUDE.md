@@ -198,13 +198,17 @@ is still alive, too. That is why rows are read tolerantly
   the prompt it had meanwhile been given. Neither source alone is enough: the
   agent list knows about dialogs `find_dialog()` cannot parse (`/model` is
   one), the screen knows about work the list has not caught up with.
-- **A choice that has come true takes its card away.** A picker is deleted
-  once the thing picked exists (`nd:` and the typed path after
-  `nd:manual`, `dores:`, `grab:` — only on success, so a failed launch
-  keeps the list to try again), a question card loses its buttons
-  (`CCBot.prompt_cards` for what asked for a pending input;
-  `Watcher._retire_dialog` the moment a dialog leaves the screen or another
-  question replaces it — the old digits would press into the new one).
+- **A choice that has come true leaves a record of itself, not the choice.**
+  A picker is edited into one line saying what was picked (`CCBot._settle`:
+  `nd:` and the typed path after `nd:manual`, `dores:`, `grab:` — only on
+  success, so a failed launch keeps the list to try again); deleting it
+  left the chat with no trace of what happened. A question card keeps its
+  text and trades its buttons for one inert `done` button naming the answer
+  (`done_kb`: `d:`, `dt:`, `dc:`, `sub:`, rename via `CCBot.prompt_cards`),
+  and the handler calls `Watcher.release_dialog` first so the watcher does
+  not overwrite it. A question closed any other way (terminal, Esc, the next
+  section replacing it — whose digits would press into the new one) gets
+  `Watcher._retire_dialog`'s «⏹ Question closed».
 - **`screen.is_busy()` needs the spinner line, not only the interrupt hint.**
   "esc to interrupt" joins the spinner a few seconds into a turn, so the hint
   alone reads the first seconds of every turn as idle (2.1.251:

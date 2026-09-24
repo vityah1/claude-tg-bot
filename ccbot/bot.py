@@ -54,6 +54,7 @@ from .keyboards import (
     confirm_kb,
     dialog_kb,
     dirs_kb,
+    done_kb,
     history_dirs_kb,
     history_kb,
     lang_kb,
@@ -497,14 +498,14 @@ class CCBot:
         install()
         self.watcher = Watcher(self.bot, self.store, self.settings,
                                cfg.owner, cfg.poll_interval)
-        # chat_id -> ("dir",) | ("dialog", session_id, option_number)
+        # chat_id -> ("dir",) | ("dialog", session_id, option_number, card)
         #          | ("rename", session_id) | ("adddir",)
         self.pending: dict[int, tuple] = {}
         # The messages that asked for the pending input: chat_id ->
-        # [(message_id, delete)]. Once the input has done its job they are
-        # taken away (a picker) or stripped of their buttons (a question) —
-        # a list left standing after the choice invites a second tap.
-        self.prompt_cards: dict[int, list[tuple[int, bool]]] = {}
+        # [(message_id, role)], role being "picker", "prompt" or "question".
+        # Once the input has done its job each one says what was chosen
+        # instead of offering the choice again — see `_retire_cards`.
+        self.prompt_cards: dict[int, list[tuple[int, str]]] = {}
         # Incoming messages wait here for the rest of their burst, so a
         # forwarded conversation, an album and the sentence that explains it
         # reach Claude as one prompt.
@@ -910,26 +911,58 @@ class CCBot:
         await self.dp.stop_polling()
 
     def _hold_card(self, chat_id: int, msg: Message | None,
-                   delete: bool) -> None:
+                   role: str) -> None:
         """Remember a message that belongs to the pending input."""
         if msg is not None:
             self.prompt_cards.setdefault(chat_id, []).append(
-                (msg.message_id, delete))
+                (msg.message_id, role))
 
-    async def _retire_cards(self, chat_id: int) -> None:
-        """The pending input has been used: clear what asked for it."""
-        for msg_id, delete in self.prompt_cards.pop(chat_id, []):
+    async def _retire_cards(self, chat_id: int, summary: str = "",
+                            mark: str = "") -> None:
+        """The pending input has been used: record the choice where it was.
+
+        A picker becomes the one line *summary* (a list of fourteen
+        directories after one was picked is only a second tap waiting to
+        happen, and deleting it leaves the chat with no trace of the choice);
+        a question keeps its text and trades its buttons for *mark*; the
+        "send me a path" prompt goes — the summary above it says it all.
+        """
+        for msg_id, role in self.prompt_cards.pop(chat_id, []):
             with contextlib.suppress(Exception):
-                if delete:
+                if role == "picker":
+                    await self.bot.edit_message_text(
+                        summary, chat_id=chat_id, message_id=msg_id,
+                        parse_mode="HTML")
+                elif role == "prompt":
                     await self.bot.delete_message(chat_id, msg_id)
                 else:
                     await self.bot.edit_message_reply_markup(
-                        chat_id=chat_id, message_id=msg_id, reply_markup=None)
+                        chat_id=chat_id, message_id=msg_id,
+                        reply_markup=done_kb(mark))
 
-    async def _retire(self, msg: Message) -> None:
-        """Take a picker away once the choice made on it has come true."""
+    @staticmethod
+    async def _settle(msg: Message, summary: str) -> None:
+        """Turn a picker into the line saying what was picked on it."""
         with contextlib.suppress(Exception):
-            await msg.delete()
+            await msg.edit_text(summary, parse_mode="HTML")
+
+    @staticmethod
+    async def _mark(msg: Message, label: str) -> None:
+        """Trade a question card's buttons for one saying how it was answered."""
+        with contextlib.suppress(Exception):
+            await msg.edit_reply_markup(reply_markup=done_kb(label))
+
+    @staticmethod
+    def _option_label(dialog, number: int) -> str:
+        """The label of option *number*, or the number itself."""
+        opt = next((o for o in (dialog.options if dialog else [])
+                    if o.number == number), None)
+        return opt.label if opt else str(number)
+
+    @staticmethod
+    def _dir_picked(path: str) -> str:
+        return _("📁 New session in <code>{path}</code>").format(
+            path=html.escape(str(Path(path).expanduser())))
 
     def _ask_name(self, chat_id: int, mgd) -> str:
         """Arm "the next message is the name" and word the question.
@@ -965,7 +998,7 @@ class CCBot:
             ask = await m.answer(head + self._ask_name(m.chat.id, mgd),
                                  parse_mode="HTML",
                                  reply_markup=cancel_rename_kb(mgd.session_id))
-            self._hold_card(m.chat.id, ask, delete=False)
+            self._hold_card(m.chat.id, ask, "question")
             return
         # Only the display name changes: `name` stays the one Claude was
         # launched with, which is how the session is found again after /clear.
@@ -973,7 +1006,7 @@ class CCBot:
         # Keep the tmux window in step, so `tmux attach` shows the same name.
         await tmux.rename_window(mgd.window_id, util.window_name(name))
         # The question is answered: its «Cancel» would now only mislead.
-        await self._retire_cards(m.chat.id)
+        await self._retire_cards(m.chat.id, mark=f"✏️ {name}")
         log.info("session renamed id=%s %r -> %r",
                  mgd.session_id[:8], mgd.full_label, name)
         fresh = self.store.get(mgd.session_id) or mgd
@@ -2072,12 +2105,13 @@ class CCBot:
                 ))
             else:
                 if await self._create(chat_id, candidate):
-                    await self._retire_cards(chat_id)
+                    await self._retire_cards(
+                        chat_id, summary=self._dir_picked(candidate))
                 else:
                     self.prompt_cards.pop(chat_id, None)
                 return
         elif pend and pend[0] == "dialog":
-            _kind, session_id, number, _ts = pend
+            _kind, session_id, number, card_id, _ts = pend
             mgd = self.store.get(self.store.follow(session_id))
             if not mgd:
                 await m.answer(_("That session is gone"))
@@ -2097,6 +2131,11 @@ class CCBot:
                 # in, and Submit is still what sends the set.
                 await asyncio.sleep(_NAV_SETTLE)
                 await self._submit_dialog(mgd)
+            self.watcher.release_dialog(mgd.session_id)
+            with contextlib.suppress(Exception):
+                await self.bot.edit_message_reply_markup(
+                    chat_id=m.chat.id, message_id=card_id,
+                    reply_markup=done_kb(f"✏️ {text}"))
             self._focus(m.chat.id, mgd)
             await self._ack(m, _("✏️ Answer sent to <b>{name}</b> · it is the "
                                  "active session now").format(
@@ -2132,11 +2171,17 @@ class CCBot:
         chat_id = msg.chat.id
         # Pressing anything else abandons a half-finished prompt, so a later
         # message is not swallowed as a directory path.
-        if not data.startswith(("nd:manual", "dt:", "hfind")):
+        if not data.startswith(("nd:manual", "dt:", "hfind", "done")):
             self.pending.pop(chat_id, None)
             # Not deleted: the button pressed may have turned one of them
             # into its own card («Cancel» on a rename opens the session).
             self.prompt_cards.pop(chat_id, None)
+
+        if data == "done":
+            # The marker left on a settled card: it answers, it does nothing.
+            await c.answer(_("Already answered — the button only shows what "
+                             "was chosen"))
+            return
 
         if data.startswith("grp:"):
             # A divider row still has to answer a tap: it says what the group
@@ -2290,15 +2335,14 @@ class CCBot:
                 )
                 # The list stays until the path turns out to be real, so a
                 # typo still has the buttons to fall back on.
-                self._hold_card(chat_id, msg, delete=True)
-                self._hold_card(chat_id, ask, delete=True)
+                self._hold_card(chat_id, msg, "picker")
+                self._hold_card(chat_id, ask, "prompt")
                 return
             await c.answer(_("Starting…"))
             idx = int(arg)
             if (0 <= idx < len(self.dir_choices)
                     and await self._create(chat_id, self.dir_choices[idx])):
-                # The session's own "✅ Created" card is the answer now.
-                await self._retire(msg)
+                await self._settle(msg, self._dir_picked(self.dir_choices[idx]))
             return
 
         if data.startswith("res:"):
@@ -2330,7 +2374,10 @@ class CCBot:
                 return
             await c.answer(_("Bringing it up…"))
             if await self._create(chat_id, v.cwd, resume=v.session_id):
-                await self._retire(msg)
+                await self._settle(msg, _(
+                    "▶️ Resuming <b>{name}</b>\n<code>{path}</code>").format(
+                        name=html.escape(v.name[:_CARD_HEAD]),
+                        path=html.escape(v.cwd)))
             return
 
         if data.startswith("s:"):
@@ -2379,10 +2426,15 @@ class CCBot:
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
+            label = self._option_label(
+                screenmod.find_dialog(await tmux.capture(mgd.window_id)),
+                int(num))
             self._typed(mgd)
             await tmux.send_keys(mgd.window_id, str(int(num)))
             self._focus(chat_id, mgd)
             await c.answer(_("Question dropped"))
+            self.watcher.release_dialog(mgd.session_id)
+            await self._mark(msg, f"💬 {label}")
             await msg.answer(
                 _("💬 Question dropped in <b>{name}</b>. It is the active "
                   "session now — write what you want to clarify and it goes "
@@ -2512,7 +2564,10 @@ class CCBot:
                                    "🖥 Screen and press it by hand.").format(
                                        label=html.escape(dialog.submit_label)),
                                  parse_mode="HTML")
-            elif more:
+                return
+            self.watcher.release_dialog(mgd.session_id)
+            await self._mark(msg, f"✅ {picked or dialog.submit_label}")
+            if more:
                 # The next section arrives as its own question from the
                 # watcher; this only says the press landed.
                 await msg.answer(_("➡️ Moving on to the next question"))
@@ -2535,13 +2590,17 @@ class CCBot:
                 return
             moved = self._focus(chat_id, mgd)
             if free:
-                self.pending[chat_id] = ("dialog", mgd.session_id, int(num), time.time())
+                self.pending[chat_id] = ("dialog", mgd.session_id, int(num),
+                                         msg.message_id, time.time())
                 await c.answer()
                 await msg.answer(_("Write your own answer — it goes to "
                                    "<b>{name}</b>").format(
                                        name=html.escape(mgd.full_label)),
                                  parse_mode="HTML")
                 return
+            label = self._option_label(
+                screenmod.find_dialog(await tmux.capture(mgd.window_id)),
+                int(num))
             landed = await self._answer_dialog(mgd, int(num))
             await c.answer(_("Picked {n}").format(n=num) if landed
                            else _("It did not go through"))
@@ -2559,9 +2618,8 @@ class CCBot:
                           n=num, name=html.escape(mgd.full_label)),
                     parse_mode="HTML")
                 return
-            with_kb = msg.reply_markup
-            if with_kb:
-                await msg.edit_reply_markup(reply_markup=None)
+            self.watcher.release_dialog(mgd.session_id)
+            await self._mark(msg, f"✅ {num}. {label}")
             return
 
         if data.startswith("f:"):
@@ -2584,7 +2642,9 @@ class CCBot:
                 return
             await c.answer(_("Moving it over…"))
             if await self._adopt_foreign(chat_id, v):
-                await self._retire(msg)
+                await self._settle(msg, _(
+                    "🔗 Moving <b>{name}</b> into tmux").format(
+                        name=html.escape(v.name)))
             return
 
         if data.startswith("fx:"):
@@ -2691,7 +2751,7 @@ class CCBot:
             ask = await msg.answer(self._ask_name(chat_id, mgd),
                                    parse_mode="HTML",
                                    reply_markup=cancel_rename_kb(mgd.session_id))
-            self._hold_card(chat_id, ask, delete=False)
+            self._hold_card(chat_id, ask, "question")
             return
 
         if data.startswith("lang:"):

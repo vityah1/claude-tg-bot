@@ -432,6 +432,21 @@ def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def done_kb(label: str) -> InlineKeyboardMarkup:
+    """The keyboard of a settled card: one button that says how it settled.
+
+    Stripping the buttons alone leaves a question with no answer on it, and
+    the chat no longer says what happened; the button keeps the choice in
+    view and answers a tap with a note (`done` does nothing else).
+    """
+    label = " ".join(label.split())
+    if len(label) > 60:
+        label = label[:59].rstrip() + "…"
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=label, callback_data="done"))
+    return kb.as_markup()
+
+
 def cancel_rename_kb(session_id: str) -> InlineKeyboardMarkup:
     """A way out of "send me a name" that does not need a message.
 
