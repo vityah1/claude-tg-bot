@@ -414,9 +414,9 @@ session is actually running — and offers the restart that closes the gap.
 
 On disk: 2.1.251 — what a session gets the moment it is started again.
 
-✅ finman · calendar — 2.1.247 ⬆️
-✅ pay4say · widget — 2.1.245 ⬆️
-▶️⏸ claude-tg-bot · the update card — 2.1.241 ⬆️
+☑️ finman · calendar — 2.1.247 ⬆️
+☑️ pay4say · widget — 2.1.245 ⬆️
+🟢⏸ claude-tg-bot · the update card — 2.1.241 ⬆️
 
 3 sessions are behind.
 Busy or waiting, so left alone: claude-tg-bot · the update card

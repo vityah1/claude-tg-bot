@@ -47,6 +47,7 @@ from .i18n import (
 )
 from .i18n import use as use_locale
 from .keyboards import (
+    ACTIVE_ICON,
     HISTORY_PAGE,
     STATUS_ICON,
     cancel_rename_kb,
@@ -265,7 +266,7 @@ def _status_legend(views: list[sess.SessionView],
                    active: str | None) -> list[str]:
     """One line per icon actually present in the list, and nothing more.
 
-    The active session wears ▶️ instead of its own status icon, so it is not
+    The active session wears 🟢 instead of its own status icon, so it is not
     what puts a state into the legend.
     """
     seen = {v.status for v in views if v.session_id != active}
@@ -294,7 +295,7 @@ def _sessions_text(managed: list[sess.SessionView],
         block = [_("🖥 <b>In tmux</b> — started by the bot, driven from here")]
         cur = next((v for v in managed if v.session_id == active), None)
         if cur:
-            block.append(_("▶️ active: <b>{name}</b> — plain text goes here"
+            block.append(_("🟢 active: <b>{name}</b> — plain text goes here"
                            ).format(name=html.escape(cur.name)))
         block += _status_legend(managed, active)
         if behind:
@@ -1404,7 +1405,7 @@ class CCBot:
             lines.append("")
             for m, st, old in rows:
                 icon = STATUS_ICON.get(st, "❔")
-                here = "▶️" if active and m.session_id == active.session_id else ""
+                here = ACTIVE_ICON if active and m.session_id == active.session_id else ""
                 mine = old or updates.running(m.session_id)
                 mark = " ⬆️" if old else ""
                 lines.append(f"{here}{icon} <b>{html.escape(m.full_label)}</b> — "
@@ -1605,7 +1606,7 @@ class CCBot:
         """Tell the chat where its text goes now. Silence here is a trap."""
         with contextlib.suppress(Exception):
             await msg.answer(
-                _("▶️ Text now goes to <b>{name}</b>").format(
+                _("🟢 Text now goes to <b>{name}</b>").format(
                     name=html.escape(mgd.full_label)),
                 parse_mode="HTML")
 
@@ -2404,7 +2405,7 @@ class CCBot:
                 prev = self.store.get(previous)
                 if prev:
                     await msg.answer(
-                        _("▶️ Text now goes to <b>{name}</b>.\n"
+                        _("🟢 Text now goes to <b>{name}</b>.\n"
                           "<b>{previous}</b> keeps working — to write to it, "
                           "reply to one of its messages.").format(
                               name=html.escape(mgd.full_label),

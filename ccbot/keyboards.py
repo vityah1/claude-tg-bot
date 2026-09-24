@@ -23,9 +23,14 @@ MODES = [
     ("⏸ manual", "manual"),
 ]
 
+# The one thing a glance at the list has to find is where plain text goes, so
+# the active session gets the only green mark on it; the idle state, the most
+# common one, stays grey ("☑️", not "✅") and does not compete with it.
+ACTIVE_ICON = "🟢"
+
 STATUS_ICON = {
     "busy": "⚡",
-    "idle": "✅",
+    "idle": "☑️",
     "waiting": "⏸",
     "starting": "🔄",
     "dead": "💀",
@@ -83,8 +88,8 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
         icon = STATUS_ICON.get(v.status, "•")
         label = _distinct_name(v.name, v.dir_name)
         hint = _("waiting") if v.status == "waiting" else ""
-        # ▶️ marks where plain text goes; everything else needs a reply.
-        mark = "▶️" if v.session_id == active else icon
+        # 🟢 marks where plain text goes; everything else needs a reply.
+        mark = ACTIVE_ICON if v.session_id == active else icon
         kb.row(InlineKeyboardButton(
             text=_fit(f"{mark} {v.dir_name} · {label}", hint),
             callback_data=f"s:{sid8(v.session_id)}",
@@ -344,7 +349,7 @@ def route_pick_kb(managed: list[SessionView],
     for v in managed:
         icon = STATUS_ICON.get(v.status, "•")
         label = _distinct_name(v.name, v.dir_name)
-        mark = "▶️" if v.session_id == active else icon
+        mark = ACTIVE_ICON if v.session_id == active else icon
         kb.row(InlineKeyboardButton(
             text=_fit(f"{mark} {v.dir_name} · {label}",
                       _("waiting") if v.status == "waiting" else ""),
