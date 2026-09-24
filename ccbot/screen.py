@@ -86,6 +86,10 @@ _HEADER_RE = re.compile(r"^\s*[☐☑✓·]\s+(?P<title>.+?)\s*$")
 
 # Box-drawing separators and spinner/status noise we never treat as content.
 _SEPARATOR_RE = re.compile(r"^[\s─━═╭╮╰╯│┌┐└┘├┤┬┴┼]*$")
+# The rule under a dialog, which carries the session's name when it was
+# launched with `-n` — and the bot launches every session that way:
+# "──────────── pay4say-1a2b ─" (measured on 2.1.281).
+_NAMED_RULE_RE = re.compile(r"^\s*[─━]{4,}(?:\s[^─━]{1,80}\s[─━]+)?\s*$")
 _SPINNER_RE = re.compile(r"^\s*[✻✽✢✳*·●⎿]\s")
 # The same, minus the glyphs that also head list items: the answer review uses
 # "●" for every question it echoes back, and treating those as spinner noise
@@ -301,6 +305,13 @@ def _submit_footer_index(lines: list[str]) -> int | None:
             if last_option is None and int(m.group("num")) != 1:
                 return None
             last_option = i
+        elif last_option is not None and _NAMED_RULE_RE.match(lines[i]):
+            # 2.1.281 closes the dialog with a rule that names the session;
+            # it is still the bottom of the screen as long as nothing but
+            # blank lines follows it.
+            if any(ln.strip() for ln in lines[i + 1:]):
+                return None
+            return last_option + 1
         elif lines[i].strip():
             return None
     return last_option + 1 if last_option is not None else None

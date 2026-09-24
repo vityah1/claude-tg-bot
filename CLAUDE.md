@@ -369,7 +369,12 @@ is still alive, too. That is why rows are read tolerantly
   synthesises the footer position, and it demands *all* of: no mode/status line
   anywhere on the pane (an open dialog covers them, so seeing one proves the
   bottom belongs to the ordinary UI), the tabs, the marker, and an option list
-  that opens at "1." and follows the marker directly. Every one of those
+  that opens at "1." and follows the marker directly, with nothing under it
+  but blank lines — or, since 2.1.281, the one rule that closes the dialog
+  and names the session (`──── pay4say-1a2b ─`, `_NAMED_RULE_RE`); without
+  that allowance a multi-part question answered from the chat ended on "a
+  screen I do not understand" instead of a «Submit answers» card
+  (2026-09-24). Every one of those
   strings gets printed in this repository while it is being worked on — a
   heredoc full of this very documentation was reported as two questions in the
   chat on 2026-08-25, and the digits the user pressed landed in the session's
