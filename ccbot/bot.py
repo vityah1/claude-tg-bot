@@ -2508,6 +2508,25 @@ class CCBot:
                           title=title, label=html.escape(opt.label)),
                     parse_mode="HTML")
                 return
+            # A conversation with history is asked once more ("Switch model?"
+            # — the cache is lost). The pick has not happened yet, so saying
+            # it has would be a lie; the question reaches the chat as a card
+            # of its own from the watcher.
+            await asyncio.sleep(_NAV_SETTLE)
+            after = screenmod.find_dialog(await tmux.capture(mgd.window_id))
+            if after is not None and after.kind == "choice":
+                log.info("%s pick awaits confirmation id=%s", want,
+                         mgd.session_id[:8])
+                text = _("{title} of <b>{name}</b> → <b>{label}</b>?\n"
+                         "Claude Code asks to confirm the switch — answer on "
+                         "the card below.").format(
+                             title=title, name=html.escape(mgd.full_label),
+                             label=html.escape(opt.label))
+                try:
+                    await msg.edit_text(text, parse_mode="HTML")
+                except Exception:
+                    await msg.answer(text, parse_mode="HTML")
+                return
             body = (_("{title} of <b>{name}</b> → <b>{label}</b>\n"
                       "Only for this session; new sessions keep their default.")
                     if scope == "s" else

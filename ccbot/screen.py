@@ -317,6 +317,51 @@ def _submit_footer_index(lines: list[str]) -> int | None:
     return last_option + 1 if last_option is not None else None
 
 
+def _confirm_footer_index(lines: list[str]) -> int | None:
+    """Where the footer *would* be under a bare confirmation.
+
+    Switching the model of a conversation that already has history draws
+    "Switch model?" with two options and nothing under them — no "Enter to
+    select", no digits promised (measured on 2.1.281):
+
+        ────────────────────────────────────────────
+          Switch model?
+          Your next response will be slower and use more tokens
+          This conversation is cached for the current model. …
+          ❯ 1. Yes, switch to Fable 5.1
+            2. No, go back
+
+    Its wording is Claude Code's to change, so it is recognised by shape, and
+    every part of the shape is demanded because each alone turns up in prose:
+    no mode/status line anywhere on the pane (an open dialog covers them), an
+    option list that is the last thing on the screen, opens at "1.", runs
+    without gaps and carries the cursor, and — at most a few lines above it —
+    a rule followed directly by a heading that asks something.
+    """
+    low = "\n".join(lines).lower()
+    if any(m in low for m in _UI_BOTTOM):
+        return None
+    end = len(lines)
+    while end and not lines[end - 1].strip():
+        end -= 1
+    first = end
+    while first and _OPTION_RE.match(lines[first - 1]):
+        first -= 1
+    rows = [_OPTION_RE.match(ln) for ln in lines[first:end]]
+    if len(rows) < 2:
+        return None
+    if [int(m.group("num")) for m in rows if m] != list(range(1, len(rows) + 1)):
+        return None
+    if not any(m and m.group("cursor") for m in rows):
+        return None
+    for j in range(first - 1, max(-1, first - 10), -1):
+        ln = lines[j]
+        if ln.strip() and _SEPARATOR_RE.match(ln):
+            heading = lines[j + 1].strip() if j + 1 < first else ""
+            return end if heading.endswith("?") else None
+    return None
+
+
 def _dialog_span(lines: list[str]) -> tuple[int, int, bool] | None:
     """Where the dialog starts and ends: (top, footer, footer-was-synthetic).
 
@@ -330,6 +375,8 @@ def _dialog_span(lines: list[str]) -> tuple[int, int, bool] | None:
     footerless = footer_idx is None
     if footerless:
         footer_idx = _submit_footer_index(lines)
+    if footer_idx is None:
+        footer_idx = _confirm_footer_index(lines)
     if footer_idx is None:
         return None
 

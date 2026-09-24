@@ -303,6 +303,15 @@ is still alive, too. That is why rows are read tolerantly
     sometimes a warning about the level the marker is on ("May use excessive
     tokens…" on `max`). It goes under the list as `Dialog.note`; attributing
     it to a level by column puts it on the wrong one.
+  * Switching the model of a conversation that has history is asked once
+    more — "Switch model?", two options, **no footer at all** (2.1.281). It
+    is found by shape in `screen._confirm_footer_index` (no status line, a
+    cursor-bearing list from "1." that ends the pane, a rule and a heading
+    ending in "?" a few lines above it) and reaches the chat as an ordinary
+    card. The picker handler reads the screen back after the pick and, when
+    that question is standing, says the switch awaits confirmation instead
+    of "set" — the old reply claimed success while the session sat on an
+    unrecognised question (2026-09-24, fbcfefa6).
   * Both are guarded by `_ordinary_bottom`: seeing the mode/status line
     anywhere on the pane means the bottom belongs to the ordinary UI, however
     much the text above it looks like these footers. This file quotes both of
