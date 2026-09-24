@@ -198,6 +198,13 @@ is still alive, too. That is why rows are read tolerantly
   the prompt it had meanwhile been given. Neither source alone is enough: the
   agent list knows about dialogs `find_dialog()` cannot parse (`/model` is
   one), the screen knows about work the list has not caught up with.
+- **A choice that has come true takes its card away.** A picker is deleted
+  once the thing picked exists (`nd:` and the typed path after
+  `nd:manual`, `dores:`, `grab:` — only on success, so a failed launch
+  keeps the list to try again), a question card loses its buttons
+  (`CCBot.prompt_cards` for what asked for a pending input;
+  `Watcher._retire_dialog` the moment a dialog leaves the screen or another
+  question replaces it — the old digits would press into the new one).
 - **`screen.is_busy()` needs the spinner line, not only the interrupt hint.**
   "esc to interrupt" joins the spinner a few seconds into a turn, so the hint
   alone reads the first seconds of every turn as idle (2.1.251:

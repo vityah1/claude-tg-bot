@@ -500,6 +500,11 @@ class CCBot:
         # chat_id -> ("dir",) | ("dialog", session_id, option_number)
         #          | ("rename", session_id) | ("adddir",)
         self.pending: dict[int, tuple] = {}
+        # The messages that asked for the pending input: chat_id ->
+        # [(message_id, delete)]. Once the input has done its job they are
+        # taken away (a picker) or stripped of their buttons (a question) —
+        # a list left standing after the choice invites a second tap.
+        self.prompt_cards: dict[int, list[tuple[int, bool]]] = {}
         # Incoming messages wait here for the rest of their burst, so a
         # forwarded conversation, an album and the sentence that explains it
         # reach Claude as one prompt.
@@ -904,6 +909,28 @@ class CCBot:
         # systemd's Restart=always does the rest.
         await self.dp.stop_polling()
 
+    def _hold_card(self, chat_id: int, msg: Message | None,
+                   delete: bool) -> None:
+        """Remember a message that belongs to the pending input."""
+        if msg is not None:
+            self.prompt_cards.setdefault(chat_id, []).append(
+                (msg.message_id, delete))
+
+    async def _retire_cards(self, chat_id: int) -> None:
+        """The pending input has been used: clear what asked for it."""
+        for msg_id, delete in self.prompt_cards.pop(chat_id, []):
+            with contextlib.suppress(Exception):
+                if delete:
+                    await self.bot.delete_message(chat_id, msg_id)
+                else:
+                    await self.bot.edit_message_reply_markup(
+                        chat_id=chat_id, message_id=msg_id, reply_markup=None)
+
+    async def _retire(self, msg: Message) -> None:
+        """Take a picker away once the choice made on it has come true."""
+        with contextlib.suppress(Exception):
+            await msg.delete()
+
     def _ask_name(self, chat_id: int, mgd) -> str:
         """Arm "the next message is the name" and word the question.
 
@@ -913,6 +940,7 @@ class CCBot:
         line.
         """
         self.pending[chat_id] = ("rename", mgd.session_id, time.time())
+        self.prompt_cards.pop(chat_id, None)
         return _("✏️ What should <b>{name}</b> be called?\n"
                  "Send the name in your next message (up to {limit} "
                  "characters).\n<code>-</code> gives the automatic name "
@@ -934,15 +962,18 @@ class CCBot:
             if wanted:
                 head = _("❌ There is nothing left of that name once "
                          "unprintable characters are dropped.") + "\n\n"
-            await m.answer(head + self._ask_name(m.chat.id, mgd),
-                           parse_mode="HTML",
-                           reply_markup=cancel_rename_kb(mgd.session_id))
+            ask = await m.answer(head + self._ask_name(m.chat.id, mgd),
+                                 parse_mode="HTML",
+                                 reply_markup=cancel_rename_kb(mgd.session_id))
+            self._hold_card(m.chat.id, ask, delete=False)
             return
         # Only the display name changes: `name` stays the one Claude was
         # launched with, which is how the session is found again after /clear.
         self.store.set_custom_name(mgd.session_id, None if name == auto else name)
         # Keep the tmux window in step, so `tmux attach` shows the same name.
         await tmux.rename_window(mgd.window_id, util.window_name(name))
+        # The question is answered: its «Cancel» would now only mislead.
+        await self._retire_cards(m.chat.id)
         log.info("session renamed id=%s %r -> %r",
                  mgd.session_id[:8], mgd.full_label, name)
         fresh = self.store.get(mgd.session_id) or mgd
@@ -1997,6 +2028,7 @@ class CCBot:
         if pend and time.time() - pend[-1] > _PENDING_TTL:
             await m.answer(_("⌛️ That request has expired — treating this as "
                              "an ordinary message."))
+            self.prompt_cards.pop(chat_id, None)
             pend = None
         if pend and pend[0] == "adddir":
             candidate = text.strip()
@@ -2039,7 +2071,10 @@ class CCBot:
                     "so I am sending it to the session."
                 ))
             else:
-                await self._create(chat_id, candidate)
+                if await self._create(chat_id, candidate):
+                    await self._retire_cards(chat_id)
+                else:
+                    self.prompt_cards.pop(chat_id, None)
                 return
         elif pend and pend[0] == "dialog":
             _kind, session_id, number, _ts = pend
@@ -2099,6 +2134,9 @@ class CCBot:
         # message is not swallowed as a directory path.
         if not data.startswith(("nd:manual", "dt:", "hfind")):
             self.pending.pop(chat_id, None)
+            # Not deleted: the button pressed may have turned one of them
+            # into its own card («Cancel» on a rename opens the session).
+            self.prompt_cards.pop(chat_id, None)
 
         if data.startswith("grp:"):
             # A divider row still has to answer a tap: it says what the group
@@ -2244,16 +2282,23 @@ class CCBot:
             arg = data[3:]
             if arg == "manual":
                 self.pending[chat_id] = ("dir", time.time())
+                self.prompt_cards.pop(chat_id, None)
                 await c.answer()
-                await msg.answer(
+                ask = await msg.answer(
                     _("Send the absolute path of a directory (it starts "
                       "with / or ~).\nOr just press any button to cancel.")
                 )
+                # The list stays until the path turns out to be real, so a
+                # typo still has the buttons to fall back on.
+                self._hold_card(chat_id, msg, delete=True)
+                self._hold_card(chat_id, ask, delete=True)
                 return
             await c.answer(_("Starting…"))
             idx = int(arg)
-            if 0 <= idx < len(self.dir_choices):
-                await self._create(chat_id, self.dir_choices[idx])
+            if (0 <= idx < len(self.dir_choices)
+                    and await self._create(chat_id, self.dir_choices[idx])):
+                # The session's own "✅ Created" card is the answer now.
+                await self._retire(msg)
             return
 
         if data.startswith("res:"):
@@ -2284,7 +2329,8 @@ class CCBot:
                 await c.answer(self._closed_gone(data[6:]), show_alert=True)
                 return
             await c.answer(_("Bringing it up…"))
-            await self._create(chat_id, v.cwd, resume=v.session_id)
+            if await self._create(chat_id, v.cwd, resume=v.session_id):
+                await self._retire(msg)
             return
 
         if data.startswith("s:"):
@@ -2537,7 +2583,8 @@ class CCBot:
                 await c.answer(_("Session not found"), show_alert=True)
                 return
             await c.answer(_("Moving it over…"))
-            await self._adopt_foreign(chat_id, v)
+            if await self._adopt_foreign(chat_id, v):
+                await self._retire(msg)
             return
 
         if data.startswith("fx:"):
@@ -2641,8 +2688,10 @@ class CCBot:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
             await c.answer()
-            await msg.answer(self._ask_name(chat_id, mgd), parse_mode="HTML",
-                             reply_markup=cancel_rename_kb(mgd.session_id))
+            ask = await msg.answer(self._ask_name(chat_id, mgd),
+                                   parse_mode="HTML",
+                                   reply_markup=cancel_rename_kb(mgd.session_id))
+            self._hold_card(chat_id, ask, delete=False)
             return
 
         if data.startswith("lang:"):
@@ -2780,14 +2829,14 @@ class CCBot:
             return None
         return note
 
-    async def _adopt_foreign(self, chat_id: int, v) -> None:
+    async def _adopt_foreign(self, chat_id: int, v) -> bool:
         """Stop a terminal session and bring it back up inside tmux."""
         note = await self._stop_foreign(chat_id, v)
         if note is None:
-            return
+            return False
         await note.edit_text(_("✅ {name} stopped — bringing it up in tmux…"
                               ).format(name=v.name))
-        await self._create(chat_id, v.cwd, resume=v.session_id)
+        return await self._create(chat_id, v.cwd, resume=v.session_id) is not None
 
     async def _end_foreign(self, chat_id: int, v) -> bool:
         """Stop a terminal session and leave it stopped.

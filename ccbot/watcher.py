@@ -568,7 +568,7 @@ class Watcher:
         if dialog is None:
             rt.last_dialog_sig = None
             rt.last_dialog_state = None
-            rt.dialog_msg_id = None
+            await self._retire_dialog(rt)
             await self._report_blocked(session_id, name, raw, rt,
                                        agent_status, busy)
             return
@@ -589,6 +589,8 @@ class Watcher:
         if not same_question and time.time() - rt.acted_at < _DIALOG_SETTLE:
             return          # mid-redraw: wait for the screen to settle
         if not same_question:
+            # The old card's digits would now press into the new question.
+            await self._retire_dialog(rt)
             log.info("dialog id=%s title=%r options=%d preview=%s",
                      session_id[:8], dialog.title, len(dialog.options),
                      bool(dialog.preview))
@@ -842,6 +844,25 @@ class Watcher:
         except Exception:
             # Too old to edit, or unchanged — neither is worth a word to the user.
             log.debug("pulse edit skipped", exc_info=True)
+
+    async def _retire_dialog(self, rt: SessionRuntime) -> None:
+        """Strip the buttons off a card whose question has left the screen.
+
+        However it was answered — a digit from the chat, «Chat about this»,
+        Submit, the user's own text, a key pressed in the terminal, the next
+        section of a multi-part question — the buttons left on it now act on
+        nothing, or on whatever question stands there next. The card keeps its
+        text: it is the record of what was asked.
+        """
+        if rt.dialog_msg_id is None:
+            return
+        msg_id, rt.dialog_msg_id = rt.dialog_msg_id, None
+        try:
+            await self.bot.edit_message_reply_markup(
+                chat_id=self.chat_id, message_id=msg_id, reply_markup=None)
+        except Exception:
+            # Already stripped by the handler that answered it, or too old.
+            log.debug("dialog card retire skipped", exc_info=True)
 
     async def _drop_pulse(self, rt: SessionRuntime) -> None:
         """Remove the heartbeat once the answer itself arrives."""
