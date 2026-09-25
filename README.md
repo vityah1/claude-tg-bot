@@ -6,6 +6,10 @@ From your phone it lets you see the list of sessions, start new ones in any
 directory, bring closed ones back, send prompts and `/`-commands, and — above
 all — **answer Claude's interactive questions** with buttons.
 
+An overview — what it is for and how it compares with the built-in remote
+control, SSH from the phone and API-wrapper bots — is on the project page:
+**[vhworx.com/claude-tg-bot](https://vhworx.com/claude-tg-bot)**.
+
 ## Quick start
 
 You need Linux or WSL, [Claude Code](https://claude.com/product/claude-code)
