@@ -115,6 +115,18 @@ def _dialog_title(dialog) -> str:
 # before the rest of it does. Reporting a frame from inside that redraw is how
 # an answered question came back with only "Cancel" left on it.
 _DIALOG_SETTLE = 3.0
+# How long a new question has to stand before its card is sent. Claude Code
+# draws a permission dialog 60-115 ms before it writes the tool call it asks
+# about to the transcript (2.1.286), so a tick that read the transcript inside
+# that gap sent the card first and the "🔧 Bash: …" line a tick later, under
+# the buttons — 120 of 1063 cards by 2026-10-01. A tick later the record has
+# been read and goes out ahead of the card.
+_TRANSCRIPT_LAG = 1.0
+# How long a standing card holds back the rest of its session's output. Only
+# late records of the same turn are expected meanwhile; a card that sits
+# longer than this is not about to be pressed, and a screen misread as a
+# question must not swallow a session's output for good.
+_HOLD_MAX = 300.0
 
 # How much scrollback to read for the reasoning above a dialog: a long answer
 # has usually pushed its own beginning off the top of the pane by then.
@@ -142,6 +154,13 @@ class SessionRuntime:
         self.last_dialog_sig: str | None = None
         self.last_dialog_state: str | None = None
         self.dialog_msg_id: int | None = None
+        self.dialog_sent_at = 0.0
+        # A question seen on screen but not sent yet, and since when.
+        self.seen_dialog_sig: str | None = None
+        self.seen_dialog_at = 0.0
+        # The question the transcript last spoke under. What it said is in
+        # the chat already, so reading it off the screen would say it twice.
+        self.flushed_sig: str | None = None
         self.reported_gone = False
         self.alerted: dict[str, int] = {}
         self.title_tried = 0.0
@@ -554,11 +573,29 @@ class Watcher:
         busy = screenmod.is_busy(raw)
         status = screenmod.read_status(raw)
         usage = status_feed.read(session_id)
-        await self._check_usage(name, rt, usage, status)
+        # Which question this is, versus which row is highlighted. The first
+        # warrants a new message; the second only edits the existing one, so
+        # walking a list with the arrow buttons does not spam the chat.
+        sig = ""
+        if dialog is not None:
+            sig = dialog.question + "|" + "|".join(o.label for o in dialog.options)
+        # While this session's card waits for an answer it stays the last
+        # thing the session said: a message under it moves the buttons as the
+        # user reaches for them. Whatever arrives meanwhile is kept for after
+        # the answer, and joins what the answer brings. A spinner means the
+        # session is at work and what looks like a dialog is not one.
+        holding = (dialog is not None and not busy
+                   and rt.dialog_msg_id is not None
+                   and sig == rt.last_dialog_sig
+                   and time.monotonic() - rt.dialog_sent_at < _HOLD_MAX)
+        if not holding:
+            await self._check_usage(name, rt, usage, status)
+        elif rt.buffer:
+            rt.buffer_since = time.time()
 
         # Flush buffered output once Claude goes quiet, or a dialog appears.
         age = time.time() - rt.buffer_since if rt.buffer_since else 0
-        should_flush = rt.buffer and (
+        should_flush = rt.buffer and not holding and (
             dialog is not None
             or (not busy and age >= _FLUSH_IDLE)
             or age >= _MAX_BUFFER_AGE
@@ -568,6 +605,8 @@ class Watcher:
             rt.buffer.clear()
             rt.buffer_since = 0.0
             log.info("flush id=%s name=%s chars=%d", session_id[:8], name, len(body))
+            if dialog is not None:
+                rt.flushed_sig = sig
             await self._drop_pulse(rt)
             await self._emit(session_id, name, body, usage, status)
 
@@ -578,16 +617,14 @@ class Watcher:
         if dialog is None:
             rt.last_dialog_sig = None
             rt.last_dialog_state = None
+            rt.seen_dialog_sig = None
+            rt.flushed_sig = None
             await self._retire_dialog(rt)
             await self._report_blocked(session_id, name, raw, rt,
                                        agent_status, busy)
             return
         rt.clear_blocked()
 
-        # Which question this is, versus which row is highlighted. The first
-        # warrants a new message; the second only edits the existing one, so
-        # walking a list with the arrow buttons does not spam the chat.
-        sig = dialog.question + "|" + "|".join(o.label for o in dialog.options)
         # Ticks belong to the state, not to the question: a checkbox changes
         # with every press, and reading that as a new question would answer
         # one multi-select list with a chat full of copies of it.
@@ -596,17 +633,24 @@ class Watcher:
         if sig == rt.last_dialog_sig and state == rt.last_dialog_state:
             return
         same_question = sig == rt.last_dialog_sig
+        if not same_question and sig != rt.seen_dialog_sig:
+            # Monotonic: under WSL the wall clock steps back by seconds.
+            rt.seen_dialog_sig, rt.seen_dialog_at = sig, time.monotonic()
         if not same_question and time.time() - rt.acted_at < _DIALOG_SETTLE:
             return          # mid-redraw: wait for the screen to settle
         if not same_question:
             # The old card's digits would now press into the new question.
             await self._retire_dialog(rt)
+            if time.monotonic() - rt.seen_dialog_at < _TRANSCRIPT_LAG:
+                return      # the transcript has not caught up with the screen
             log.info("dialog id=%s title=%r options=%d preview=%s",
                      session_id[:8], dialog.title, len(dialog.options),
                      bool(dialog.preview))
-            if not should_flush and dialog.kind == "choice":
-                # The transcript said nothing this tick, which for a question
-                # is the normal case rather than silence — see _preface. The
+            if rt.flushed_sig != sig and dialog.kind == "choice":
+                # The transcript has said nothing while this question stood
+                # (the card waits a tick for it, `_TRANSCRIPT_LAG`), which for
+                # a question is the normal case rather than silence — see
+                # _preface. The
                 # settings pickers are the exception: nothing is said above
                 # them (the chat opened them), and they draw no rule the
                 # reading could stop at, so it used to send a line of the
@@ -638,6 +682,7 @@ class Watcher:
             if dialog.preview and render.max_line_width(dialog.preview) > _PHONE_COLS:
                 await self.send_preview(session_id, dialog)
         rt.dialog_msg_id = getattr(msg, "message_id", None)
+        rt.dialog_sent_at = time.monotonic()
 
     async def _emit(self, session_id: str, name: str, body: str,
                     usage, status) -> None:

@@ -17,6 +17,17 @@ need to duplicate it here).
   `systemctl --user restart claude-tg-bot`. Claude's sessions survive it
   (`KillMode=process` — only the bot dies, the tmux server stays). `/restart` in
   the chat does the same thing.
+- 🔴 **Restarting is your job, not the user's.** Once the change is tested,
+  restart the bot yourself and report it done — never end with "the bot still
+  runs the old code, it needs a restart" (2026-10-01, the user had to say so).
+  Before restarting, check the log tail: an `in msg` from the last ~10 s with
+  no `prompt ->` after it is still waiting in the in-memory inbox, and the
+  restart drops it (a photo with a question was lost that way the same day).
+- 🔴 **Never print a captured dialog into your own terminal.** The bot reads
+  this session's pane too, and a question printed as tool output becomes a
+  card in the chat — the user pressed «1» on one and it was typed into the
+  session as a prompt (2026-10-01). Write captures to a file in the scratchpad
+  and print only what the checks returned.
 - Installing on a clean machine is `./install.sh` (a wrapper around
   `bin/setup.py`). `./install.sh --doctor` changes nothing and checks the whole
   install: tmux, claude, venv, `.env` (with a live `getMe`), the status-line
@@ -278,7 +289,13 @@ is still alive, too. That is why rows are read tolerantly
   (choosing an option) and `Esc to cancel · Tab to amend · ctrl+e to explain` (a
   permission request from a tool or a `PreToolUse` hook). Options are searched
   **bottom-up from the footer to "1."** — top-down, the parser latches onto
-  Claude's numbered prose. A Claude Code update breaks this file specifically.
+  Claude's numbered prose. A footer counts only with **nothing of the
+  ordinary bottom (`_UI_BOTTOM`) drawn under it** (`_footer_index`): a real
+  dialog covers the mode/status line, a dialog printed as tool output sits
+  above it — and without that test a printed capture became a live card
+  (2026-10-01). `_UI_BOTTOM` carries `← for agents` because the manual-mode
+  line of 2.1.286 has no `(shift+tab`, and `claude v` is the user's own status
+  line, not the bot's. A Claude Code update breaks this file specifically.
 - 🔴 **The model list and the effort levels are never written down in the bot.**
   They are read off `/model` and `/effort`, which are dialogs of their own
   shape (`screen._model_dialog` / `_effort_dialog`, measured on 2.1.258) and
@@ -393,6 +410,20 @@ is still alive, too. That is why rows are read tolerantly
   a new question with options missing. `Watcher._tick_session` therefore
   reports no *new* dialog within `_DIALOG_SETTLE` of the bot's own keypress
   (`note_input`), the same mark `_report_blocked` uses.
+- 🔴 **Nothing from a session lands under its own open question card.**
+  Claude Code draws a permission dialog 60–115 ms *before* it writes the tool
+  call to the transcript (measured on 2.1.286), so a tick that read the
+  transcript inside that gap sent the card and then, a tick later, the
+  "🔧 Bash: …" line under it — moving the buttons as the user reached for
+  them (120 of 1063 cards by 2026-10-01). Two rules in `_tick_session` hold
+  it: a new question is sent only after standing `_TRANSCRIPT_LAG`
+  (`seen_dialog_at`, on `time.monotonic()` — the WSL wall clock steps back by
+  seconds), so the late record is read and flushed ahead of the card; and
+  while the card waits (`holding`: same question, card sent, no spinner) the
+  buffer and the usage alerts are held, then go out with whatever the answer
+  brings. An answer from the chat (`release_dialog`) ends the hold at once,
+  and `_HOLD_MAX` ends it anyway, so a screen misread as a question cannot
+  swallow a session's output for good.
 - **The reasoning behind a question is on the screen and nowhere else.** Claude
   Code writes an assistant record only when the tool call inside it returns,
   and `AskUserQuestion` returns on a human — so the analysis the options are

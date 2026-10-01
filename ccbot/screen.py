@@ -64,8 +64,12 @@ _LABEL_SPLIT_RE = re.compile(r"\s{2,}")
 # belongs to the ordinary UI — however much the text above it may look like a
 # dialog. Which it does: this repository prints those very strings while it is
 # being worked on, and that is exactly how a heredoc full of documentation
-# turned into two questions in somebody's chat.
-_UI_BOTTOM = ("mode on (shift+tab", "mode off (shift+tab", "claude v")
+# turned into two questions in somebody's chat. "claude v" is only there when
+# the user's own status line prints it, and since 2.1.286 the manual-mode line
+# has no "(shift+tab" either ("⏸ manual mode on · ← for agents"); the agents
+# hint is on the mode line in every mode.
+_UI_BOTTOM = ("mode on (shift+tab", "mode off (shift+tab", "claude v",
+              "← for agents")
 
 # "❯ 1. PostgreSQL" / "  2. No, exit"
 _OPTION_RE = re.compile(
@@ -261,13 +265,21 @@ def _clean(lines: list[str]) -> list[str]:
 
 
 def _footer_index(lines: list[str]) -> int | None:
-    """The lowest line that reads like a dialog footer."""
+    """The lowest line that reads like a dialog footer.
+
+    A dialog owns the bottom of the terminal, so a footer with the mode or
+    status line still drawn under it is a dialog printed as output. A session
+    working on this repository prints captured screens, and one of them
+    became a card whose «1» was typed into the session as a prompt
+    (2026-10-01).
+    """
     for i in range(len(lines) - 1, -1, -1):
         ln = lines[i]
         low = ln.lower()
         esc_footer = _ESC_MARKER in ln and any(c in low for c in _ESC_COMPANIONS)
         if any(m in ln for m in _FOOTER_MARKERS) or esc_footer:
-            return i
+            below = "\n".join(lines[i + 1:]).lower()
+            return None if any(m in below for m in _UI_BOTTOM) else i
     return None
 
 
