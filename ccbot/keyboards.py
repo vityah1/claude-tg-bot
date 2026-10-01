@@ -336,14 +336,16 @@ def route_kb(active: str = "") -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def route_pick_kb(managed: list[SessionView],
-                  active: str | None = None) -> InlineKeyboardMarkup:
+def route_pick_kb(managed: list[SessionView], active: str | None = None,
+                  back: bool = True) -> InlineKeyboardMarkup:
     """The session list, but every row is a destination for the held batch.
 
     Foreign sessions are left out on purpose: their stdin is out of reach, so
     a batch could not be delivered there. A new session and the recent ones
     are both offered, because "the context to start from" usually means
     exactly that — a session that does not exist yet, or one to come back to.
+    Without *back* the list is the question itself (no session is active, so
+    there is no shorter card to go back to) and ends in «🗑 Discard» instead.
     """
     kb = InlineKeyboardBuilder()
     for v in managed:
@@ -359,7 +361,12 @@ def route_pick_kb(managed: list[SessionView],
         InlineKeyboardButton(text=_("➕ New session"), callback_data="fwd:new"),
         InlineKeyboardButton(text=_("🕘 Recent"), callback_data="fwd:hist"),
     )
-    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="fwd:back"))
+    if back:
+        kb.row(InlineKeyboardButton(text=_("⬅️ Back"),
+                                    callback_data="fwd:back"))
+    else:
+        kb.row(InlineKeyboardButton(text=_("🗑 Discard"),
+                                    callback_data="fwd:drop"))
     return kb.as_markup()
 
 

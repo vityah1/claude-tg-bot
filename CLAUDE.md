@@ -168,7 +168,12 @@ is still alive, too. That is why rows are read tolerantly
   before draws "Is this a project you trust?" — no digits, so `find_dialog`
   does not see it, hence the screen is sent and the batch stays parked. And a
   batch that names a session by replying to its message is **never** asked
-  about. Own typing keeps going straight to the active session.
+  about. Own typing keeps going straight to the active session — **unless
+  there is none**: then it is parked too (`CCBot._homeless`) and the card is
+  the destination list itself, ➕ first, with no «Current». Answering "no
+  active session" dropped the message (2026-10-01: it had to be sent again,
+  with the forward, after /sessions → ➕); only a lone Claude `/command`
+  still gets that answer.
 - 🔴 **An attachment is never filtered by format.** `_attachment()` takes every
   kind Telegram has (photo, document, video, audio, voice, video note,
   animation, sticker) and hands the path over whatever the MIME type says: a

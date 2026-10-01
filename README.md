@@ -774,7 +774,15 @@ Three details make it usable rather than merely correct:
   arrives before any session owns it is downloaded under `media/inbox`.
 
 Anything the user types themselves still goes straight to the active session:
-a question per message would make the ordinary case cost a tap.
+a question per message would make the ordinary case cost a tap. **With no
+session active, a batch is parked the same way, forwarded or not**, and the
+question opens straight on the destinations (the sessions in tmux, ➕ a new
+one, 🕘 a closed one, 🗑 discard) — there is no «Current» to offer, and
+answering "no active session" used to drop the message, so it had to be sent
+again once a session existed. A Claude command on its own (`/compact`) is the
+exception: it acts on a running session, so it still gets that answer. A
+session started from /sessions while a batch waits moves the question under
+its «✅ Created» line once its TUI is up, where «▶️ Current» now names it.
 
 ## Project directories
 

@@ -450,7 +450,9 @@ class _Parked:
     Forwarding a conversation is how a session is given the context it should
     start from, so its destination is a question — and everything sent while
     that question is open joins the same batch, because the comment that
-    explains a forward ("look at this") is part of it.
+    explains a forward ("look at this") is part of it. A batch sent while no
+    session is active is held the same way: there is nothing to send it to
+    yet, and the session it is meant for is usually about to be started.
     """
 
     items: list[_Item] = field(default_factory=list)
@@ -462,6 +464,11 @@ class _Parked:
     # Set by "new session" and by "recent": whichever session `_create` brings
     # up next is the destination.
     await_new: bool = False
+
+    @property
+    def forwarded(self) -> bool:
+        """Whether any of it came from elsewhere — it decides the wording."""
+        return any(i.sender for i in self.items)
 
 
 @dataclass
@@ -513,8 +520,9 @@ class CCBot:
         self.inbox: dict[int, _Inbox] = {}
         # Forwarded batches waiting for a destination, one per chat.
         self.parked: dict[int, _Parked] = {}
-        # Notices sent from a synchronous check (an expired batch): kept only
-        # so the task is not garbage-collected while it is still speaking.
+        # Notices sent from outside a handler (an expired batch, the question
+        # re-asked after a launch): kept only so the task is not
+        # garbage-collected while it is still speaking.
         self.expiries: set[asyncio.Task] = set()
         self.dir_choices: list[str] = []
         # The last history search per chat: a query does not fit in 64 bytes
@@ -1707,12 +1715,17 @@ class CCBot:
             else:
                 await self._ask_route(chat_id)
             return
-        if routed is None and any(i.sender for i in items):
+        forwarded = any(i.sender for i in items)
+        if routed is None and (forwarded or self._homeless(chat_id, items)):
             # Nothing said where this goes and it came from somewhere else:
             # forwarding a conversation is how a session is given the context
             # it starts from, so the active one is a guess, not an answer.
+            # With no session active there is not even a guess, and answering
+            # "no active session" dropped the message on the floor — it had
+            # to be sent again once a session existed (2026-10-01).
             self.parked[chat_id] = _Parked(items=list(items), at=time.time())
-            log.info("forwarded batch parked: chat=%s items=%d",
+            log.info("%s batch parked: chat=%s items=%d",
+                     "forwarded" if forwarded else "homeless",
                      chat_id, len(items))
             await self._ask_route(chat_id)
             return
@@ -1720,6 +1733,22 @@ class CCBot:
         if not mgd:
             return
         await self._send_batch(items, mgd, note)
+
+    def _homeless(self, chat_id: int, items: list[_Item]) -> bool:
+        """A batch with no session to go to, held rather than refused.
+
+        A Claude command on its own is the exception: it acts on a session
+        that is already running, so "/compact" kept for a session started
+        afterwards would be meaningless there. A path is not a command,
+        though it starts the same way: "/home/x.log — look" is held.
+        """
+        if self._active_managed(chat_id) is not None:
+            return False
+        if len(items) != 1:
+            return True
+        head = items[0].text.split(maxsplit=1)[0] if items[0].text.strip() else ""
+        return not (len(head) > 1 and head.startswith("/")
+                    and "/" not in head[1:])
 
     async def _send_batch(self, items: list[_Item], mgd, note: str = "") -> None:
         """Fold a batch into one prompt, send it, and say where it went."""
@@ -1791,14 +1820,20 @@ class CCBot:
             if parked.ask_id:
                 await self.bot.delete_message(chat_id, parked.ask_id)
         with contextlib.suppress(Exception):
-            await self.bot.send_message(chat_id, ngettext(
+            await self.bot.send_message(chat_id, (ngettext(
                 "⌛️ The forwarded message that was waiting for a session has "
                 "expired — it went nowhere. Forward it again if it is still "
                 "needed.",
                 "⌛️ The {count} forwarded messages that were waiting for a "
                 "session have expired — they went nowhere. Forward them again "
                 "if they are still needed.",
-                len(parked.items)).format(count=len(parked.items)))
+                len(parked.items)) if parked.forwarded else ngettext(
+                "⌛️ The message that was waiting for a session has expired — "
+                "it went nowhere. Send it again if it is still needed.",
+                "⌛️ The {count} messages that were waiting for a session have "
+                "expired — they went nowhere. Send them again if they are "
+                "still needed.",
+                len(parked.items))).format(count=len(parked.items)))
 
     async def _ask_route(self, chat_id: int) -> None:
         """Ask where the held batch goes, always at the bottom of the chat."""
@@ -1812,18 +1847,35 @@ class CCBot:
                 await self.bot.delete_message(chat_id, parked.ask_id)
             parked.ask_id = None
         files = sum(1 for i in parked.items if i.path)
-        head = ngettext("📥 <b>{count} forwarded message</b> is waiting",
-                        "📥 <b>{count} forwarded messages</b> are waiting",
-                        len(parked.items)).format(count=len(parked.items))
+        count = len(parked.items)
+        head = (ngettext("📥 <b>{count} forwarded message</b> is waiting",
+                         "📥 <b>{count} forwarded messages</b> are waiting",
+                         count) if parked.forwarded else
+                ngettext("📥 <b>{count} message</b> is waiting",
+                         "📥 <b>{count} messages</b> are waiting",
+                         count)).format(count=count)
         if files:
             head += " · " + ngettext("{count} file", "{count} files",
                                      files).format(count=files)
         active = self._active_managed(chat_id)
-        text = head + "\n\n" + _("Which session should they go to? Anything "
-                                 "you send meanwhile joins them.")
+        if active:
+            text = head + "\n\n" + _("Which session should they go to? "
+                                     "Anything you send meanwhile joins them.")
+            kb = route_kb(active.full_label)
+        else:
+            # No session is active, so «▶️ Current» would lead nowhere and
+            # «📋 Another session» would be a tap spent on reaching the list:
+            # the list itself is the question, and «➕ New session» on it is
+            # the usual answer.
+            text = head + "\n\n" + _(
+                "No session is active, so there is nowhere to send them yet. "
+                "Start a new one, bring a closed one back or pick one from "
+                "the list — they go there as soon as it is up. Anything you "
+                "send meanwhile joins them.")
+            kb = route_pick_kb(await sess.managed_views(self.store), None,
+                               back=False)
         msg = await self.bot.send_message(
-            chat_id, text, parse_mode="HTML",
-            reply_markup=route_kb(active.full_label if active else ""))
+            chat_id, text, parse_mode="HTML", reply_markup=kb)
         if msg:
             parked.ask_id = msg.message_id
 
@@ -1863,8 +1915,18 @@ class CCBot:
         single tap that finishes the job.
         """
         mgd = self.store.get(session_id)
-        parked = self.parked.get(chat_id)
-        if mgd is None or parked is None or not parked.await_new:
+        parked = self._parked_of(chat_id)
+        if mgd is None or parked is None:
+            return
+        if not parked.await_new:
+            # Started from /sessions rather than from the question: the card
+            # above still offers the sessions as they were, without this one.
+            # It is asked again under «✅ Created», with «▶️ Current» naming
+            # the new session — but only once the TUI is up, or that button
+            # pressed in the first seconds pastes the batch into a shell.
+            task = asyncio.create_task(self._reask_when_ready(chat_id, mgd))
+            self.expiries.add(task)
+            task.add_done_callback(self.expiries.discard)
             return
         if not await self._wait_ready(mgd):
             # The usual reason is not slowness but a question: a directory
@@ -1893,6 +1955,26 @@ class CCBot:
             return
         parked.await_new = False
         await self._deliver_parked(chat_id, mgd)
+
+    async def _reask_when_ready(self, chat_id: int, mgd) -> None:
+        """Move the question under a session started past it, once it is up.
+
+        Not ready in time means the window is asking something first (a new
+        directory is); the old card stays, and the next message re-asks.
+        This runs outside a handler, so a failure says so itself.
+        """
+        try:
+            if not await self._wait_ready(mgd):
+                log.info("no re-ask: %s not ready", mgd.session_id[:8])
+                return
+            parked = self._parked_of(chat_id)
+            if parked is not None and not parked.await_new:
+                await self._ask_route(chat_id)
+        except Exception:
+            log.exception("re-ask after launch failed: chat=%s", chat_id)
+            with contextlib.suppress(Exception):
+                await self.bot.send_message(
+                    chat_id, _("❌ Could not pass that on — see /log"))
 
     async def _wait_ready(self, mgd, timeout: float = _LAUNCH_READY) -> bool:
         """Wait until the window shows Claude Code's input box.
@@ -1928,12 +2010,16 @@ class CCBot:
         if arg == "drop":
             self.parked.pop(chat_id, None)
             await c.answer(_("Discarded"))
-            await self._safe_edit(msg, ngettext(
+            await self._safe_edit(msg, (ngettext(
                 "🗑 The forwarded message was discarded — it went to no "
                 "session.",
                 "🗑 The {count} forwarded messages were discarded — they went "
                 "to no session.",
-                len(parked.items)).format(count=len(parked.items)))
+                len(parked.items)) if parked.forwarded else ngettext(
+                "🗑 The message was discarded — it went to no session.",
+                "🗑 The {count} messages were discarded — they went to no "
+                "session.",
+                len(parked.items))).format(count=len(parked.items)))
             return
         if arg == "cur":
             mgd = self._active_managed(chat_id)
@@ -1986,10 +2072,14 @@ class CCBot:
         """The session list, as a list of destinations for the held batch."""
         views = await sess.managed_views(self.store)
         active = self.store.get_active(chat_id)
-        text = _("📋 <b>Where should the forwarded messages go?</b>\n\n"
-                 "A session in tmux takes them straight away. ➕ starts a new "
-                 "one in a directory you pick, 🕘 brings a closed one back — "
-                 "either way they are sent as soon as it is up.")
+        parked = self.parked.get(chat_id)
+        title = (_("📋 <b>Where should the forwarded messages go?</b>")
+                 if parked is None or parked.forwarded
+                 else _("📋 <b>Where should the messages go?</b>"))
+        text = title + "\n\n" + _(
+            "A session in tmux takes them straight away. ➕ starts a new one "
+            "in a directory you pick, 🕘 brings a closed one back — either "
+            "way they are sent as soon as it is up.")
         await self._safe_edit(msg, text, parse_mode="HTML",
                               reply_markup=route_pick_kb(views, active))
 
