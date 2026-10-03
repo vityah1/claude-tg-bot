@@ -225,6 +225,16 @@ is still alive, too. That is why rows are read tolerantly
   not overwrite it. A question closed any other way (terminal, Esc, the next
   section replacing it — whose digits would press into the new one) gets
   `Watcher._retire_dialog`'s «⏹ Question closed».
+- 🔴 **A launch ends on the session's own card, never on a bare line.**
+  Every way into a session — ➕ new, ▶️ resume from 🕘 history or a search,
+  a restore — goes through `_create`, and `_create` answers with
+  `_launch_card`: the card a row of `/sessions` opens, the name the session
+  was picked by (`title=`, set before the card is built), «🟢 Text now goes
+  to …» and the previously active session named as still working. The card
+  and the settled picker line (`_settle(..., session_id)`) are both
+  registered to the new session. A bare «✅ Resumed: 7loc-7487» — launch
+  name, no buttons, no word about the text — sent two messages meant for a
+  session found by search to another one (2026-10-03).
 - **`screen.is_busy()` needs the spinner line, not only the interrupt hint.**
   "esc to interrupt" joins the spinner a few seconds into a turn, so the hint
   alone reads the first seconds of every turn as idle (2.1.251:

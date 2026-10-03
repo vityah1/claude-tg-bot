@@ -949,11 +949,18 @@ class CCBot:
                         chat_id=chat_id, message_id=msg_id,
                         reply_markup=done_kb(mark))
 
-    @staticmethod
-    async def _settle(msg: Message, summary: str) -> None:
-        """Turn a picker into the line saying what was picked on it."""
+    async def _settle(self, msg: Message, summary: str,
+                      session_id: str | None = None) -> None:
+        """Turn a picker into the line saying what was picked on it.
+
+        A line that names the session it launched belongs to that session: a
+        reply to "▶️ Resuming …" is meant for the session it resumed, and an
+        unregistered line sent it to whichever was active (2026-10-03).
+        """
         with contextlib.suppress(Exception):
             await msg.edit_text(summary, parse_mode="HTML")
+        if session_id:
+            self.store.remember_message(msg.message_id, session_id)
 
     @staticmethod
     async def _mark(msg: Message, label: str) -> None:
@@ -1093,13 +1100,16 @@ class CCBot:
 
     # ---------------------------------------------------------- session ops
     async def _create(self, chat_id: int, cwd: str,
-                      resume: str | None = None) -> str | None:
+                      resume: str | None = None,
+                      title: str | None = None) -> str | None:
         """Start (or resume) a session in *cwd*; the new id, or None.
 
         The id is returned because a forwarded batch may be waiting for
         exactly this session — see `_deliver_after_launch`, which is called
         from here so that both routes into a new session ("new" and a resume
-        from the history list) deliver it.
+        from the history list) deliver it. *title* is what the chat called
+        the session where it was picked; see `_launch_card` for why it has to
+        be in place before the card goes out.
         """
         cwd = str(Path(cwd).expanduser())
         if not Path(cwd).is_dir():
@@ -1120,24 +1130,68 @@ class CCBot:
         await tmux.run_in_window(wid, f"claude {flag} -n {name}")
         log.info("session created id=%s name=%s cwd=%s window=%s resume=%s",
                  session_id[:8], name, cwd, wid, bool(resume))
+        previous = self.store.get_active(chat_id)
         self.store.add(session_id, wid, cwd, name)
+        if title:
+            self.store.set_title(session_id, title)
         self.store.set_active(chat_id, session_id)
+        if resume:
+            # The payload on disk is the previous run's, and its version would
+            # put a false "⬆️" on the card below.
+            updates.note_restarted(session_id)
         # Skip transcript written before now, or a resume would replay history.
         self.watcher.adopt(session_id, skip_existing=True)
-        head = (_("✅ Resumed: <b>{name}</b>") if resume
-                else _("✅ Created: <b>{name}</b>")).format(name=name)
-        await self.bot.send_message(
-            chat_id,
-            f"{head}\n<code>{cwd}</code>\n\n"
-            + _("Locally: <code>{command}</code>").format(
-                command=tmux.attach_hint(wid)),
-            parse_mode="HTML",
-        )
+        await self._launch_card(chat_id, session_id, previous,
+                                resumed=bool(resume))
         # "Send the forwarded messages to a new session" ends here: the
         # session exists now, so the batch that was waiting for one goes in as
         # soon as its TUI is up.
         await self._deliver_after_launch(chat_id, session_id)
         return session_id
+
+    async def _launch_card(self, chat_id: int, session_id: str,
+                           previous: str | None, resumed: bool) -> None:
+        """Answer a launch with the session's own card, the one /sessions opens.
+
+        A bare "✅ Resumed: 7loc-7487" was all a resume used to get: the
+        launch name rather than the one the session was picked by, no
+        controls, and not a word about where text goes now. On 2026-10-03 a
+        session found by a search was resumed that way, the user went on
+        answering another session's question cards, and two messages meant
+        for the found session went to the other one. So a launch ends the way
+        tapping a row of /sessions does — the card, plus who has the text now
+        and who keeps working — registered, so that a reply to it lands in
+        the session it names.
+        """
+        mgd = self.store.get(session_id)
+        if mgd is None:
+            return
+        wid = mgd.window_id
+        tail = [_("🟢 Text now goes to <b>{name}</b>").format(
+            name=html.escape(mgd.full_label))]
+        prev = self.store.get(previous) if previous and previous != session_id \
+            else None
+        if prev:
+            tail = [_("🟢 Text now goes to <b>{name}</b>.\n"
+                      "<b>{previous}</b> keeps working — to write to it, "
+                      "reply to one of its messages.").format(
+                          name=html.escape(mgd.full_label),
+                          previous=html.escape(prev.full_label))]
+        tail.append(_("Locally: <code>{command}</code>").format(
+            command=tmux.attach_hint(wid)))
+        note = " · " + (_("resumed") if resumed else _("new"))
+        card = await self._session_card(mgd, note)
+        if card is None:
+            head = (_("✅ Resumed: <b>{name}</b>") if resumed
+                    else _("✅ Created: <b>{name}</b>")).format(
+                        name=html.escape(mgd.full_label))
+            text, kb = f"{head}\n<code>{html.escape(mgd.cwd)}</code>", None
+        else:
+            text, kb = card
+        msg = await self.bot.send_message(
+            chat_id, text + "\n\n" + "\n".join(tail),
+            parse_mode="HTML", reply_markup=kb)
+        self.store.remember_message(msg.message_id, session_id)
 
     async def _restore_one(self, chat_id: int, o: Orphan) -> bool:
         """Put one stopped session back: a new window, `claude --resume`.
@@ -1151,12 +1205,8 @@ class CCBot:
         session by its launch name until the watcher dug the opening prompt
         out of the transcript again.
         """
-        sid = await self._create(chat_id, o.cwd, resume=o.session_id)
-        if sid is None:
-            return False
-        if o.title:
-            self.store.set_title(sid, o.title)
-        return True
+        return await self._create(chat_id, o.cwd, resume=o.session_id,
+                                  title=o.title) is not None
 
     async def _restore_all(self, chat_id: int, msg: Message | None) -> None:
         """Bring every stopped session back, one at a time.
@@ -1195,7 +1245,7 @@ class CCBot:
         """The 🔌 card — which of the stopped sessions come back.
 
         Every button answers with something visible: a restore prints the
-        session's own "✅ Resumed" card, and the list of what is left is
+        session's own card (`_launch_card`), and the list of what is left is
         redrawn under it.
         """
         if arg == "show":
@@ -1921,9 +1971,10 @@ class CCBot:
         if not parked.await_new:
             # Started from /sessions rather than from the question: the card
             # above still offers the sessions as they were, without this one.
-            # It is asked again under «✅ Created», with «▶️ Current» naming
-            # the new session — but only once the TUI is up, or that button
-            # pressed in the first seconds pastes the batch into a shell.
+            # It is asked again under the new session's card, with «▶️
+            # Current» naming it — but only once the TUI is up, or that
+            # button pressed in the first seconds pastes the batch into a
+            # shell.
             task = asyncio.create_task(self._reask_when_ready(chat_id, mgd))
             self.expiries.add(task)
             task.add_done_callback(self.expiries.discard)
@@ -2431,9 +2482,11 @@ class CCBot:
                 return
             await c.answer(_("Starting…"))
             idx = int(arg)
-            if (0 <= idx < len(self.dir_choices)
-                    and await self._create(chat_id, self.dir_choices[idx])):
-                await self._settle(msg, self._dir_picked(self.dir_choices[idx]))
+            if 0 <= idx < len(self.dir_choices):
+                sid = await self._create(chat_id, self.dir_choices[idx])
+                if sid:
+                    await self._settle(
+                        msg, self._dir_picked(self.dir_choices[idx]), sid)
             return
 
         if data.startswith("res:"):
@@ -2464,11 +2517,20 @@ class CCBot:
                 await c.answer(self._closed_gone(data[6:]), show_alert=True)
                 return
             await c.answer(_("Bringing it up…"))
-            if await self._create(chat_id, v.cwd, resume=v.session_id):
+            # The caption it was picked by goes along as the title, so the
+            # card that answers the press calls it by that rather than by its
+            # launch name. A saved name needs no help — `Store.add` restores
+            # it — and `v.name` is not used directly: with nothing known it
+            # is the "untitled" placeholder, which as a title would keep the
+            # watcher from ever naming the session by its first prompt.
+            sid = await self._create(
+                chat_id, v.cwd, resume=v.session_id,
+                title=v.launched or v.title or v.opening or None)
+            if sid:
                 await self._settle(msg, _(
                     "▶️ Resuming <b>{name}</b>\n<code>{path}</code>").format(
                         name=html.escape(v.name[:_CARD_HEAD]),
-                        path=html.escape(v.cwd)))
+                        path=html.escape(v.cwd)), sid)
             return
 
         if data.startswith("s:"):
@@ -2754,7 +2816,7 @@ class CCBot:
             if await self._adopt_foreign(chat_id, v):
                 await self._settle(msg, _(
                     "🔗 Moving <b>{name}</b> into tmux").format(
-                        name=html.escape(v.name)))
+                        name=html.escape(v.name)), v.session_id)
             return
 
         if data.startswith("fx:"):

@@ -332,6 +332,16 @@ captioned with its own name. The watcher follows every managed session at once.
 The **active** one is whichever you last created, resumed, or opened with the
 "▶️ Open" button. Ordinary text goes there, and the list marks it `▶️`.
 
+A launch — ➕ new, ▶️ resume from 🕘 history or a search, a restore — answers
+with the same card a row of `/sessions` opens: «▶️ Active session», the
+controls, «🟢 Text now goes to …», and the session that was active before it
+named as still working, reachable by reply. Both that card and the picker line
+it settles into («▶️ Resuming …») belong to the new session, so a reply to
+either lands there. It used to be a bare «✅ Resumed: 7loc-7487»: the launch
+name instead of the one the session was found by, no buttons, no word about
+the text — and on 2026-10-03 two messages meant for a session found by search
+went to the one whose question cards were being answered meanwhile.
+
 Buttons are always addressed — the session id is baked into them, so an answer
 to Claude's question lands exactly where the question came from, whichever
 session happens to be active.
@@ -782,7 +792,7 @@ answering "no active session" used to drop the message, so it had to be sent
 again once a session existed. A Claude command on its own (`/compact`) is the
 exception: it acts on a running session, so it still gets that answer. A
 session started from /sessions while a batch waits moves the question under
-its «✅ Created» line once its TUI is up, where «▶️ Current» now names it.
+its card once its TUI is up, where «▶️ Current» now names it.
 
 ## Project directories
 
