@@ -148,9 +148,17 @@ def parse_line(raw: str) -> list[Event]:
             txt = (block.get("text") or "").strip()
             if txt:
                 events.append(Event("text", txt))
+        elif btype == "thinking":
+            # The reasoning itself is stored redacted (an empty string next to
+            # a signature). What does arrive non-empty is the short progress
+            # note Claude addresses to the user mid-turn ("Backfill is writing
+            # in batches…"); the TUI draws it as an ordinary "●" message, so
+            # dropping it lost whole paragraphs (2026-10-09, 4ae7b1ec).
+            txt = (block.get("thinking") or "").strip()
+            if txt:
+                events.append(Event("text", txt))
         elif btype == "tool_use":
             events.append(Event("tool", _summarise_tool(block)))
-        # "thinking" blocks are deliberately skipped
     return events
 
 

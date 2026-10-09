@@ -439,6 +439,13 @@ is still alive, too. That is why rows are read tolerantly
   brings. An answer from the chat (`release_dialog`) ends the hold at once,
   and `_HOLD_MAX` ends it anyway, so a screen misread as a question cannot
   swallow a session's output for good.
+- 🔴 **A non-empty `thinking` block is a message to the user, not reasoning.**
+  The reasoning is stored redacted (empty text + signature); what arrives
+  with text is the short mid-turn progress note the TUI draws as an ordinary
+  "●" line (4556 of them in two weeks, none over 470 characters, all
+  addressed to the user). `transcript.parse_line` emits it as `text`;
+  skipping `thinking` wholesale lost a whole paragraph between two tool calls
+  (2026-10-09, 4ae7b1ec).
 - **The reasoning behind a question is on the screen and nowhere else.** Claude
   Code writes an assistant record only when the tool call inside it returns,
   and `AskUserQuestion` returns on a human — so the analysis the options are
