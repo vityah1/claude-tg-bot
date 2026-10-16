@@ -32,7 +32,7 @@ _VERSION_RE = re.compile(r'"version"\s*:\s*"([^"]+)"')
 
 @dataclass
 class Event:
-    kind: str          # "text" | "tool" | "title"
+    kind: str          # "text" | "tool" | "title" | "enqueue" | "dequeue" | "remove"
     text: str
 
 
@@ -130,6 +130,26 @@ def parse_line(raw: str) -> list[Event]:
         title = rec.get("aiTitle")
         return [Event("title", title)] if title else []
 
+    if rtype == "queue-operation":
+        # A prompt sent while Claude is busy waits in Claude Code's queue, and
+        # the TUI draws it as "❯ …" right above an open dialog — exactly like
+        # the prompt that opened the turn. The screen cannot tell them apart;
+        # these records can. Text is the item's kind, not words to show:
+        # "prompt" (typed or pasted by a human), "other" (a background-task
+        # notification, a message from another session or agent — none of
+        # them drawn as "❯"), or "" when the record does not say.
+        op = rec.get("operation")
+        if op not in ("enqueue", "dequeue", "remove"):
+            return []
+        content = rec.get("content")
+        if not isinstance(content, str):
+            kind = "prompt" if op == "enqueue" else ""
+        else:
+            head = content.lstrip()
+            kind = ("prompt" if not head.startswith("<")
+                    or head.startswith("<pasted_content") else "other")
+        return [Event(op, kind)]
+
     if rtype != "assistant" or rec.get("isSidechain"):
         return []
 
@@ -180,6 +200,42 @@ class TranscriptReader:
         """Ignore everything written so far (used when adopting a session)."""
         p = self.path
         self.offset = p.stat().st_size if p else 0
+
+    def queue_before(self, span: int = 256 * 1024) -> list[Event]:
+        """The queue records among the last *span* bytes behind the offset.
+
+        A reader that starts mid-file (a restarted bot, an adopted session)
+        has not seen the prompts already waiting in Claude Code's queue.
+        """
+        p = self.path
+        if p is None or self.offset <= 0:
+            return []
+        start = max(0, self.offset - span)
+        try:
+            with p.open("rb") as fh:
+                fh.seek(start)
+                data = fh.read(self.offset - start)
+        except OSError:
+            return []
+        lines = data.decode("utf-8", "replace").splitlines()
+        if start:
+            lines = lines[1:]       # the first one is cut
+        return [ev for raw in lines if '"queue-operation"' in raw
+                for ev in parse_line(raw)]
+
+    def queue_ahead(self) -> list[Event]:
+        """The queue records written past the offset, leaving it where it is."""
+        p = self.path
+        if p is None:
+            return []
+        try:
+            with p.open("rb") as fh:
+                fh.seek(self.offset)
+                data = fh.read()
+        except OSError:
+            return []
+        return [ev for raw in data.decode("utf-8", "replace").splitlines()
+                if '"queue-operation"' in raw for ev in parse_line(raw)]
 
     def read_new(self) -> list[Event]:
         p = self.path

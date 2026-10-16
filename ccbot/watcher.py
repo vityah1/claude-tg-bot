@@ -127,6 +127,8 @@ _TRANSCRIPT_LAG = 1.0
 # longer than this is not about to be pressed, and a screen misread as a
 # question must not swallow a session's output for good.
 _HOLD_MAX = 300.0
+# How long a session has to look idle before its queue count is dropped.
+_QUEUE_IDLE = 5.0
 
 # How much scrollback to read for the reasoning above a dialog: a long answer
 # has usually pushed its own beginning off the top of the pane by then.
@@ -177,9 +179,48 @@ class SessionRuntime:
         # multi-part question does not resend it once per section.
         self.said_words: set[str] = set()
         self.said_sig: str | None = None
+        # What waits in Claude Code's input queue, oldest first ("prompt" or
+        # "other"), as its queue-operation records tell it.
+        self.queue: list[str] = []
+        self.idle_since = 0.0
         self.work_since = 0.0
         self.pulse_msg_id: int | None = None
         self.pulse_edited = 0.0
+
+    def track_queue(self, op: str, kind: str) -> None:
+        """Follow one queue-operation record of the transcript."""
+        if op == "enqueue":
+            self.queue.append(kind or "prompt")
+        elif op == "dequeue":
+            # The record does not say what was taken, and Claude Code takes a
+            # prompt ahead of a notification. Guessing "prompt" errs
+            # towards counting too few, which only brings back the old
+            # behaviour; too many would resend the previous answer.
+            if self.queue:
+                self.queue.remove("prompt" if "prompt" in self.queue
+                                  else self.queue[0])
+        elif kind in self.queue:
+            self.queue.remove(kind)     # a remove that matches nothing is ignored
+
+    def prime_queue(self) -> None:
+        """Pick up a queue that was filled before this reader's offset."""
+        for ev in self.reader.queue_before():
+            self.track_queue(ev.kind, ev.text)
+
+    def queued_prompts(self) -> int:
+        """How many prompts sent mid-turn still wait to be read.
+
+        Counted up to this moment: a prompt queued after this tick's read of
+        the transcript is already drawn on the screen about to be captured.
+        """
+        held = self.queue
+        self.queue = list(held)
+        try:
+            for ev in self.reader.queue_ahead():
+                self.track_queue(ev.kind, ev.text)
+            return self.queue.count("prompt")
+        finally:
+            self.queue = held
 
     def remember_said(self, text: str) -> None:
         self.said_words = _words(text)
@@ -316,6 +357,7 @@ class Watcher:
         rt = SessionRuntime(session_id, 0)
         if skip_existing:
             rt.reader.seek_to_end()
+        rt.prime_queue()
         self.runtimes[session_id] = rt
         self.store.set_offset(session_id, rt.reader.offset)
 
@@ -506,6 +548,7 @@ class Watcher:
             rt = self.runtimes.get(m.session_id)
             if rt is None:
                 rt = SessionRuntime(m.session_id, m.offset)
+                rt.prime_queue()
                 self.runtimes[m.session_id] = rt
             agent = live.get(m.session_id) or {}
             await self._tick_session(m.session_id, m.window_id,
@@ -553,6 +596,8 @@ class Watcher:
             for ev in events:
                 if ev.kind == "title":
                     self.store.set_title(session_id, ev.text)
+                elif ev.kind in ("enqueue", "dequeue", "remove"):
+                    rt.track_queue(ev.kind, ev.text)
                 elif ev.kind == "tool":
                     rt.buffer.append(f"🔧 {ev.text}")
                 elif rt.echoes_screen(ev.text):
@@ -615,6 +660,17 @@ class Watcher:
         await self._pulse(session_id, name, raw, rt, dialog is not None)
 
         if dialog is None:
+            # An idle session reads its queue at once, so whatever the records
+            # still count was lost track of (a missed read, a message taken
+            # back with ↑). One frame is no proof of idle — between a
+            # permission answer and the spinner there is a frame with neither
+            # — so it takes the agent list too, and a few seconds of both.
+            if busy or agent_status != "idle":
+                rt.idle_since = 0.0
+            elif not rt.idle_since:
+                rt.idle_since = time.monotonic()
+            elif time.monotonic() - rt.idle_since >= _QUEUE_IDLE:
+                rt.queue.clear()
             rt.last_dialog_sig = None
             rt.last_dialog_state = None
             rt.seen_dialog_sig = None
@@ -623,6 +679,7 @@ class Watcher:
             await self._report_blocked(session_id, name, raw, rt,
                                        agent_status, busy)
             return
+        rt.idle_since = 0.0
         rt.clear_blocked()
 
         # Ticks belong to the state, not to the question: a checkbox changes
@@ -725,7 +782,7 @@ class Watcher:
             deep = await tmux.capture(window_id, history=_SAID_HISTORY)
         except tmux.TmuxError:
             return
-        said = screenmod.said_above_dialog(deep)
+        said = screenmod.said_above_dialog(deep, queued=rt.queued_prompts())
         if not said or rt.said_sig == f"{len(said)}:{said[:120]}":
             return          # nothing said, or already sent for this question
         log.info("preface id=%s name=%s chars=%d", session_id[:8], name, len(said))

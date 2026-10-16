@@ -463,6 +463,21 @@ is still alive, too. That is why rows are read tolerantly
   missing from the pane altogether — a redraw around a long tool output ate
   it, scrollback and all — so the block start cannot be relied on; the end of
   the output can (its lines are aligned under the "⎿", deeper than the mark).
+- 🔴 **A prompt sent mid-turn is queued, and the queue is drawn between what
+  was said and the dialog** — as "❯ …", the very shape of the prompt that
+  opened the turn, which `said_above_dialog` reads as its floor. Taken for
+  that, a forwarded batch hid a 3124-character plan, and the plan reached the
+  chat only after its question was answered (2026-10-16, 4d781898; reproduced
+  on 2.1.301). The screen cannot tell the two apart; the transcript's
+  `queue-operation` records can (`enqueue` / `dequeue` / `remove`, a
+  `<task-notification>` content being a background task, not a prompt).
+  `SessionRuntime.track_queue` keeps the queue (primed from the transcript's
+  tail when a reader starts mid-file, counted up to the capture by
+  `queued_prompts`), five seconds of idle by both the screen and the agent
+  list clears it, and `said_above_dialog(queued=…)` stops above that many
+  margin "❯" lines below the last "●". The errors lean one way on purpose:
+  a prompt counted too few brings back the old miss, one too many resends the
+  previous answer.
 - 🔴 **What was said is bounded by the rule above the dialog — and a table is
   made of rules.** Breaking the block at the first box-drawing line cut every
   answer off at its first table: 320 characters of a 4160-character summary

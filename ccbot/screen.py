@@ -810,7 +810,7 @@ def _table_rows_to_markdown(lines: list[str]) -> list[str]:
     return out
 
 
-def said_above_dialog(screen: str) -> str:
+def said_above_dialog(screen: str, queued: int = 0) -> str:
     """The last thing Claude *said* above the dialog, read off the terminal.
 
     The transcript is the proper source for Claude's words, and everywhere
@@ -829,13 +829,13 @@ def said_above_dialog(screen: str) -> str:
       said above it has already been sent from the transcript. Say nothing.
 
     Blocks above the last prompt of the turn are old news for the same reason.
+    Prompts sent while Claude was working, though, wait in a queue (`queued`
+    is how many, counted from the transcript), and the queue is drawn between
+    what was said and the dialog, in the same "❯ …" shape. Taken for the
+    prompt of the turn, one of them hid a 3124-character plan, which reached
+    the chat after its own question had been answered (2026-10-16, 4d781898).
     """
     lines = _clean(screen.splitlines())
-    floor = 0
-    for i in range(len(lines) - 1, -1, -1):
-        if _ECHOED_PROMPT_RE.match(lines[i]):
-            floor = i + 1
-            break
     # Never read into the dialog itself. It is bulleted inside — the review
     # step echoes every answer as "● question / → answer" — and its body is
     # prose too, so without this the question came back as its own preamble.
@@ -847,6 +847,22 @@ def said_above_dialog(screen: str) -> str:
         # the input line and the status bars as if Claude had said them.
         return ""
     ceiling = span[0]
+    if queued:
+        # The queue sits under everything said, so it is looked for only below
+        # the last "●"; the lowest `queued` prompt lines there are the queue.
+        last_said = next((i for i in range(ceiling - 1, -1, -1)
+                          if _SAID_RE.match(lines[i])), -1)
+        # Only at the margin: a "❯" inside Claude's text or a tool's output
+        # (a shell prompt in a code block) is indented under its "●".
+        waiting = [i for i in range(last_said + 1, ceiling)
+                   if lines[i].startswith("❯") and _ECHOED_PROMPT_RE.match(lines[i])]
+        if waiting:
+            ceiling = waiting[-min(queued, len(waiting))]
+    floor = 0
+    for i in range(ceiling - 1, -1, -1):
+        if _ECHOED_PROMPT_RE.match(lines[i]):
+            floor = i + 1
+            break
 
     marks = [i for i in range(floor, ceiling) if _SAID_RE.match(lines[i])]
     for n in range(len(marks) - 1, -1, -1):
