@@ -311,6 +311,16 @@ is still alive, too. That is why rows are read tolerantly
   (2026-10-01). `_UI_BOTTOM` carries `← for agents` because the manual-mode
   line of 2.1.286 has no `(shift+tab`, and `claude v` is the user's own status
   line, not the bot's. A Claude Code update breaks this file specifically.
+- 🔴 **The Claude in Chrome permission prompt has no footer, and its title is
+  prose.** "Claude in Chrome wants to <verb> on <host>", the page in a dashed
+  (`╌`) box, then `1. Allow / 2. Allow all actions on … / 3. Deny (esc)` and
+  nothing under it (2.1.303); a digit commits. It is found by
+  `_confirm_footer_index` — the `(esc)` on the last option stands in for the
+  "?" of the heading — and the dashed lines are dropped from the question
+  (`_DASHED_RULE_RE`) but are never separators, or the title is lost. The
+  "to navigate" footer hint is matched as `_NAVIGATE_RE` (a key right before
+  it): as a bare substring it matched "wants to navigate on" and built the
+  card out of Claude's prose above the dialog (2026-10-19, 4d781898).
 - 🔴 **The model list and the effort levels are never written down in the bot.**
   They are read off `/model` and `/effort`, which are dialogs of their own
   shape (`screen._model_dialog` / `_effort_dialog`, measured on 2.1.258) and

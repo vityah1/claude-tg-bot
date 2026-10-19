@@ -20,8 +20,12 @@ from dataclasses import dataclass, field
 _FOOTER_MARKERS = (
     "Enter to select",
     "Enter to confirm",
-    "to navigate",
 )
+# "↑/↓ to navigate" as a footer hint: a key, then the phrase, at the start of
+# the line or of a "·"-separated part. Bare "to navigate" also matched the
+# title of the Claude in Chrome prompt ("Claude in Chrome wants to navigate on
+# example.com"), and the card was built out of Claude's prose above it.
+_NAVIGATE_RE = re.compile(r"(?:^|·)\s*[^\s·]+ to navigate\b")
 _ESC_MARKER = "Esc to cancel"
 # Permission prompts (a tool asking to run, a PreToolUse hook demanding
 # confirmation) carry none of the markers above — their footer reads
@@ -90,6 +94,10 @@ _HEADER_RE = re.compile(r"^\s*[☐☑✓·]\s+(?P<title>.+?)\s*$")
 
 # Box-drawing separators and spinner/status noise we never treat as content.
 _SEPARATOR_RE = re.compile(r"^[\s─━═╭╮╰╯│┌┐└┘├┤┬┴┼]*$")
+# The dashed box a dialog draws around a quoted value (the page in the Claude
+# in Chrome prompt). Furniture to drop from the question, but not a separator:
+# the dialog's top is the solid rule above it.
+_DASHED_RULE_RE = re.compile(r"^\s*[╌┄┈╍┅┉]{4,}\s*$")
 # The rule under a dialog, which carries the session's name when it was
 # launched with `-n` — and the bot launches every session that way:
 # "──────────── pay4say-1a2b ─" (measured on 2.1.281).
@@ -277,7 +285,8 @@ def _footer_index(lines: list[str]) -> int | None:
         ln = lines[i]
         low = ln.lower()
         esc_footer = _ESC_MARKER in ln and any(c in low for c in _ESC_COMPANIONS)
-        if any(m in ln for m in _FOOTER_MARKERS) or esc_footer:
+        if (any(m in ln for m in _FOOTER_MARKERS) or _NAVIGATE_RE.search(ln)
+                or esc_footer):
             below = "\n".join(lines[i + 1:]).lower()
             return None if any(m in below for m in _UI_BOTTOM) else i
     return None
@@ -349,6 +358,22 @@ def _confirm_footer_index(lines: list[str]) -> int | None:
     option list that is the last thing on the screen, opens at "1.", runs
     without gaps and carries the cursor, and — at most a few lines above it —
     a rule followed directly by a heading that asks something.
+
+    The Claude in Chrome permission prompt is the same shape with a statement
+    for a heading and the page in a dashed box under it (2.1.303):
+
+        ────────────────────────────────────────────
+         Claude in Chrome wants to wait on example.com
+        ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+         https://example.com/
+        ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+         ❯ 1. Allow
+           2. Allow all actions on example.com for this session
+           3. Deny (esc)
+
+    Its last option names the Esc key it is bound to, which stands in for the
+    question mark. The dashed rules are not separators, so the heading is
+    still the line under the solid one.
     """
     low = "\n".join(lines).lower()
     if any(m in low for m in _UI_BOTTOM):
@@ -366,11 +391,12 @@ def _confirm_footer_index(lines: list[str]) -> int | None:
         return None
     if not any(m and m.group("cursor") for m in rows):
         return None
+    on_esc = bool(rows[-1]) and rows[-1].group("label").endswith("(esc)")
     for j in range(first - 1, max(-1, first - 10), -1):
         ln = lines[j]
         if ln.strip() and _SEPARATOR_RE.match(ln):
             heading = lines[j + 1].strip() if j + 1 < first else ""
-            return end if heading.endswith("?") else None
+            return end if heading.endswith("?") or (heading and on_esc) else None
     return None
 
 
@@ -623,7 +649,7 @@ def find_dialog(screen: str) -> Dialog | None:
 
     after_rule = False        # a rule separates the list from extra choices
     for ln in body:
-        if not ln.strip():
+        if not ln.strip() or _DASHED_RULE_RE.match(ln):
             continue
         if _SEPARATOR_RE.match(ln):
             if options:
