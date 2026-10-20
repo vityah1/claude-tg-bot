@@ -187,6 +187,16 @@ is still alive, too. That is why rows are read tolerantly
   collision, never an invented extension); only the nameless kinds get the
   timestamp. `media.is_image()` is what decides whether the prompt says "image"
   or "file" — announcing a JSON as an image sends Claude looking for a picture.
+- 🔴 **A message with no `text` may still be words: Premium sends formatted
+  text as `rich_message`.** No `text`, no `caption`, no `photo` — paragraphs
+  and pictures are blocks, so a bot reading the classic fields saw an empty
+  message and no handler took it (2026-10-20, 13 paragraphs and a screenshot
+  gone without a word). `rich.read()` turns the blocks into Markdown plus the
+  files they carry, and one message may bring several (`_Item.paths`). The
+  last handler, `@dp.message()` with no filter, answers any kind still
+  unhandled with its content type (service ones in `_SERVICE_KINDS` are only
+  logged) — keep it last and keep it, it is what turns the next new kind
+  Telegram invents into a reply instead of a hole.
 - 🔴 **A session restart is `/exit` + `claude --resume <id> -n <name>` in the
   same window, and the window is never killed** (`CCBot._restart_session`).
   `--resume` keeps the session id — verified against the live CLI on

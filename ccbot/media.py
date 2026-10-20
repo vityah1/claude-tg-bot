@@ -151,7 +151,7 @@ class Piece:
     """
 
     text: str = ""
-    path: Path | None = None
+    paths: tuple[Path, ...] = ()
     sender: str = ""
 
 
@@ -187,7 +187,7 @@ def build_batch_prompt(pieces: list[Piece]) -> str:
     by number from the line it arrived with, so the picture stays attached to
     the sentence that asked about it.
     """
-    paths = [p.path for p in pieces if p.path]
+    paths = [path for p in pieces for path in p.paths]
     if not any(p.sender for p in pieces):
         joined = "\n\n".join(t for t in (p.text.strip() for p in pieces) if t)
         return build_prompt(paths, joined)
@@ -195,9 +195,9 @@ def build_batch_prompt(pieces: list[Piece]) -> str:
     lines, seen = [], 0
     for piece in pieces:
         who = piece.sender or _("me")
-        if piece.path:
+        for path in piece.paths:
             seen += 1
-            mark = _("[image {n}]") if is_image(piece.path) else _("[file {n}]")
+            mark = _("[image {n}]") if is_image(path) else _("[file {n}]")
             who += " " + mark.format(n=seen)
         body = piece.text.strip()
         lines.append(f"{who}: {body}" if body else who)

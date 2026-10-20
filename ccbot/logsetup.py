@@ -12,7 +12,7 @@ from pathlib import Path
 
 from aiogram import BaseMiddleware
 
-from . import paths
+from . import paths, rich
 from .i18n import _
 
 LOG_PATH = paths.LOG_FILE
@@ -61,6 +61,12 @@ def tail(lines: int = 60) -> str:
     return "\n".join(data.splitlines()[-lines:])
 
 
+def content_kind(msg) -> str:
+    """Telegram's name for what a message carries ("photo", "rich_message")."""
+    kind = getattr(msg, "content_type", None)
+    return str(getattr(kind, "value", kind) or "other")
+
+
 class UpdateLogMiddleware(BaseMiddleware):
     """Log every incoming update before any handler sees it.
 
@@ -86,10 +92,12 @@ class UpdateLogMiddleware(BaseMiddleware):
         cb = getattr(event, "callback_query", None)
         if msg is not None:
             uid = msg.from_user.id if msg.from_user else None
-            kind = ("text" if msg.text else
-                    "photo" if msg.photo else
-                    "document" if msg.document else "other")
+            # The content type itself: "other" hid a rich message that no
+            # handler took (2026-10-20).
+            kind = content_kind(msg)
             body = msg.text or msg.caption or ""
+            if not body and getattr(msg, "rich_message", None):
+                body = rich.read(msg.rich_message)[0]
             allowed = "" if not self.allowed or uid in self.allowed else " DENIED"
             self.log.info(
                 "in msg id=%s from=%s kind=%s reply_to=%s%s: %r",

@@ -430,7 +430,41 @@ def _attachment(m: Message) -> _Att | None:
         return _att(m.video, "video/mp4", ".mp4")
     if m.audio:
         return _att(m.audio, "audio/mpeg", ".mp3")
+    if m.live_photo:
+        # The still frame, not the clip: Claude sees a picture, and what the
+        # person pointed the camera at is in it either way.
+        lp = m.live_photo
+        return (_att(lp.photo[-1], "image/jpeg", ".jpg") if lp.photo
+                else _att(lp, "video/mp4", ".mp4"))
     return None
+
+
+# What a chat reports about itself rather than something the person sent:
+# pinning a card must not be answered with "I cannot read this".
+_SERVICE_KINDS = frozenset({
+    "pinned_message", "message_auto_delete_timer_changed",
+    "chat_background_set", "write_access_allowed", "new_chat_members",
+    "left_chat_member", "new_chat_title", "new_chat_photo",
+    "delete_chat_photo", "group_chat_created", "supergroup_chat_created",
+    "channel_chat_created", "migrate_to_chat_id", "migrate_from_chat_id",
+    "gift", "unique_gift", "gift_upgrade_sent", "paid_message_price_changed",
+    "direct_message_price_changed", "users_shared", "chat_shared",
+    "boost_added", "chat_owner_changed", "chat_owner_left",
+    "forum_topic_created", "forum_topic_edited", "forum_topic_closed",
+    "forum_topic_reopened", "general_forum_topic_hidden",
+    "general_forum_topic_unhidden", "video_chat_scheduled",
+    "video_chat_started", "video_chat_ended",
+    "video_chat_participants_invited", "proximity_alert_triggered",
+    "successful_payment", "refunded_payment", "giveaway_created",
+    "giveaway_completed", "giveaway_winners", "checklist_tasks_done",
+    "checklist_tasks_added", "suggested_post_approved",
+    "suggested_post_approval_failed", "suggested_post_declined",
+    "suggested_post_paid", "suggested_post_refunded", "managed_bot_created",
+    "connected_website", "community_chat_added", "community_chat_removed",
+    "poll_option_added", "poll_option_deleted",
+})
+
+
 
 
 @dataclass
@@ -439,7 +473,9 @@ class _Item:
 
     message: Message
     text: str = ""
-    path: Path | None = None
+    # A rich message carries its pictures among the paragraphs, so one
+    # message may bring several files.
+    paths: list[Path] = field(default_factory=list)
     sender: str = ""
 
 
@@ -689,15 +725,35 @@ class CCBot:
         # through to no handler at all, and a voice message inside a forwarded
         # conversation would silently disappear from the batch.
         @dp.message(F_.photo | F_.document | F_.video | F_.audio | F_.voice
-                    | F_.video_note | F_.animation | F_.sticker)
+                    | F_.video_note | F_.animation | F_.sticker | F_.live_photo)
         async def _media(m: Message):
             if self._ok(m):
-                await self._on_media(m)
+                att = _attachment(m)
+                await self._on_media(m, m.caption or "", [att] if att else [])
 
         @dp.message(F_.text)
         async def _text(m: Message):
             if self._ok(m):
                 await self._on_text(m)
+
+        # A Premium client sends formatted text this way: no `text` at all,
+        # the words and the pictures are blocks (2026-10-20, lost in silence).
+        @dp.message(F_.rich_message)
+        async def _rich(m: Message):
+            if self._ok(m):
+                await self._on_rich(m)
+
+        # Whatever kind Telegram adds next must not vanish: it is answered,
+        # and the log names its content type.
+        @dp.message()
+        async def _other(m: Message):
+            if not self._ok(m):
+                return
+            if logsetup.content_kind(m) in _SERVICE_KINDS:
+                log.info("service message id=%s ignored: %s",
+                         m.message_id, m.content_type)
+                return
+            await self._unreadable(m)
 
         @dp.errors()
         async def _on_error(event: ErrorEvent) -> bool:
@@ -1680,7 +1736,7 @@ class CCBot:
             box = self.inbox[chat_id] = _Inbox()
         return box
 
-    def _hold(self, m: Message, text: str = "", download: bool = False) -> _Item:
+    def _hold(self, m: Message, text: str = "", downloads: int = 0) -> _Item:
         """Queue one incoming message and keep the collection window open.
 
         An attachment is registered here *before* it is downloaded: the batch
@@ -1692,9 +1748,8 @@ class CCBot:
         box.items[m.message_id] = item
         box.last = time.monotonic()
         box.announced = False
-        if download:
-            box.downloads += 1
-            box.files += 1
+        box.downloads += downloads
+        box.files += downloads
         if box.task is None or box.task.done():
             box.task = asyncio.create_task(self._inbox_loop(m.chat.id))
         return item
@@ -1731,7 +1786,7 @@ class CCBot:
         if box is None or not box.items:
             return
         items = [box.items[mid] for mid in sorted(box.items)]
-        paths = [i.path for i in items if i.path]
+        paths = [p for i in items for p in i.paths]
         parked = self._parked_of(chat_id)
         if paths and not any(i.text.strip() for i in items) and parked is None:
             # Attachments with nothing said about them wait for the words:
@@ -1802,8 +1857,8 @@ class CCBot:
 
     async def _send_batch(self, items: list[_Item], mgd, note: str = "") -> None:
         """Fold a batch into one prompt, send it, and say where it went."""
-        paths = [i.path for i in items if i.path]
-        pieces = [media.Piece(text=i.text, path=i.path, sender=i.sender)
+        paths = [p for i in items for p in i.paths]
+        pieces = [media.Piece(text=i.text, paths=tuple(i.paths), sender=i.sender)
                   for i in items]
         await self._send_prompt(mgd, media.build_batch_prompt(pieces))
         parts = []
@@ -1896,7 +1951,7 @@ class CCBot:
             with contextlib.suppress(Exception):
                 await self.bot.delete_message(chat_id, parked.ask_id)
             parked.ask_id = None
-        files = sum(1 for i in parked.items if i.path)
+        files = sum(len(i.paths) for i in parked.items)
         count = len(parked.items)
         head = (ngettext("📥 <b>{count} forwarded message</b> is waiting",
                          "📥 <b>{count} forwarded messages</b> are waiting",
@@ -2135,20 +2190,62 @@ class CCBot:
                               reply_markup=route_pick_kb(views, active))
 
     # ----------------------------------------------------------------- media
-    async def _on_media(self, m: Message) -> None:
-        """Save an attachment into the batch, keeping its place in the order."""
+    async def _on_media(self, m: Message, text: str, atts: list[_Att]) -> None:
+        """Save a message's files into the batch, keeping its place in the order.
+
+        A file that cannot be had does not take the words with it: they are
+        still the message, and the person has been told about the file.
+        """
         box = self._inbox_of(m.chat.id)
-        item = self._hold(m, text=(m.caption or ""), download=True)
+        item = self._hold(m, text=text, downloads=len(atts))
+        first = box.files - len(atts)
+        # Several files come down side by side, and their failures are told
+        # once each, not once per file.
+        problems: dict[str, None] = {}
         try:
-            item.path = await self._download(m, index=box.files - 1)
+            owner = await self._media_owner(m) if atts else _INBOX_DIR
+            got = await asyncio.gather(*(
+                self._download(m, att, owner, first + i, problems)
+                for i, att in enumerate(atts)))
+            item.paths.extend(p for p in got if p is not None)
         finally:
-            box.downloads = max(0, box.downloads - 1)
+            box.downloads = max(0, box.downloads - len(atts))
             box.last = time.monotonic()
-        if item.path is None:
+        for text_ in problems:
+            with contextlib.suppress(Exception):
+                await m.answer(text_)
+        if not item.paths and not item.text.strip():
             box.items.pop(m.message_id, None)
 
-    async def _download(self, m: Message, index: int) -> Path | None:
-        """Fetch the file behind *m*; say what went wrong and return None."""
+    async def _on_rich(self, m: Message) -> None:
+        """A Premium client's formatted message: paragraphs and pictures as blocks.
+
+        Without files it is just text, and it takes the text's road: a dialog
+        answer, a new name or a directory typed with formatting is still that.
+        """
+        text, found = rich.read(m.rich_message)
+        atts = [_att(f.obj, f.mime, f.suffix) for f in found]
+        log.info("rich message id=%s: %d chars, %d file(s)",
+                 m.message_id, len(text), len(atts))
+        if not text and not atts:
+            await self._unreadable(m)
+        elif not atts:
+            await self._on_text(m, text)
+        else:
+            await self._on_media(m, text, atts)
+
+    async def _unreadable(self, m: Message) -> None:
+        """A message no handler could read says so instead of vanishing."""
+        kind = logsetup.content_kind(m)
+        log.warning("unreadable message id=%s content_type=%s", m.message_id, kind)
+        await m.answer(_("⚠️ I cannot read this kind of message "
+                         "(<code>{kind}</code>), so it went nowhere. Send it "
+                         "as text, a photo or a file.").format(
+                             kind=html.escape(kind)),
+                       parse_mode="HTML")
+
+    async def _media_owner(self, m: Message) -> str:
+        """The session a message's files are filed under."""
         # A photo sent as a reply switches the active session too, so the
         # caption that follows it lands in the same place.
         mgd = None
@@ -2158,19 +2255,21 @@ class CCBot:
         # is held until the chat says where it goes, and that may well be a
         # session created afterwards. The id only names the folder the file
         # lands in — Claude is given the absolute path either way.
-        owner = mgd.session_id if mgd else _INBOX_DIR
+        return mgd.session_id if mgd else _INBOX_DIR
 
-        att = _attachment(m)
-        if att is None or not att.file_id:
+    async def _download(self, m: Message, att: _Att, owner: str, index: int,
+                        problems: dict[str, None]) -> Path | None:
+        """Fetch one file of *m*; note what went wrong in *problems*."""
+        if not att.file_id:
             return None
 
         size = att.size
         if size > _MAX_ATTACHMENT:
             # Telegram's own ceiling for a bot download, not a rule of ours.
-            await m.answer(_("That file is too big ({size} MB). Telegram lets "
-                             "a bot download 20 MB at most — put it somewhere "
-                             "on disk and send me the path instead.").format(
-                                 size=size // 1024 // 1024))
+            problems[_("That file is too big ({size} MB). Telegram lets "
+                       "a bot download 20 MB at most — put it somewhere "
+                       "on disk and send me the path instead.").format(
+                           size=size // 1024 // 1024)] = None
             return None
 
         try:
@@ -2182,14 +2281,16 @@ class CCBot:
             await self.bot.download_file(tg_file.file_path, destination=path)
         except Exception:
             log.exception("attachment download failed")
-            await m.answer(_("❌ Could not download the file"))
+            problems[_("❌ Could not download the file")] = None
             return None
         log.info("attachment saved: %s (%s, %s bytes)", path, att.mime or "?", size)
         return path
 
     # -------------------------------------------------------------- handlers
-    async def _on_text(self, m: Message) -> None:
-        chat_id, text = m.chat.id, (m.text or "")
+    async def _on_text(self, m: Message, text: str | None = None) -> None:
+        """Ordinary text; *text* stands in for ``m.text`` when it came as blocks."""
+        chat_id = m.chat.id
+        text = m.text or "" if text is None else text
         pend_kind = self.pending.get(chat_id, ("—",))[0]
         active = self.store.get_active(chat_id)
         log.info(

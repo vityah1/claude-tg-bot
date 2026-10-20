@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import NamedTuple
 
 from aiogram import Bot
 from aiogram.types import (
@@ -40,6 +41,7 @@ from aiogram.types import (
     InputRichBlockPreformatted,
     InputRichMessage,
     Message,
+    RichBlockCaption,
     RichTextBold,
     RichTextItalic,
 )
@@ -156,3 +158,191 @@ async def edit(bot: Bot, chat_id: int, message_id: int, *, blocks=None,
         # word to the user, who is looking at the card already.
         log.debug("rich edit skipped", exc_info=True)
         return False
+
+
+# ------------------------------------------------------------------ incoming
+# A Premium client sends formatted text as a rich message too: no ``text``,
+# no ``caption``, no ``photo`` — only ``rich_message.blocks``, with the
+# pictures as blocks among the paragraphs. A bot that reads the classic
+# fields sees an empty message, and one such message vanished without a word
+# on 2026-10-20 (13 paragraphs and a screenshot, id 37497).
+
+# The block kinds that carry a file: the attribute it sits under, the MIME
+# type to assume and the suffix for a file Telegram gives no name.
+_MEDIA_BLOCKS = {
+    "photo": ("photo", "image/jpeg", ".jpg"),
+    "video": ("video", "video/mp4", ".mp4"),
+    "animation": ("animation", "video/mp4", ".mp4"),
+    "audio": ("audio", "audio/mpeg", ".mp3"),
+    "voice_note": ("voice_note", "audio/ogg", ".oga"),
+}
+
+# Inline styles Markdown can say; anything else keeps just its text.
+_INLINE_WRAP = {
+    "bold": "**",
+    "italic": "*",
+    "strikethrough": "~~",
+    "code": "`",
+}
+
+
+class Media(NamedTuple):
+    """One file found among the blocks: the Telegram object and how to name it."""
+
+    obj: object
+    mime: str
+    suffix: str
+
+
+def _kind(node) -> str:
+    return str(getattr(getattr(node, "type", None), "value",
+                       getattr(node, "type", "")) or "")
+
+
+def _inline(node) -> str:
+    """One piece of rich text as Markdown, the way Claude reads it best."""
+    if node is None:
+        return ""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, list):
+        return "".join(_inline(n) for n in node)
+    kind = _kind(node)
+    if kind == "custom_emoji":
+        return str(getattr(node, "alternative_text", "") or "")
+    if kind == "mathematical_expression":
+        return f"${getattr(node, 'expression', '')}$"
+    if kind == "anchor":
+        return ""
+    inner = _inline(getattr(node, "text", None))
+    if kind == "url":
+        url = str(getattr(node, "url", "") or "")
+        if not inner.strip():
+            return url
+        return f"[{inner}]({url})" if url and inner != url else inner
+    wrap = _INLINE_WRAP.get(kind)
+    core = inner.strip()
+    if not wrap or not core:
+        return inner
+    if kind == "code" and "`" in core:
+        wrap = "`` "
+        close = " ``"
+    else:
+        close = wrap
+    # Markdown ignores "**word **": the spaces a client leaves inside a run
+    # go outside the markers.
+    lead = inner[:len(inner) - len(inner.lstrip())]
+    trail = inner[len(inner.rstrip()):]
+    return f"{lead}{wrap}{core}{close}{trail}"
+
+
+def _caption(block) -> list[str]:
+    cap = getattr(block, "caption", None)
+    if cap is None:
+        return []
+    # A table's caption is plain rich text; a media block's is a
+    # RichBlockCaption with a credit line of its own.
+    if isinstance(cap, RichBlockCaption):
+        text, credit = _inline(cap.text), _inline(cap.credit)
+    else:
+        text, credit = _inline(cap), ""
+    return [t for t in (text, f"— {credit}" if credit else "") if t.strip()]
+
+
+def _table(cells) -> list[str]:
+    """Rows as a Markdown table; a spanned cell repeats as empty columns."""
+    rows = []
+    for row in cells or []:
+        out_row = []
+        for c in row:
+            text = " ".join(_inline(getattr(c, "text", None)).split())
+            out_row.append(text.replace("|", "\\|"))
+            out_row += [""] * (max(1, int(getattr(c, "colspan", 1) or 1)) - 1)
+        rows.append(out_row)
+    width = max((len(r) for r in rows), default=0)
+    if not width:
+        return []
+    rows = [r + [""] * (width - len(r)) for r in rows]
+    out = ["| " + " | ".join(rows[0]) + " |", "|" + "---|" * width]
+    out += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+    return out
+
+
+def _blocks(blocks, media: list) -> list[str]:
+    lines: list[str] = []
+    for block in blocks or []:
+        lines.extend(_block(block, media))
+    return lines
+
+
+def _block(block, media: list) -> list[str]:
+    """One block as Markdown lines; its file, if any, goes into *media*."""
+    kind = _kind(block)
+    if kind in _MEDIA_BLOCKS:
+        attr, mime, suffix = _MEDIA_BLOCKS[kind]
+        obj = getattr(block, attr, None)
+        if isinstance(obj, list):       # a photo comes as its sizes
+            obj = obj[-1] if obj else None
+        if obj:
+            media.append(Media(obj, mime, suffix))
+        return _caption(block)
+    if kind == "paragraph" or kind == "footer" or kind == "thinking":
+        return [_inline(getattr(block, "text", None))]
+    if kind == "heading":
+        size = int(getattr(block, "size", 2) or 2)
+        return ["#" * max(1, min(size, 6)) + " " + _inline(block.text)]
+    if kind == "pre":
+        lang = getattr(block, "language", None) or ""
+        return [f"```{lang}", _inline(block.text), "```"]
+    if kind == "divider":
+        return ["---"]
+    if kind == "mathematical_expression":
+        return [f"$${getattr(block, 'expression', '')}$$"]
+    if kind == "anchor":
+        return []
+    if kind == "list":
+        out = []
+        for item in getattr(block, "items", None) or []:
+            mark = getattr(item, "label", "") or "-"
+            if getattr(item, "has_checkbox", False):
+                mark += " [x]" if getattr(item, "is_checked", False) else " [ ]"
+            body = _blocks(getattr(item, "blocks", None), media) or [""]
+            out.append(f"{mark} {body[0]}")
+            out += ["  " + ln for ln in body[1:]]
+        return out
+    if kind in ("blockquote", "pullquote"):
+        body = (_blocks(block.blocks, media) if kind == "blockquote"
+                else [_inline(getattr(block, "text", None))])
+        credit = _inline(getattr(block, "credit", None))
+        if credit:
+            body.append(f"— {credit}")
+        return ["> " + ln if ln else ">" for ln in body]
+    if kind == "details":
+        return [_inline(getattr(block, "summary", None)),
+                *_blocks(getattr(block, "blocks", None), media)]
+    if kind == "table":
+        return _table(getattr(block, "cells", None)) + _caption(block)
+    if kind == "map":
+        loc = getattr(block, "location", None)
+        where = (f"📍 {loc.latitude}, {loc.longitude}" if loc is not None else "")
+        return [where, *_caption(block)]
+    # A collage, a slideshow, or a kind newer than this code: whatever it
+    # nests and says is still worth more than nothing.
+    out = _blocks(getattr(block, "blocks", None), media)
+    text = getattr(block, "text", None)
+    if text is not None:
+        out.insert(0, _inline(text))
+    return out + _caption(block)
+
+
+def read(rich_message) -> tuple[str, list[Media]]:
+    """What a received rich message says, and the files it carries.
+
+    The text comes back as Markdown, one block per line and runs of blank
+    lines folded into one; the files in reading order, each with the MIME
+    type and suffix to assume when Telegram does not say.
+    """
+    media: list[Media] = []
+    lines = _blocks(getattr(rich_message, "blocks", None), media)
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(ln.rstrip() for ln in lines))
+    return text.strip(), media
