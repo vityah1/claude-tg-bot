@@ -23,6 +23,8 @@ need to duplicate it here).
   Before restarting, check the log tail: an `in msg` from the last ~10 s with
   no `prompt ->` after it is still waiting in the in-memory inbox, and the
   restart drops it (a photo with a question was lost that way the same day).
+  The same goes for a `held batch` (text kept out of a session with an open
+  question) that has no `delivered` / `dropped` line yet.
 - 🔴 **Never print a captured dialog into your own terminal.** The bot reads
   this session's pane too, and a question printed as tool output becomes a
   card in the chat — the user pressed «1» on one and it was typed into the
@@ -174,6 +176,36 @@ is still alive, too. That is why rows are read tolerantly
   active session" dropped the message (2026-10-01: it had to be sent again,
   with the forward, after /sessions → ➕); only a lone Claude `/command`
   still gets that answer.
+- 🔴 **Text is never pasted into a session with an open question.** Pasted
+  into a dialog it is swallowed, and the Enter picks the option under the
+  cursor — the message lost and an answer given nobody chose (2026-10-20,
+  f384fe26, twice; reproduced on 2.1.304). `_dispatch` → `_try_send` is the
+  only road user text takes: `_question_open` first (a parsed dialog, or no
+  ordinary bottom *and* a fresh `waiting` from the agent list), then
+  `_send_prompt(guard=True)`, which hands `tmux.submit_text` a `refuse_if`
+  checked under the input lock both before the paste and before the Enter.
+  Blocked text becomes a `_Held` (one per session, a list of batches; a
+  `/command` is always a batch of its own) with a card: «✏️ This answers the
+  question» (only with a free-text row, one batch, and the same question the
+  card was drawn for — `_answer_free_text`, shared with the `dt:` route),
+  «💬 Close the question and send» (Esc through `tmux.press_if`, never a
+  second one), «⏳ Send after the answer» (`_held_loop` sends only after
+  `_HELD_CLEAR` of no dialog at all: a multi-part question draws its next
+  section at once) and «🗑 Don't send». Text sent meanwhile joins the hold and
+  the card is asked again at the bottom. The command buttons (`/clear`,
+  `/compact`, `/context`) go through `_send_command` and refuse the same way.
+  The only inputs that may type over a question are the dialog's own
+  free-text row and the bot's shutdown `/exit`.
+- 🔴 **`/exit` may ask about feedback drafts before it exits** ("You have 2
+  unsent feedback drafts" / "Enter to review & send · Esc to discard and
+  exit", 2.1.305 — drafts the session queued for Anthropic, in
+  `~/.claude/feedback/drafts`). `screen._drafts_dialog` reads it as
+  `kind == "drafts"`, the card offers Enter / Esc (`dr:`), and a restart that
+  meets it (`_await_exit`) leaves the answer to the user instead of giving up.
+  Whatever answers it — the card, ⏸ Esc from the menu or `/esc` — arms
+  `_resume_when_gone`, which resumes the session in its window once `claude`
+  has left it: a window left at a shell looked as if the Esc had done nothing
+  (2026-10-20, f384fe26).
 - 🔴 **An attachment is never filtered by format.** `_attachment()` takes every
   kind Telegram has (photo, document, video, audio, voice, video note,
   animation, sticker) and hands the path over whatever the MIME type says: a

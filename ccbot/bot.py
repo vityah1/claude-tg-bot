@@ -56,6 +56,8 @@ from .keyboards import (
     dialog_kb,
     dirs_kb,
     done_kb,
+    held_kb,
+    held_wait_kb,
     history_dirs_kb,
     history_kb,
     lang_kb,
@@ -139,6 +141,15 @@ _RESTORE_READY = 30.0
 # back before the button can show it, and the cursor has to have moved before
 # the next step is worked out.
 _NAV_SETTLE = 0.5
+
+# Text held back because the session had a question open: how often the
+# "send after the answer" wait looks, how long the screen has to stay clear
+# of any dialog before it sends (a multi-part question draws its next section
+# at once, so one clear frame proves nothing), and how long an Esc gets to
+# close the question.
+_HELD_TICK = 1.0
+_HELD_CLEAR = 2.5
+_ESC_CLEAR = 6.0
 
 
 @dataclass
@@ -508,6 +519,72 @@ class _Parked:
 
 
 @dataclass
+class _Held:
+    """Text that reached a session while it had a question open.
+
+    Pasted, it would be swallowed by the dialog and its Enter would pick
+    whatever option the cursor was on — the message lost and an answer given
+    that nobody chose (2026-10-20, twice in one afternoon). The destination
+    is known; what is not known is whether the text answers the question, so
+    the chat is asked. One per session. A batch is one prompt; a Claude
+    command always travels as a batch of its own.
+    """
+
+    session_id: str
+    chat_id: int
+    batches: list[list[_Item]] = field(default_factory=list)
+    ask_id: int | None = None
+    at: float = 0.0
+    # "Send after the answer" was chosen: `_held_loop` delivers it once the
+    # session stands without a question.
+    waiting: bool = False
+    # Which question the card was drawn for. "This answers the question"
+    # types into the free-text row only if it is still the same one — the
+    # next section of a multi-part question is not what the text was about.
+    question_sig: str = ""
+    task: asyncio.Task | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    @property
+    def count(self) -> int:
+        return sum(len(b) for b in self.batches)
+
+
+def _is_command(items: list[_Item]) -> bool:
+    """Whether a batch is a lone Claude command such as "/compact".
+
+    A path is not a command, though it starts the same way: "/home/x.log —
+    look" is text.
+    """
+    if len(items) != 1:
+        return False
+    head = items[0].text.split(maxsplit=1)[0] if items[0].text.strip() else ""
+    return len(head) > 1 and head.startswith("/") and "/" not in head[1:]
+
+
+def _batch_text(items: list[_Item]) -> str:
+    """The one prompt a batch becomes."""
+    return media.build_batch_prompt(
+        [media.Piece(text=i.text, paths=tuple(i.paths), sender=i.sender)
+         for i in items])
+
+
+def _dialog_on_screen(raw: str) -> bool:
+    """The refusal test typed text is checked against, under the lock."""
+    return screenmod.find_dialog(raw) is not None
+
+
+def _drafts_on_screen(raw: str) -> bool:
+    dialog = screenmod.find_dialog(raw)
+    return dialog is not None and dialog.kind == "drafts"
+
+
+def _question_or_unready(raw: str) -> bool:
+    """A question stands, or at least the ordinary input line does not."""
+    return screenmod.find_dialog(raw) is not None or not screenmod.is_ready(raw)
+
+
+@dataclass
 class _Inbox:
     """One chat's messages waiting to leave as a single prompt.
 
@@ -556,6 +633,11 @@ class CCBot:
         self.inbox: dict[int, _Inbox] = {}
         # Forwarded batches waiting for a destination, one per chat.
         self.parked: dict[int, _Parked] = {}
+        # Text kept out of a session that has a question open, per session.
+        self.held: dict[str, _Held] = {}
+        # Sessions whose drafts question was answered: brought back by
+        # `_resume_after_exit` once `claude` has left the window.
+        self.resuming: set[str] = set()
         # Notices sent from outside a handler (an expired batch, the question
         # re-asked after a launch): kept only so the task is not
         # garbage-collected while it is still speaking.
@@ -687,7 +769,10 @@ class CCBot:
                 return
             mgd, note = await self._target(m)
             if mgd:
-                await self._send_prompt(mgd, "/clear")
+                if not await self._send_command(mgd, "/clear"):
+                    await self._ack(m, _("It is waiting for an answer — deal "
+                                         "with that first"), mgd)
+                    return
                 await self._ack(m, _("🧹 /clear sent to <b>{name}</b>{note}").format(
                     name=html.escape(mgd.full_label), note=note), mgd)
 
@@ -1390,6 +1475,93 @@ class CCBot:
             await asyncio.sleep(1.0)
         return seen
 
+    async def _await_exit(self, mgd) -> str:
+        """Wait for `/exit` to take: "gone", "drafts" (asked first) or ""."""
+        deadline = time.monotonic() + _RESTART_EXIT_TIMEOUT
+        while time.monotonic() < deadline:
+            if not await tmux.claude_running(mgd.window_id):
+                return "gone"
+            if await self._drafts_open(mgd):
+                return "drafts"
+            await asyncio.sleep(0.5)
+        return "" if await tmux.claude_running(mgd.window_id) else "gone"
+
+    async def _drafts_open(self, mgd) -> bool:
+        """Whether the session stands on the feedback-drafts question."""
+        dialog = await self._dialog_now(mgd)
+        return dialog is not None and dialog.kind == "drafts"
+
+    def _resume_when_gone(self, chat_id: int, mgd) -> None:
+        """Bring the session back once the drafts question lets Claude exit."""
+        if mgd.session_id in self.resuming:
+            return
+        self.resuming.add(mgd.session_id)
+        task = asyncio.create_task(self._resume_after_exit(chat_id, mgd))
+        self.expiries.add(task)
+        task.add_done_callback(self.expiries.discard)
+
+    async def _resume_after_exit(self, chat_id: int, mgd) -> None:
+        """Wait for `claude` to leave the window, then resume it there.
+
+        The drafts question is the last thing `/exit` asks, and the window
+        is left at a shell once it is answered. Reviewing the drafts can
+        take a while, hence the long wait; a session closed meanwhile (its
+        row gone) is left alone.
+        """
+        sid = mgd.session_id
+        try:
+            deadline = time.monotonic() + _PARKED_TTL
+            while time.monotonic() < deadline:
+                await asyncio.sleep(1.0)
+                if self.store.get(sid) is None:
+                    return
+                if not await tmux.window_exists(mgd.window_id):
+                    return
+                if not await tmux.claude_running(mgd.window_id):
+                    break
+            else:
+                log.info("drafts resume gave up: %s still running", sid[:8])
+                return
+            log.info("drafts answered, resuming %s", sid[:8])
+            res = await self._relaunch(mgd)
+            msg = await self.bot.send_message(
+                chat_id, self._restart_text(mgd, res), parse_mode="HTML")
+            if msg:
+                self.store.remember_message(msg.message_id, sid)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("drafts resume failed: %s", sid[:8])
+            with contextlib.suppress(Exception):
+                await self.bot.send_message(
+                    chat_id, _("❌ Could not pass that on — see /log"))
+        finally:
+            self.resuming.discard(sid)
+
+    async def _drafts_callback(self, c: CallbackQuery, msg: Message,
+                               chat_id: int, arg: str) -> None:
+        """📨 Review and send = Enter, 🗑 Discard and exit = Esc."""
+        short, _sep, what = arg.partition(":")
+        mgd = self._resolve(short)
+        if not mgd:
+            await c.answer(_("That session is gone"), show_alert=True)
+            return
+        key = "Enter" if what == "send" else "Escape"
+        self._typed(mgd)
+        try:
+            pressed = await tmux.press_if(mgd.window_id, key, _drafts_on_screen)
+        except tmux.TmuxError:
+            pressed = False      # the window went with a closing session
+        if not pressed:
+            await c.answer(_("That question is no longer open"),
+                           show_alert=True)
+            await self._mark(msg, _("⏹ Question closed"))
+            return
+        self.watcher.release_dialog(mgd.session_id)
+        await c.answer()
+        await self._mark(msg, _("📨 Review and send") if what == "send"
+                         else _("🗑 Discard and exit"))
+
     async def _launch_resume(self, mgd) -> bool:
         """Start `claude --resume` in the session's window; True if it came up."""
         await tmux.run_in_window(
@@ -1422,6 +1594,10 @@ class CCBot:
                        if a.get("sessionId") == mgd.session_id), "")
         if status == "busy":
             return _Restart(False, _("it is working right now"))
+        if await self._drafts_open(mgd):
+            # An earlier /exit stopped at the feedback-drafts question: the
+            # restart is half done, and the answer is what lets it finish.
+            return self._wait_drafts(mgd)
         if status == "waiting":
             return _Restart(False, _("it is waiting for an answer"))
         # The agent list is not enough on its own: a session that has just been
@@ -1455,12 +1631,32 @@ class CCBot:
             await tmux.send_keys(mgd.window_id, "Escape")
             await asyncio.sleep(0.3)
             await self._send_prompt(mgd, "/exit")
-            if not await self._await_claude(mgd.window_id, False,
-                                            _RESTART_EXIT_TIMEOUT):
+            gone = await self._await_exit(mgd)
+            if gone == "drafts":
+                return self._wait_drafts(mgd)
+            if not gone:
                 updates.forget(mgd.session_id)
                 log.warning("restart aborted: %s did not exit", mgd.session_id[:8])
                 return _Restart(False, _("it did not shut down within {n} s")
                                 .format(n=int(_RESTART_EXIT_TIMEOUT)))
+        return await self._relaunch(mgd)
+
+    def _wait_drafts(self, mgd) -> _Restart:
+        """The restart waits for the feedback-drafts answer, then finishes.
+
+        What to do with the drafts is the user's call, made on the card the
+        watcher sends; whatever answers it lets Claude exit, and
+        `_resume_after_exit` brings the session back then.
+        """
+        log.info("restart waits for the drafts answer: %s", mgd.session_id[:8])
+        self._resume_when_gone(self.cfg.owner, mgd)
+        return _Restart(False, _(
+            "Claude Code asks what to do with its unsent feedback drafts "
+            "first — answer on its card, and the session comes back by itself"))
+
+    async def _relaunch(self, mgd) -> _Restart:
+        """`claude --resume` in a window `claude` has left, and its version."""
+        updates.note_restarted(mgd.session_id)
         if not await self._launch_resume(mgd):
             # Claude Code replaces its own binary in place while updating, and
             # for a second or two `claude` is missing — or half-written, which
@@ -1563,21 +1759,24 @@ class CCBot:
                 name=html.escape(mgd.full_label)),
             parse_mode="HTML")
         res = await self._restart_session(mgd)
+        with contextlib.suppress(Exception):
+            await note.edit_text(self._restart_text(mgd, res), parse_mode="HTML")
+
+    @staticmethod
+    def _restart_text(mgd, res: _Restart) -> str:
+        """What came of a restart, said in one line."""
         if res.ok and res.version:
-            text = _("✅ <b>{name}</b> now runs <code>{version}</code> — the "
+            return _("✅ <b>{name}</b> now runs <code>{version}</code> — the "
                      "context came back with it.").format(
                          name=html.escape(mgd.full_label),
                          version=html.escape(res.version))
-        elif res.ok:
-            text = _("✅ <b>{name}</b> has been restarted; it has not said "
+        if res.ok:
+            return _("✅ <b>{name}</b> has been restarted; it has not said "
                      "which version it is yet.").format(
                          name=html.escape(mgd.full_label))
-        else:
-            text = _("⚠️ <b>{name}</b> was not restarted — {reason}. Nothing "
-                     "was changed.").format(name=html.escape(mgd.full_label),
-                                            reason=res.reason)
-        with contextlib.suppress(Exception):
-            await note.edit_text(text, parse_mode="HTML")
+        return _("⚠️ <b>{name}</b> was not restarted — {reason}. Nothing "
+                 "was changed.").format(name=html.escape(mgd.full_label),
+                                        reason=res.reason)
 
     async def _restart_all(self, chat_id: int) -> None:
         """Restart every idle session that is behind, one after another.
@@ -1724,10 +1923,19 @@ class CCBot:
                     name=html.escape(mgd.full_label)),
                 parse_mode="HTML")
 
-    async def _send_prompt(self, mgd, text: str) -> None:
+    async def _send_prompt(self, mgd, text: str, guard: bool = False) -> None:
+        """Type *text* into the session and press Enter.
+
+        *guard* refuses (`tmux.Refused`) when a dialog stands on the screen,
+        checked under the input lock. Only the dialog's own free-text row
+        and the bot's own shutdown `/exit` may type over a question.
+        """
         self._typed(mgd)
         log.info("prompt -> %s (%s): %r", mgd.full_label, mgd.session_id[:8], text[:120])
-        await tmux.submit_text(mgd.window_id, text)
+        await tmux.submit_text(
+            mgd.window_id, text,
+            refuse_if=_question_or_unready if guard else None,
+            hold_if=_dialog_on_screen if guard else None)
 
     # ----------------------------------------------------------------- inbox
     def _inbox_of(self, chat_id: int) -> _Inbox:
@@ -1837,7 +2045,7 @@ class CCBot:
         mgd, note = routed if routed else await self._target(items[-1].message)
         if not mgd:
             return
-        await self._send_batch(items, mgd, note)
+        await self._dispatch(chat_id, items, mgd, note)
 
     def _homeless(self, chat_id: int, items: list[_Item]) -> bool:
         """A batch with no session to go to, held rather than refused.
@@ -1849,18 +2057,13 @@ class CCBot:
         """
         if self._active_managed(chat_id) is not None:
             return False
-        if len(items) != 1:
-            return True
-        head = items[0].text.split(maxsplit=1)[0] if items[0].text.strip() else ""
-        return not (len(head) > 1 and head.startswith("/")
-                    and "/" not in head[1:])
+        return not _is_command(items)
 
-    async def _send_batch(self, items: list[_Item], mgd, note: str = "") -> None:
+    async def _send_batch(self, items: list[_Item], mgd, note: str = "",
+                          guard: bool = False) -> None:
         """Fold a batch into one prompt, send it, and say where it went."""
         paths = [p for i in items for p in i.paths]
-        pieces = [media.Piece(text=i.text, paths=tuple(i.paths), sender=i.sender)
-                  for i in items]
-        await self._send_prompt(mgd, media.build_batch_prompt(pieces))
+        await self._send_prompt(mgd, _batch_text(items), guard=guard)
         parts = []
         if len(items) > 1:
             parts.append(ngettext("{count} message", "{count} messages",
@@ -1876,6 +2079,426 @@ class CCBot:
                 note=note),
             mgd,
         )
+
+    # ------------------------------------------------- held for an open question
+    async def _question_open(self, mgd) -> tuple[bool, screenmod.Dialog | None]:
+        """Whether the session cannot take a prompt, and the dialog, if parsed.
+
+        A pane without the ordinary bottom takes no prompt either: an
+        unparsed question covers it. Nor does a window `claude` has left — the
+        one a drafts answer leaves behind, where a paste runs as a shell
+        command; its old status line is still on the pane, so the screen
+        alone reads it as ready.
+        """
+        try:
+            raw = await tmux.capture(mgd.window_id)
+            running = await tmux.claude_running(mgd.window_id)
+        except tmux.TmuxError:
+            return False, None
+        if not running:
+            return True, None
+        dialog = screenmod.find_dialog(raw)
+        return dialog is not None or not screenmod.is_ready(raw), dialog
+
+    async def _dispatch(self, chat_id: int, items: list[_Item], mgd,
+                        note: str = "") -> None:
+        """Send a batch, or hold it while the session has a question open.
+
+        The only road user text takes into a session: pasted into a dialog it
+        is swallowed, and its Enter picks the option under the cursor.
+        """
+        held = self._held_of(mgd.session_id)
+        if held is not None:
+            await self._join_held(held, items, mgd)
+            return
+        if await self._try_send(items, mgd, note):
+            return
+        await self._hold_for_dialog(chat_id, mgd, items)
+
+    async def _try_send(self, items: list[_Item], mgd, note: str = "") -> bool:
+        """Send unless a question is open — checked before, and under the lock."""
+        blocked, _dialog = await self._question_open(mgd)
+        if blocked:
+            return False
+        try:
+            await self._send_batch(items, mgd, note, guard=True)
+        except tmux.Refused:
+            log.info("held: paste refused, a dialog appeared id=%s",
+                     mgd.session_id[:8])
+            return False
+        return True
+
+    async def _send_command(self, mgd, command: str) -> bool:
+        """A Claude command from a button, refused while a question is open."""
+        blocked, _dialog = await self._question_open(mgd)
+        if blocked:
+            return False
+        try:
+            await self._send_prompt(mgd, command, guard=True)
+        except tmux.Refused:
+            return False
+        return True
+
+    async def _hold_for_dialog(self, chat_id: int, mgd,
+                               items: list[_Item]) -> None:
+        held = self.held.get(mgd.session_id)
+        if held is not None:
+            # Two flushes raced to the same blocked session.
+            await self._join_held(held, items, mgd)
+            return
+        held = self.held[mgd.session_id] = _Held(
+            session_id=mgd.session_id, chat_id=chat_id,
+            batches=[list(items)], at=time.time())
+        log.info("held batch: id=%s items=%d (a question is open)",
+                 mgd.session_id[:8], len(items))
+        await self._ask_held(held, mgd)
+
+    def _held_of(self, session_id: str) -> _Held | None:
+        """The text held for this session, if it is still current."""
+        held = self.held.get(session_id) or next(
+            (h for k, h in self.held.items()
+             if self.store.follow(k) == session_id), None)
+        if held is None or time.time() - held.at <= _PARKED_TTL:
+            return held
+        session_id = held.session_id
+        self.held.pop(session_id, None)
+        if held.task is not None:
+            held.task.cancel()
+        log.info("held batch expired: id=%s items=%d",
+                 session_id[:8], held.count)
+        task = asyncio.create_task(self._say_held_expired(held))
+        self.expiries.add(task)
+        task.add_done_callback(self.expiries.discard)
+        return None
+
+    async def _join_held(self, held: _Held, items: list[_Item], mgd) -> None:
+        """More text for a session that is still held: it waits with the rest.
+
+        A command travels alone, so it never merges into a text batch.
+        """
+        if (_is_command(items) or not held.batches
+                or _is_command(held.batches[-1])):
+            held.batches.append(list(items))
+        else:
+            held.batches[-1].extend(items)
+        held.at = time.time()
+        log.info("held batch grew: id=%s items=%d",
+                 held.session_id[:8], held.count)
+        await self._ask_held(held, mgd)
+
+    def _rehold(self, held: _Held) -> None:
+        """Put a popped hold back, merging whatever was held meanwhile."""
+        newer = self.held.get(held.session_id)
+        if newer is not None and newer is not held:
+            held.batches.extend(newer.batches)
+            if newer.ask_id:
+                task = asyncio.create_task(
+                    self._delete_quietly(held.chat_id, newer.ask_id))
+                self.expiries.add(task)
+                task.add_done_callback(self.expiries.discard)
+        held.waiting = False
+        held.at = time.time()
+        self.held[held.session_id] = held
+
+    async def _delete_quietly(self, chat_id: int, message_id: int) -> None:
+        with contextlib.suppress(Exception):
+            await self.bot.delete_message(chat_id, message_id)
+
+    @staticmethod
+    def _held_waiting_text(held: _Held, mgd) -> str:
+        return ngettext(
+            "⏳ Your message goes to <b>{name}</b> once its question is "
+            "answered.",
+            "⏳ Your {count} messages go to <b>{name}</b> once its question "
+            "is answered.", held.count).format(
+                count=held.count, name=html.escape(mgd.full_label))
+
+    async def _ask_held(self, held: _Held, mgd) -> None:
+        """Ask what to do with the held text, always at the bottom of the chat.
+
+        A card scrolled above the newer messages would be answered for the
+        wrong batch, so a grown hold is asked again. A waiting one says again
+        that it waits, for the same reason: a message joining it silently
+        would look lost.
+        """
+        async with held.lock:
+            if held.ask_id:
+                await self._delete_quietly(held.chat_id, held.ask_id)
+                held.ask_id = None
+            if held.waiting:
+                text = self._held_waiting_text(held, mgd)
+                kb = held_wait_kb(held.session_id)
+            else:
+                _blocked, dialog = await self._question_open(mgd)
+                held.question_sig = self._dialog_sig(dialog)
+                free = (dialog is not None and dialog.kind == "choice"
+                        and dialog.allows_free_text
+                        and len(held.batches) == 1
+                        and not _is_command(held.batches[0]))
+                # Esc on the feedback-drafts question throws the drafts away
+                # and exits: not something to do on the way to sending text.
+                closable = dialog is None or dialog.kind != "drafts"
+                text = ngettext(
+                    "❓ <b>{name}</b> has an open question (it is above — you "
+                    "may have missed it). Your message has not been sent yet, "
+                    "so that it does not pick an option for you.",
+                    "❓ <b>{name}</b> has an open question (it is above — you "
+                    "may have missed it). Your {count} messages have not been "
+                    "sent yet, so that they do not pick an option for you.",
+                    held.count).format(count=held.count,
+                                       name=html.escape(mgd.full_label))
+                kb = held_kb(held.session_id, free, closable)
+            try:
+                msg = await self.bot.send_message(
+                    held.chat_id, text, parse_mode="HTML", reply_markup=kb)
+            except TelegramBadRequest:
+                log.exception("held card failed: id=%s", held.session_id[:8])
+                return
+            held.ask_id = msg.message_id
+            self.store.remember_message(msg.message_id, held.session_id)
+
+    async def _say_held_expired(self, held: _Held) -> None:
+        """Silence here would read as "it was delivered"."""
+        text = ngettext(
+            "⌛️ The message that was waiting for an answered question has "
+            "expired — it went nowhere. Send it again if it is still needed.",
+            "⌛️ The {count} messages that were waiting for an answered "
+            "question have expired — they went nowhere. Send them again if "
+            "they are still needed.", held.count).format(count=held.count)
+        if held.ask_id:
+            with contextlib.suppress(Exception):
+                await self.bot.edit_message_text(
+                    text, chat_id=held.chat_id, message_id=held.ask_id)
+                return
+        with contextlib.suppress(Exception):
+            msg = await self.bot.send_message(held.chat_id, text)
+            if msg:
+                self.store.remember_message(msg.message_id, held.session_id)
+
+    async def _held_callback(self, c: CallbackQuery, msg: Message,
+                             chat_id: int, arg: str) -> None:
+        """The answer to a held card: ✏️ ans, 💬 esc, ⏳ wait, 🗑 drop."""
+        action, _sep, short = arg.partition(":")
+        held = next((h for h in self.held.values()
+                     if h.session_id.startswith(short)), None)
+        if held is None:
+            await c.answer(_("Those messages are no longer waiting"),
+                           show_alert=True)
+            with contextlib.suppress(Exception):
+                await msg.edit_reply_markup(reply_markup=None)
+            return
+        # Popped before the first await: a double tap, or the waiting loop
+        # finding the question answered, cannot deliver it twice.
+        self.held.pop(held.session_id, None)
+        if held.task is not None and held.task is not asyncio.current_task():
+            held.task.cancel()
+            held.task = None
+        mgd = self.store.get(self.store.follow(held.session_id))
+        count = held.count
+        if mgd is None:
+            await c.answer(_("That session is gone"), show_alert=True)
+            await self._settle(msg, ngettext(
+                "🗑 Not sent", "🗑 {count} messages not sent",
+                count).format(count=count))
+            return
+        name = html.escape(mgd.full_label)
+        if action == "drop":
+            await c.answer()
+            log.info("held batch dropped: id=%s items=%d",
+                     held.session_id[:8], count)
+            await self._settle(msg, ngettext(
+                "🗑 Not sent", "🗑 {count} messages not sent",
+                count).format(count=count), held.session_id)
+        elif action == "wait":
+            await c.answer()
+            held.waiting = True
+            held.ask_id = msg.message_id
+            self.held[held.session_id] = held
+            with contextlib.suppress(Exception):
+                await msg.edit_text(self._held_waiting_text(held, mgd),
+                                    parse_mode="HTML",
+                                    reply_markup=held_wait_kb(held.session_id))
+            held.task = asyncio.create_task(self._held_loop(held.session_id))
+            log.info("held batch waits for the answer: id=%s items=%d",
+                     held.session_id[:8], count)
+        elif action == "esc":
+            if await self._drafts_open(mgd):
+                self._rehold(held)
+                await c.answer(_("The question has changed — it is above"),
+                               show_alert=True)
+                await self._ask_held(held, mgd)
+                return
+            await c.answer(_("Closing the question…"))
+            self._typed(mgd)
+            await tmux.press_if(mgd.window_id, "Escape", _question_or_unready)
+            if not await self._wait_clear(mgd, _ESC_CLEAR):
+                log.warning("held: Esc did not close the question id=%s",
+                            held.session_id[:8])
+                self._rehold(held)
+                note = await msg.answer(_("Esc did not close the question — "
+                                          "the message is still waiting."))
+                if note:
+                    self.store.remember_message(note.message_id,
+                                                held.session_id)
+                await self._ask_held(held, mgd)
+                return
+            if await self._held_deliver_or_rehold(held, mgd):
+                await self._settle(msg, _(
+                    "💬 Question in <b>{name}</b> closed, message sent").format(
+                        name=name), held.session_id)
+        elif action == "ans":
+            blocked, dialog = await self._question_open(mgd)
+            if not blocked:
+                await c.answer()
+                if await self._held_deliver_or_rehold(held, mgd):
+                    await self._settle(msg, _(
+                        "➡️ The question had closed — sent to <b>{name}</b> "
+                        "as an ordinary message").format(name=name),
+                        held.session_id)
+                return
+            free = next((o for o in dialog.options if o.is_free_text),
+                        None) if dialog is not None else None
+            if (free is None or len(held.batches) != 1
+                    or self._dialog_sig(dialog) != held.question_sig):
+                self._rehold(held)
+                await c.answer(_("The question has changed — it is above"),
+                               show_alert=True)
+                await self._ask_held(held, mgd)
+                return
+            await c.answer()
+            rt = self.watcher.runtimes.get(mgd.session_id)
+            await self._answer_free_text(
+                chat_id, mgd, free.number, _batch_text(held.batches[0]),
+                rt.dialog_msg_id if rt else None, held.batches[0][-1].message)
+            log.info("held batch typed as the answer: id=%s items=%d",
+                     held.session_id[:8], count)
+            await self._settle(msg, _(
+                "✏️ Sent to <b>{name}</b> as the answer to its question").format(
+                    name=name), held.session_id)
+        else:
+            self._rehold(held)
+            await c.answer()
+
+    async def _ask_held_by_id(self, held: _Held) -> None:
+        mgd = self.store.get(self.store.follow(held.session_id))
+        if mgd is not None:
+            await self._ask_held(held, mgd)
+
+    async def _held_deliver_or_rehold(self, held: _Held, mgd) -> bool:
+        """Deliver every batch; a question standing again holds what is left."""
+        rest = await self._deliver_held(held, mgd)
+        if not rest:
+            return True
+        held.batches = rest
+        self._rehold(held)
+        await self._ask_held(held, mgd)
+        return False
+
+    async def _deliver_held(self, held: _Held, mgd) -> list[list[_Item]]:
+        """Send the batches in order; return those a new question stopped."""
+        for i, batch in enumerate(held.batches):
+            if not await self._try_send(batch, mgd):
+                return held.batches[i:]
+        log.info("held batch delivered: id=%s items=%d",
+                 held.session_id[:8], held.count)
+        return []
+
+    async def _wait_clear(self, mgd, timeout: float) -> bool:
+        """Wait for the pane to stand without a question, two reads running."""
+        deadline = time.monotonic() + timeout
+        clear = 0
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.3)
+            try:
+                raw = await tmux.capture(mgd.window_id)
+            except tmux.TmuxError:
+                return False
+            if _question_or_unready(raw):
+                clear = 0
+                continue
+            clear += 1
+            if clear >= 2:
+                return True
+        return False
+
+    async def _held_loop(self, session_id: str) -> None:
+        """Send the held text once the question is gone, for long enough.
+
+        "Gone" means no dialog at all for `_HELD_CLEAR`: a multi-part question
+        draws its next section at once, and a frame caught in between must
+        not send the text into the middle of it. A busy session is fine — a
+        prompt sent mid-turn is queued, as typing it would be.
+        """
+        clear_since = 0.0
+        held: _Held | None = None
+        try:
+            while True:
+                await asyncio.sleep(_HELD_TICK)
+                held = self.held.get(session_id)
+                if held is None or not held.waiting:
+                    return
+                if time.time() - held.at > _PARKED_TTL:
+                    self.held.pop(session_id, None)
+                    log.info("held batch expired: id=%s items=%d",
+                             session_id[:8], held.count)
+                    await self._say_held_expired(held)
+                    return
+                mgd = self.store.get(self.store.follow(session_id))
+                if mgd is None:
+                    self.held.pop(session_id, None)
+                    log.info("held batch dropped, session gone: id=%s",
+                             session_id[:8])
+                    with contextlib.suppress(Exception):
+                        await self.bot.edit_message_text(
+                            ngettext(
+                                "🗑 The session has ended — the message was "
+                                "not sent.",
+                                "🗑 The session has ended — {count} messages "
+                                "were not sent.", held.count).format(
+                                    count=held.count),
+                            chat_id=held.chat_id, message_id=held.ask_id)
+                    return
+                blocked, _dialog = await self._question_open(mgd)
+                now = time.monotonic()
+                if blocked:
+                    clear_since = 0.0
+                    continue
+                if not clear_since:
+                    clear_since = now
+                if now - clear_since < _HELD_CLEAR:
+                    continue
+                if self.held.get(session_id) is not held:
+                    return
+                self.held.pop(session_id, None)
+                rest = await self._deliver_held(held, mgd)
+                if rest:
+                    held.batches = rest
+                    self._rehold(held)
+                    held.waiting = True
+                    clear_since = 0.0
+                    continue
+                with contextlib.suppress(Exception):
+                    await self.bot.edit_message_text(
+                        _("✅ The question in <b>{name}</b> was answered — "
+                          "message sent").format(
+                              name=html.escape(mgd.full_label)),
+                        chat_id=held.chat_id, message_id=held.ask_id,
+                        parse_mode="HTML")
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("held delivery failed: id=%s", session_id[:8])
+            if held is not None and session_id not in self.held:
+                # Popped for delivery and then lost: put it back undecided,
+                # so the card offers the choice again instead of nothing.
+                self._rehold(held)
+                with contextlib.suppress(Exception):
+                    await self._ask_held_by_id(held)
+            with contextlib.suppress(Exception):
+                await self.bot.send_message(
+                    held.chat_id if held else self.cfg.owner,
+                    _("❌ Could not pass that on — see /log"))
 
     async def _explicit_route(self, items: list[_Item]) -> tuple | None:
         """The session a batch names itself, by replying to one of ours.
@@ -2007,7 +2630,7 @@ class CCBot:
             note = " · " + _("now active")
         log.info("parked batch delivered: chat=%s -> %s items=%d",
                  chat_id, mgd.session_id[:8], len(parked.items))
-        await self._send_batch(parked.items, mgd, note)
+        await self._dispatch(chat_id, parked.items, mgd, note)
 
     async def _deliver_after_launch(self, chat_id: int, session_id: str) -> None:
         """Hand the held batch to a session that has just been launched.
@@ -2359,30 +2982,8 @@ class CCBot:
             if not mgd:
                 await m.answer(_("That session is gone"))
                 return
-            self._typed(mgd)
-            await tmux.send_keys(mgd.window_id, str(number))
-            await asyncio.sleep(_NAV_SETTLE)
-            # "Type something" is a line inside the dialog: the digit only
-            # moves the cursor onto it, and what follows is typed into the row,
-            # so Enter answers the question itself. If the dialog has gone the
-            # row was not an input line and the text travels as a prompt.
-            in_dialog = screenmod.find_dialog(
-                await tmux.capture(mgd.window_id)) is not None
-            await self._send_prompt(mgd, text)
-            if in_dialog:
-                # A multi-select list keeps standing: the typed row is filled
-                # in, and Submit is still what sends the set.
-                await asyncio.sleep(_NAV_SETTLE)
-                await self._submit_dialog(mgd)
-            self.watcher.release_dialog(mgd.session_id)
-            with contextlib.suppress(Exception):
-                await self.bot.edit_message_reply_markup(
-                    chat_id=m.chat.id, message_id=card_id,
-                    reply_markup=done_kb(f"✏️ {text}"))
-            self._focus(m.chat.id, mgd)
-            await self._ack(m, _("✏️ Answer sent to <b>{name}</b> · it is the "
-                                 "active session now").format(
-                name=html.escape(mgd.full_label)), mgd)
+            await self._answer_free_text(m.chat.id, mgd, number, text,
+                                         card_id, m)
             return
 
         if text.startswith("/"):
@@ -2477,6 +3078,11 @@ class CCBot:
 
         if data.startswith("orph:"):
             await self._restore_callback(c, msg, chat_id, data[5:])
+            return
+
+        if data.startswith("hold:"):
+            # Text kept out of a session that has a question open.
+            await self._held_callback(c, msg, chat_id, data[5:])
             return
 
         if data.startswith("fwd:"):
@@ -3029,6 +3635,10 @@ class CCBot:
 
         if data.startswith("lang:"):
             await self._set_language(c, data[5:])
+            return
+
+        if data.startswith("dr:"):
+            await self._drafts_callback(c, msg, chat_id, data[3:])
             return
 
         if data.startswith("k:"):
@@ -3680,6 +4290,39 @@ class CCBot:
                     mgd.session_id[:8])
         return False
 
+    async def _answer_free_text(self, chat_id: int, mgd, number: int,
+                                text: str, card_id: int | None,
+                                reply_to: Message) -> None:
+        """Type *text* into the dialog's free-text row as the answer.
+
+        The one input that may type over a question: it is meant for it.
+        """
+        self._typed(mgd)
+        await tmux.send_keys(mgd.window_id, str(number))
+        await asyncio.sleep(_NAV_SETTLE)
+        # "Type something" is a line inside the dialog: the digit only
+        # moves the cursor onto it, and what follows is typed into the row,
+        # so Enter answers the question itself. If the dialog has gone the
+        # row was not an input line and the text travels as a prompt.
+        in_dialog = screenmod.find_dialog(
+            await tmux.capture(mgd.window_id)) is not None
+        await self._send_prompt(mgd, text)
+        if in_dialog:
+            # A multi-select list keeps standing: the typed row is filled
+            # in, and Submit is still what sends the set.
+            await asyncio.sleep(_NAV_SETTLE)
+            await self._submit_dialog(mgd)
+        self.watcher.release_dialog(mgd.session_id)
+        if card_id is not None:
+            with contextlib.suppress(Exception):
+                await self.bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=card_id,
+                    reply_markup=done_kb(f"✏️ {text}"))
+        self._focus(chat_id, mgd)
+        await self._ack(reply_to, _("✏️ Answer sent to <b>{name}</b> · it is "
+                                    "the active session now").format(
+            name=html.escape(mgd.full_label)), mgd)
+
     async def _submit_dialog(self, mgd) -> bool:
         """Press the unnumbered Submit (or Next) row of a multi-select question.
 
@@ -3753,7 +4396,10 @@ class CCBot:
                 parse_mode="HTML",
             )
         elif action == "ctx":
-            await self._send_prompt(mgd, "/context")
+            if not await self._send_command(mgd, "/context"):
+                await c.answer(_("It is waiting for an answer — deal with "
+                                 "that first"), show_alert=True)
+                return
             self.watcher.screen_when_idle(mgd.session_id)
             await c.answer(_("/context sent — the breakdown comes back as a "
                              "screen"))
@@ -3761,12 +4407,18 @@ class CCBot:
             # Claude Code's own /compact: it summarises the context in place
             # and keeps the session id, so nothing has to be rebound — and it
             # says so on the terminal only, hence the promised screen.
-            await self._send_prompt(mgd, "/compact")
+            if not await self._send_command(mgd, "/compact"):
+                await c.answer(_("It is waiting for an answer — deal with "
+                                 "that first"), show_alert=True)
+                return
             self.watcher.screen_when_idle(mgd.session_id)
             await c.answer(_("/compact sent — the result comes back as a "
                              "screen when it finishes"))
         elif action == "clear":
-            await self._send_prompt(mgd, "/clear")
+            if not await self._send_command(mgd, "/clear"):
+                await c.answer(_("It is waiting for an answer — deal with "
+                                 "that first"), show_alert=True)
+                return
             await c.answer(_("/clear sent"))
         elif action == "close":
             # Answered first: `/exit` and the wait for it can outlast

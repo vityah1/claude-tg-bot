@@ -11,6 +11,7 @@ import asyncio
 import itertools
 import logging
 import shlex
+from collections.abc import Callable
 from dataclasses import dataclass
 
 log = logging.getLogger("ccbot.tmux")
@@ -143,12 +144,49 @@ async def _paste(window_id: str, text: str) -> None:
     await _run("paste-buffer", "-p", "-d", "-b", buf, "-t", window_id)
 
 
-async def submit_text(window_id: str, text: str, settle: float = 0.25) -> None:
-    """Paste *text* and press Enter as one indivisible action."""
+class Refused(Exception):
+    """The screen said no to the input before it was submitted."""
+
+
+async def submit_text(window_id: str, text: str, settle: float = 0.25,
+                      refuse_if: Callable[[str], bool] | None = None,
+                      hold_if: Callable[[str], bool] | None = None) -> None:
+    """Paste *text* and press Enter as one indivisible action.
+
+    Both tests are asked under the window's lock and raise `Refused`
+    instead of typing: *refuse_if* right before the paste, *hold_if* right
+    before the Enter. Inside an open dialog a paste is swallowed and the
+    Enter picks whatever option the cursor is on, so a question that appears
+    during the settle must stop the Enter too (2026-10-20: two messages lost
+    that way, an option picked for each). The second test is the narrower
+    one: the paste itself may draw over the bottom ("/compact" opens the
+    command list), and that is no reason to leave it unsent. A paste stopped
+    there stays in the input line, under the question — rare, and logged.
+    """
     async with input_lock(window_id):
+        if refuse_if is not None and refuse_if(await capture(window_id)):
+            raise Refused(window_id)
         await _paste(window_id, text)
         await asyncio.sleep(settle)   # let the TUI render the paste
+        if hold_if is not None and hold_if(await capture(window_id)):
+            log.warning("paste into %s left unsubmitted: a dialog appeared",
+                        window_id)
+            raise Refused(window_id)
         await _run("send-keys", "-t", window_id, "Enter")
+
+
+async def press_if(window_id: str, key: str,
+                   when: Callable[[str], bool]) -> bool:
+    """Send *key* only if *when* holds for the screen, under the input lock.
+
+    An Esc meant for a question that has meanwhile been answered would
+    interrupt the turn that answer started.
+    """
+    async with input_lock(window_id):
+        if not when(await capture(window_id)):
+            return False
+        await _run("send-keys", "-t", window_id, key)
+        return True
 
 
 async def send_keys(window_id: str, *keys: str) -> None:

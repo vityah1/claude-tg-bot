@@ -33,6 +33,14 @@ _ESC_MARKER = "Esc to cancel"
 # session blocked with nothing said in the chat.
 _ESC_COMPANIONS = ("select", "amend", "explain", "confirm", "interrupt")
 
+# What `/exit` asks when the session has queued feedback drafts for Anthropic
+# (2.1.305): "You have 2 unsent feedback drafts" right above
+# "Enter to review & send · Esc to discard and exit", nothing under them, no
+# digits. A restart's /exit used to stop here and give up after 20 s
+# (2026-10-20, 4d781898), the screen sent as one the bot did not understand.
+_DRAFTS_RE = re.compile(r"^\s*You have (?P<n>\d+) unsent feedback drafts?\s*$")
+_DRAFTS_FOOTER = ("enter to review", "esc to discard and exit")
+
 # The review step of a multi-part question (AskUserQuestion with several
 # sections) has no footer at all: it lists the answers so far, this line, and
 # two choices. That line is the only anchor the screen offers.
@@ -599,13 +607,44 @@ def _effort_dialog(lines: list[str]) -> Dialog | None:
                   footer=lines[footer].strip(), kind="effort", note=note)
 
 
+def _drafts_dialog(lines: list[str]) -> Dialog | None:
+    """The feedback-drafts question `/exit` asks: Enter or Esc, no digits.
+
+    Both lines have to be the last two on the pane, with no status line
+    anywhere: this file quotes them, and a session working on it prints
+    them.
+    """
+    if _ordinary_bottom(lines):
+        return None
+    filled = [i for i, ln in enumerate(lines) if ln.strip()]
+    if len(filled) < 2:
+        return None
+    footer, head = filled[-1], filled[-2]
+    if not all(m in lines[footer].lower() for m in _DRAFTS_FOOTER):
+        return None
+    if _DRAFTS_RE.match(lines[head]) is None:
+        return None
+    return Dialog(question=lines[head].strip(),
+                  options=[Option(number=1, label="Review & send"),
+                           Option(number=2, label="Discard and exit")],
+                  footer=lines[footer].strip(), kind="drafts")
+
+
+def drafts_count(dialog: Dialog) -> int:
+    """How many drafts the feedback-drafts question is about."""
+    m = _DRAFTS_RE.match(dialog.question)
+    return int(m.group("n")) if m else 0
+
+
 def find_dialog(screen: str) -> Dialog | None:
     """Return the open dialog on screen, or None if nothing is blocking."""
     lines = _clean(screen.splitlines())
 
     # The settings dialogs first: /model would parse as an ordinary question
-    # with its descriptions glued to the labels, and /effort not at all.
-    settings = _model_dialog(lines) or _effort_dialog(lines)
+    # with its descriptions glued to the labels, and /effort not at all. The
+    # drafts question has no digits, so nothing below would find it.
+    settings = (_model_dialog(lines) or _effort_dialog(lines)
+                or _drafts_dialog(lines))
     if settings is not None:
         return settings
 

@@ -88,7 +88,7 @@ _BLOCKED_SETTLE = 5.0
 _STATUS_MAX_AGE = 10.0
 # What heads a dialog card. The settings dialogs are not questions Claude is
 # asking — showing them under a "❓" read as one.
-_DIALOG_ICON = {"model": "🧠 ", "effort": "◉ "}
+_DIALOG_ICON = {"model": "🧠 ", "effort": "◉ ", "drafts": "📝 "}
 
 
 def _boot_id() -> str:
@@ -109,7 +109,30 @@ def _dialog_title(dialog) -> str:
         return _("Model")
     if dialog.kind == "effort":
         return _("Reasoning effort")
+    if dialog.kind == "drafts":
+        return _("Feedback drafts")
     return dialog.title or ""
+
+
+def _dialog_question(dialog) -> str:
+    """The question as the card states it.
+
+    The drafts question gets words of its own: the terminal's line names
+    neither what the drafts are nor what the session is doing.
+    """
+    if dialog.kind == "drafts":
+        n = screenmod.drafts_count(dialog)
+        return ngettext(
+            "Claude Code is closing this session and asks about {count} "
+            "unsent feedback draft for Anthropic (they are written during the "
+            "session and kept in ~/.claude/feedback/drafts). It exits after "
+            "the answer; in a restart the session then comes back by itself.",
+            "Claude Code is closing this session and asks about {count} "
+            "unsent feedback drafts for Anthropic (they are written during "
+            "the session and kept in ~/.claude/feedback/drafts). It exits "
+            "after the answer; in a restart the session then comes back by itself.",
+            n).format(count=n)
+    return dialog.question
 
 # A dialog redraws in stages once a key lands: the chosen row disappears
 # before the rest of it does. Reporting a frame from inside that redraw is how
@@ -1015,13 +1038,15 @@ class Watcher:
         if title:
             head.append(f" · {title}")
         blocks: list[rich.Block] = [rich.para(*head)]
-        if dialog.question:
-            blocks.append(rich.para(dialog.question))
+        question = _dialog_question(dialog)
+        if question:
+            blocks.append(rich.para(question))
         if dialog.note:
             blocks.append(rich.para(dialog.note))
         # The slider's levels carry no description, so the buttons already
         # say everything a list of them would.
-        for o in (dialog.options if dialog.kind != "effort" else []):
+        for o in (dialog.options
+                  if dialog.kind not in ("effort", "drafts") else []):
             mark = "▸ " if o.selected else ""
             box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
             # A digit is a shortcut in an ordinary question and a lie in the
@@ -1062,11 +1087,13 @@ class Watcher:
         if title:
             head += f" · {html.escape(title)}"
         parts = [head, ""]
-        if dialog.question:
-            parts += [html.escape(dialog.question), ""]
+        question = _dialog_question(dialog)
+        if question:
+            parts += [html.escape(question), ""]
         if dialog.note:
             parts += [html.escape(dialog.note), ""]
-        for o in (dialog.options if dialog.kind != "effort" else []):
+        for o in (dialog.options
+                  if dialog.kind not in ("effort", "drafts") else []):
             mark = "▸ " if o.selected else ""
             box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
             head_text = (f"{o.number}. {o.label}" if dialog.kind == "choice"

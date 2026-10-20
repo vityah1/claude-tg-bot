@@ -248,6 +248,23 @@ def settings_kb(session_id: str, dialog: Dialog,
     return kb.as_markup()
 
 
+def drafts_kb(session_id: str) -> InlineKeyboardMarkup:
+    """The feedback-drafts question `/exit` asks: Enter or Esc, nothing else.
+
+    It has no digits, so the ordinary keyboard would offer buttons that
+    press nothing.
+    """
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("📨 Review and send"),
+                                callback_data=f"dr:{s}:send"))
+    kb.row(InlineKeyboardButton(text=_("🗑 Discard and exit"),
+                                callback_data=f"dr:{s}:drop"))
+    kb.row(InlineKeyboardButton(text=_("🖥 Screen"),
+                                callback_data=f"k:{s}:screen"))
+    return kb.as_markup()
+
+
 def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
     """One button per option; free-text options route to a reply prompt.
 
@@ -261,6 +278,8 @@ def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
     """
     if dialog.kind in ("model", "effort"):
         return settings_kb(session_id, dialog)
+    if dialog.kind == "drafts":
+        return drafts_kb(session_id)
     s = sid8(session_id)
     kb = InlineKeyboardBuilder()
     for opt in dialog.options:
@@ -441,6 +460,37 @@ def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=_("♻️ Refresh"), callback_data="svc:show"),
         InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
     )
+    return kb.as_markup()
+
+
+def held_kb(session_id: str, free_text: bool,
+            closable: bool = True) -> InlineKeyboardMarkup:
+    """What to do with text sent while the session has a question open.
+
+    Pasted into the dialog it would be swallowed and its Enter would pick an
+    option, so it waits for one of these. "This answers the question" needs
+    the dialog's own free-text row, and is offered only where there is one.
+    """
+    sid = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    if free_text:
+        kb.row(InlineKeyboardButton(text=_("✏️ This answers the question"),
+                                    callback_data=f"hold:ans:{sid}"))
+    if closable:
+        kb.row(InlineKeyboardButton(text=_("💬 Close the question and send"),
+                                    callback_data=f"hold:esc:{sid}"))
+    kb.row(InlineKeyboardButton(text=_("⏳ Send after the answer"),
+                                callback_data=f"hold:wait:{sid}"))
+    kb.row(InlineKeyboardButton(text=_("🗑 Don't send"),
+                                callback_data=f"hold:drop:{sid}"))
+    return kb.as_markup()
+
+
+def held_wait_kb(session_id: str) -> InlineKeyboardMarkup:
+    """The waiting line keeps a way out: a decision taken is not a trap."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("🗑 Don't send"),
+                                callback_data=f"hold:drop:{sid8(session_id)}"))
     return kb.as_markup()
 
 
