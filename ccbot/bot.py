@@ -11,6 +11,7 @@ import shlex
 import signal
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -66,6 +67,7 @@ from .keyboards import (
     restore_kb,
     route_kb,
     route_pick_kb,
+    row_tag,
     search_kb,
     service_kb,
     session_kb,
@@ -620,6 +622,7 @@ class CCBot:
         self.watcher = Watcher(self.bot, self.store, self.settings,
                                cfg.owner, cfg.poll_interval)
         # chat_id -> ("dir",) | ("dialog", session_id, option_number, card)
+        #          | ("note", session_id, card, question_sig)
         #          | ("rename", session_id) | ("adddir",)
         self.pending: dict[int, tuple] = {}
         # The messages that asked for the pending input: chat_id ->
@@ -2985,6 +2988,14 @@ class CCBot:
             await self._answer_free_text(m.chat.id, mgd, number, text,
                                          card_id, m)
             return
+        elif pend and pend[0] == "note":
+            _kind, session_id, card_id, sig, _ts = pend
+            mgd = self.store.get(self.store.follow(session_id))
+            if not mgd:
+                await m.answer(_("That session is gone"))
+                return
+            await self._answer_note(m.chat.id, mgd, text, card_id, sig, m)
+            return
 
         if text.startswith("/"):
             cmd = text[1:].split()[0].split("@")[0].lower()
@@ -3015,7 +3026,7 @@ class CCBot:
         chat_id = msg.chat.id
         # Pressing anything else abandons a half-finished prompt, so a later
         # message is not swallowed as a directory path.
-        if not data.startswith(("nd:manual", "dt:", "hfind", "done")):
+        if not data.startswith(("nd:manual", "dt:", "dn:", "hfind", "done")):
             self.pending.pop(chat_id, None)
             # Not deleted: the button pressed may have turned one of them
             # into its own card («Cancel» on a rename opens the session).
@@ -3291,15 +3302,102 @@ class CCBot:
                 int(num))
             self._typed(mgd)
             await tmux.send_keys(mgd.window_id, str(int(num)))
-            self._focus(chat_id, mgd)
-            await c.answer(_("Question dropped"))
+            await self._question_dropped(c, msg, chat_id, mgd, label)
+            return
+
+        if data.startswith("dx:"):
+            # A row with no digit ("Chat about this" under a list whose
+            # options carry previews): walk the cursor onto it, then Enter.
+            _kind, short, idx, tag = data.split(":", 3)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            moved = self._focus(chat_id, mgd)
+            label = await self._press_extra(mgd, int(idx), tag)
+            if label is None:
+                await c.answer(_("It did not go through"))
+                await msg.answer(
+                    _("⚠️ That row did not go through — the question is "
+                      "still open in <b>{name}</b>, and the buttons still "
+                      "work.").format(name=html.escape(mgd.full_label)),
+                    parse_mode="HTML")
+                return
+            if screenmod.is_chat_label(label):
+                await self._question_dropped(c, msg, chat_id, mgd, label)
+                return
+            await c.answer(_("Picked"))
+            if moved:
+                await self._say_focused(msg, mgd)
             self.watcher.release_dialog(mgd.session_id)
-            await self._mark(msg, f"💬 {label}")
-            await msg.answer(
-                _("💬 Question dropped in <b>{name}</b>. It is the active "
-                  "session now — write what you want to clarify and it goes "
-                  "there.").format(name=html.escape(mgd.full_label)),
-                parse_mode="HTML")
+            await self._mark(msg, f"✅ {label}")
+            return
+
+        if data.startswith("tab:"):
+            # The parts of a multi-part question are tabs; ←/→ walk them and
+            # stop at either end, so a press that changed nothing says so
+            # instead of retiring a card whose question is still there.
+            _kind, short, way = data.split(":", 2)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            moved = self._focus(chat_id, mgd)
+            before = await self._dialog_now(mgd)
+            if before is None or not before.sections:
+                await c.answer(_("The question has already closed"))
+                return
+            self._typed(mgd)
+            if any(o.selected and o.is_free_text for o in before.options):
+                # On the input row ←/→ move the caret, not the part
+                # (measured on 2.1.310); one row up they switch again.
+                await tmux.send_keys(mgd.window_id, "Up")
+                await asyncio.sleep(_NAV_SETTLE)
+            await tmux.send_keys(mgd.window_id,
+                                 "Left" if way == "prev" else "Right")
+            await asyncio.sleep(_NAV_SETTLE)
+            ok, after = await self._read_dialog(mgd)
+            if not ok or after is None:
+                # No part of a question is ever without a dialog, so this is
+                # a frame mid-redraw or a failed read: the card stays.
+                await c.answer(_("It did not go through"))
+                return
+            if self._dialog_sig(after) == self._dialog_sig(before):
+                await c.answer(_("This is the first part") if way == "prev"
+                               else _("This is the last part"))
+                return
+            await c.answer()
+            if moved:
+                await self._say_focused(msg, mgd)
+            self.watcher.release_dialog(mgd.session_id)
+            await self._mark(msg, _("⬅️ Went to the previous part")
+                             if way == "prev"
+                             else _("➡️ Went to the next part"))
+            return
+
+        if data.startswith("dn:"):
+            # "n to add notes": the note is the answer, so it is collected
+            # first and typed into the note field in one go.
+            mgd = self._resolve(data[3:])
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            dialog = await self._dialog_now(mgd)
+            if dialog is None or not dialog.notes:
+                await c.answer(_("The question has already closed"))
+                return
+            moved = self._focus(chat_id, mgd)
+            # The question is remembered too: a note typed for this part must
+            # not land in the next one, which takes notes just the same.
+            self.pending[chat_id] = ("note", mgd.session_id, msg.message_id,
+                                     self._dialog_sig(dialog), time.time())
+            await c.answer()
+            if moved:
+                await self._say_focused(msg, mgd)
+            await msg.answer(_("📝 Write the note — it answers this question "
+                               "in <b>{name}</b> instead of an option.").format(
+                                   name=html.escape(mgd.full_label)),
+                             parse_mode="HTML")
             return
 
         if data.startswith("dm:"):
@@ -4298,8 +4396,14 @@ class CCBot:
         The one input that may type over a question: it is meant for it.
         """
         self._typed(mgd)
-        await tmux.send_keys(mgd.window_id, str(number))
-        await asyncio.sleep(_NAV_SETTLE)
+        now = await self._dialog_now(mgd)
+        row = next((o for o in (now.options if now else [])
+                    if o.number == number), None)
+        if row is None or not row.selected:
+            # With the cursor already on the input row the digit is not a
+            # shortcut but a character, and it opened the answer ("3ab").
+            await tmux.send_keys(mgd.window_id, str(number))
+            await asyncio.sleep(_NAV_SETTLE)
         # "Type something" is a line inside the dialog: the digit only
         # moves the cursor onto it, and what follows is typed into the row,
         # so Enter answers the question itself. If the dialog has gone the
@@ -4334,32 +4438,148 @@ class CCBot:
         is re-read after every move because Enter on the wrong row would answer
         the question with that single option instead of the ticked set.
         """
+        if await self._walk_to(mgd, lambda d: d.submit_index) is None:
+            log.warning("could not reach Submit id=%s", mgd.session_id[:8])
+            return False
+        self._typed(mgd)
+        await tmux.send_keys(mgd.window_id, "Enter")
+        await asyncio.sleep(_NAV_SETTLE)
+        await self._confirm_review(mgd)
+        log.info("submitted a multi-select dialog id=%s", mgd.session_id[:8])
+        return True
+
+    async def _walk_to(self, mgd, index_of: Callable[[screenmod.Dialog], int | None]
+                       ) -> screenmod.Dialog | None:
+        """Put the cursor on the row *index_of* names, in navigation order.
+
+        For the rows no digit reaches. The screen is re-read after every
+        move, because an Enter on the wrong row answers the question with
+        it. Returns the dialog with the cursor in place, or None when the
+        row is not there (the question changed, or it never had one).
+        """
         for _attempt in range(4):
-            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            if dialog is None or dialog.submit_index is None:
-                return False
+            dialog = await self._dialog_now(mgd)
+            target = index_of(dialog) if dialog is not None else None
+            if dialog is None or target is None:
+                return None
             if dialog.cursor_index is None:
                 # Nothing highlighted: one press puts the cursor on the list.
                 self._typed(mgd)
                 await tmux.send_keys(mgd.window_id, "Down")
                 await asyncio.sleep(_NAV_SETTLE)
                 continue
-            delta = dialog.submit_index - dialog.cursor_index
+            delta = target - dialog.cursor_index
             if delta == 0:
-                self._typed(mgd)
-                await tmux.send_keys(mgd.window_id, "Enter")
-                await asyncio.sleep(_NAV_SETTLE)
-                await self._confirm_review(mgd)
-                log.info("submitted a multi-select dialog id=%s",
-                         mgd.session_id[:8])
-                return True
+                return dialog
             key = "Down" if delta > 0 else "Up"
             self._typed(mgd)
             for _step in range(abs(delta)):
                 await tmux.send_keys(mgd.window_id, key)
             await asyncio.sleep(_NAV_SETTLE)
-        log.warning("could not reach Submit id=%s", mgd.session_id[:8])
-        return False
+        return None
+
+    async def _press_extra(self, mgd, index: int, tag: str) -> str | None:
+        """Press the unnumbered row *index* (`Dialog.extras`); its label or None.
+
+        The row is held to the label the card was drawn with (*tag*, see
+        `row_tag`), so a question that changed since — or under the walk — is
+        not answered with whatever row now sits at that position.
+        """
+        before = await self._dialog_now(mgd)
+        if (before is None or index >= len(before.extras)
+                or row_tag(before.extras[index]) != tag):
+            return None
+        label = before.extras[index]
+
+        def position(d: screenmod.Dialog) -> int | None:
+            if index < len(d.extras) and d.extras[index] == label:
+                return d.extra_indexes[index]
+            return None
+
+        if await self._walk_to(mgd, position) is None:
+            log.warning("could not reach row %r id=%s", label,
+                        mgd.session_id[:8])
+            return None
+        self._typed(mgd)
+        await tmux.send_keys(mgd.window_id, "Enter")
+        await asyncio.sleep(_NAV_SETTLE)
+        ok, after = await self._read_dialog(mgd)
+        if not ok or (after is not None
+                      and self._dialog_sig(after) == self._dialog_sig(before)):
+            log.warning("row %r would not commit id=%s", label,
+                        mgd.session_id[:8])
+            return None
+        return label
+
+    async def _read_dialog(self, mgd) -> tuple[bool, screenmod.Dialog | None]:
+        """The dialog on the screen, and whether the screen could be read.
+
+        For the checks after a press, where "no dialog" means the question
+        left — which a failed capture must not pass for.
+        """
+        try:
+            return True, screenmod.find_dialog(await tmux.capture(mgd.window_id))
+        except tmux.TmuxError:
+            return False, None
+
+    async def _question_dropped(self, c: CallbackQuery, msg: Message,
+                                chat_id: int, mgd, label: str) -> None:
+        """Say that "Chat about this" was pressed and where the next text goes."""
+        self._focus(chat_id, mgd)
+        await c.answer(_("Question dropped"))
+        self.watcher.release_dialog(mgd.session_id)
+        await self._mark(msg, f"💬 {label}")
+        await msg.answer(
+            _("💬 Question dropped in <b>{name}</b>. It is the active "
+              "session now — write what you want to clarify and it goes "
+              "there.").format(name=html.escape(mgd.full_label)),
+            parse_mode="HTML")
+
+    async def _answer_note(self, chat_id: int, mgd, text: str,
+                           card_id: int | None, sig: str,
+                           reply_to: Message) -> None:
+        """Answer the question with a note: `n`, the text, Enter.
+
+        Measured on 2.1.310: `n` opens a note field under the preview, and
+        Enter there answers the question with the note alone — the
+        transcript reads "(no option selected) notes: …".
+        """
+        before = await self._dialog_now(mgd)
+        if before is None or not before.notes or self._dialog_sig(before) != sig:
+            await self._ack(reply_to, _(
+                "⚠️ The question in <b>{name}</b> has already closed — the "
+                "note was not sent.").format(name=html.escape(mgd.full_label)),
+                mgd)
+            return
+        self._typed(mgd)
+        await tmux.send_keys(mgd.window_id, "n")
+        await asyncio.sleep(_NAV_SETTLE)
+        await self._send_prompt(mgd, text)
+        await asyncio.sleep(_NAV_SETTLE)
+        ok, after = await self._read_dialog(mgd)
+        if not ok or (after is not None and self._dialog_sig(after) == sig):
+            if ok:
+                # The field is still open with the text in it: Esc alone
+                # closes it and keeps the text, which would ride along with
+                # the next answer, and a digit would be typed into it.
+                self._typed(mgd)
+                await tmux.send_keys(mgd.window_id, "C-u")
+                await tmux.send_keys(mgd.window_id, "Escape")
+            await self._ack(reply_to, _(
+                "⚠️ The note did not go through — the question is still open "
+                "in <b>{name}</b>.").format(name=html.escape(mgd.full_label)),
+                mgd)
+            return
+        self.watcher.release_dialog(mgd.session_id)
+        if card_id is not None:
+            with contextlib.suppress(Exception):
+                await self.bot.edit_message_reply_markup(
+                    chat_id=chat_id, message_id=card_id,
+                    reply_markup=done_kb(f"📝 {text}"))
+        self._focus(chat_id, mgd)
+        await self._ack(reply_to, _("📝 Note sent to <b>{name}</b> · it is "
+                                    "the active session now").format(
+            name=html.escape(mgd.full_label)), mgd)
 
     async def _confirm_review(self, mgd) -> None:
         """Answer the review page that Submit leads to.

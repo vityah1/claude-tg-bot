@@ -550,6 +550,12 @@ is still alive, too. That is why rows are read tolerantly
   `said_above_dialog` returns nothing without a `_dialog_span` of its own:
   with no rule to stop at it read down to the bottom of the pane and offered
   the input line and the status bars as something Claude had said.
+- 🔴 **Every control a dialog draws gets a button of its own.** An unnumbered
+  row ("Chat about this"), the section tabs (`← ☐ Назви ☐ Скасовані ✔ Submit →`),
+  a footer key (`n to add notes`) — if the screen offers it, the card offers
+  it, named after what it does. A line of text pointing at ⬆️⬇️✅ is not a
+  control: on 2026-10-24 (d569a86c, a preview question) the user found no way
+  to "Chat about this", switch sections or add a note from the chat.
 - 🔴 **An unrecognised dialog has no right to be silence.** When
   `claude agents --json` says `waiting` and `find_dialog()` returned None,
   `Watcher._report_blocked` sends the screen with buttons (digits/arrows/Esc)

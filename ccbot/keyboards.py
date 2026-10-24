@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .i18n import _, language_name, ngettext, offered
-from .screen import Dialog
+from .screen import Dialog, is_chat_label
 from .sessions import DirStat, SessionView
 from .state import Orphan
 
@@ -265,6 +267,16 @@ def drafts_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def row_tag(label: str) -> str:
+    """A short fingerprint of a row's label, for a button that names no digit.
+
+    The position alone would press whatever row sits there when the button
+    is tapped, which on a card the next question has overtaken is a row
+    nobody chose; the label itself does not fit into 64 bytes.
+    """
+    return hashlib.sha1(label.encode()).hexdigest()[:6]
+
+
 def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
     """One button per option; free-text options route to a reply prompt.
 
@@ -318,9 +330,29 @@ def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
             text = (ngettext("✅ Send {n} choice", "✅ Send {n} choices", n).format(n=n)
                     if n else _("✅ Send answer"))
         kb.row(InlineKeyboardButton(text=text, callback_data=f"sub:{s}"))
-    # Arrow keys reach options the digit shortcuts cannot: unnumbered entries
-    # like "Chat about this", and previews that only render for the highlighted
-    # row.
+    # The rows with no digit ("Chat about this" under a list with previews)
+    # get buttons of their own: a line of text pointing at the arrows was all
+    # there was, and from the chat it read as no way to pick them at all.
+    for i, extra in enumerate(dialog.extras):
+        label = extra if len(extra) <= 48 else extra[:47] + "…"
+        icon = "💬 " if is_chat_label(extra) else ""
+        kb.row(InlineKeyboardButton(text=f"{icon}{label}",
+                                    callback_data=f"dx:{s}:{i}:{row_tag(extra)}"))
+    if dialog.notes:
+        # TRANSLATORS: answers a question with a note of one's own instead
+        # of one of its options ("n to add notes" in the terminal).
+        kb.row(InlineKeyboardButton(text=_("📝 Answer with a note"),
+                                    callback_data=f"dn:{s}"))
+    if dialog.sections:
+        # TRANSLATORS: walk between the parts of a multi-part question.
+        kb.row(
+            InlineKeyboardButton(text=_("⬅️ Previous part"),
+                                 callback_data=f"tab:{s}:prev"),
+            InlineKeyboardButton(text=_("Next part ➡️"),
+                                 callback_data=f"tab:{s}:next"),
+        )
+    # The arrows walk the cursor, which is what shows another option's
+    # preview; ✅ presses whatever row it stands on.
     nav = [
         InlineKeyboardButton(text="⬆️", callback_data=f"nav:{s}:up"),
         InlineKeyboardButton(text="⬇️", callback_data=f"nav:{s}:down"),

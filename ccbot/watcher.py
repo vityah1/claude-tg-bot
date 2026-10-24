@@ -1069,10 +1069,6 @@ class Watcher:
             blocks.append(rich.para(
                 _("The numbered buttons only tick boxes — nothing goes to "
                   "Claude until the button under them.")))
-        if dialog.extras:
-            # TRANSLATORS: options with no digit of their own, reachable only
-            # by walking the list with the arrow buttons.
-            blocks.append(rich.para(_("Via ⬆️⬇️✅: ") + ", ".join(dialog.extras)))
         if dialog.preview:
             sel = next((o.number for o in dialog.options if o.selected), None)
             blocks.append(rich.para(
@@ -1114,12 +1110,6 @@ class Watcher:
             # TRANSLATORS: how a multi-select question is answered from a chat.
             parts.append(_("The numbered buttons only tick boxes — nothing "
                            "goes to Claude until the button under them."))
-        if dialog.extras:
-            parts.append("")
-            # TRANSLATORS: options with no digit of their own, reachable only
-            # by walking the list with the arrow buttons.
-            parts.append(_("Via ⬆️⬇️✅: ")
-                         + ", ".join(html.escape(e) for e in dialog.extras))
         if dialog.preview:
             sel = next((o.number for o in dialog.options if o.selected), None)
             caption = (_("🖼 Diagram for option {n}:").format(n=sel) if sel

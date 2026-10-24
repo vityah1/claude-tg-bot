@@ -177,6 +177,9 @@ _MIN_PREVIEW_COL = 24
 _MIN_PREVIEW_ROWS = 3
 # TUI affordances that render inside the preview pane but are not the drawing.
 _PREVIEW_NOISE = ("press n to add notes", "notes:")
+# The same line when it ends up outside the pane: "Notes: press n to add
+# notes", or the note being typed. Anchored, so "Release notes: …" is a row.
+_NOTES_LINE_RE = re.compile(r"^notes:\s", re.IGNORECASE)
 
 
 @dataclass
@@ -197,9 +200,18 @@ class Option:
     @property
     def is_chat_about(self) -> bool:
         """Whether picking this row drops the question instead of answering it."""
-        return self.label.strip().lower().rstrip(".") in (
-            h.rstrip(".") for h in _CHAT_OPTION_HINTS
-        )
+        return is_chat_label(self.label)
+
+
+def is_chat_label(label: str) -> bool:
+    """Whether a row captioned *label* drops the question ("Chat about this").
+
+    The row is numbered in an ordinary question and unnumbered (an extra)
+    in one whose options carry previews, so both kinds ask the same thing.
+    """
+    return label.strip().lower().rstrip(".") in (
+        h.rstrip(".") for h in _CHAT_OPTION_HINTS
+    )
 
 
 @dataclass
@@ -215,6 +227,13 @@ class Dialog:
     note: str = ""             # a line of state that belongs to the dialog
     preview: str = ""          # ASCII art shown beside the selected option
     extras: list[str] = field(default_factory=list)   # unnumbered choices
+    extra_indexes: list[int] = field(default_factory=list)  # their nav positions
+    # A multi-part question draws its parts as tabs; ←/→ walk between them
+    # (Tab / Shift+Tab too), and stop at either end — measured on 2.1.310.
+    sections: bool = False
+    # A question with previews offers "n to add notes": the note becomes the
+    # answer itself, "(no option selected) notes: …" in the transcript.
+    notes: bool = False
     # Positions in navigation order (options, then the Submit row, then the
     # unnumbered choices): where the cursor is, and where Submit sits. The
     # distance between them is how many arrow presses reach it.
@@ -264,8 +283,13 @@ def _preview_column(lines: list[str]) -> int | None:
     counts: dict[int, int] = {}
     for ln in lines:
         stripped = ln.strip()
-        if not stripped or _SEPARATOR_RE.match(ln):
-            continue          # full-width rules are not a preview border
+        indent = len(ln) - len(stripped)
+        if not stripped or (_SEPARATOR_RE.match(ln)
+                            and indent < _MIN_PREVIEW_COL):
+            # Full-width rules are not a preview border; the bottom edge of
+            # the pane's box (`└──┘`, deep in) is, and a one-line drawing has
+            # only three rows to be counted by.
+            continue
         for col, ch in enumerate(ln):
             if ch in _BOX_CHARS and col >= _MIN_PREVIEW_COL:
                 counts[col] = counts.get(col, 0) + 1
@@ -686,6 +710,9 @@ def find_dialog(screen: str) -> Dialog | None:
     submit_index: int | None = None
     submit_label = ""
 
+    sections = False
+    notes_hint = False
+    extra_indexes: list[int] = []
     after_rule = False        # a rule separates the list from extra choices
     for ln in body:
         if not ln.strip() or _DASHED_RULE_RE.match(ln):
@@ -695,6 +722,7 @@ def find_dialog(screen: str) -> Dialog | None:
                 after_rule = True
             continue
         if _TABS_RE.match(ln):
+            sections = True
             # The tab row is navigation furniture, not part of the question;
             # its names are worth keeping, the arrows and boxes are not.
             if title is None:
@@ -737,6 +765,11 @@ def find_dialog(screen: str) -> Dialog | None:
                     cursor_index = nav
                 nav += 1
                 continue
+        if options and _NOTES_LINE_RE.match(ln.strip()):
+            # The preview pane's note line, left of the split when the pane
+            # was not found: neither a description nor a row to press.
+            notes_hint = True
+            continue
         indent = len(ln) - len(ln.lstrip())
         if options and indent >= cur_indent and not after_rule:
             opt = options[-1]
@@ -753,6 +786,7 @@ def find_dialog(screen: str) -> Dialog | None:
                 if cursored:
                     cursor_index = nav
                 extras.append(choice)
+                extra_indexes.append(nav)
                 nav += 1
             continue
         hm = _HEADER_RE.match(ln)
@@ -772,6 +806,11 @@ def find_dialog(screen: str) -> Dialog | None:
     if len(question) > _MAX_QUESTION:
         question = question[-_MAX_QUESTION:].lstrip()
 
+    footer = lines[footer_idx].strip() if footer_idx < len(lines) else ""
+    # The footer is cut at the pane's width, so the hint under the drawing
+    # ("Notes: press n to add notes") counts as well.
+    notes = notes_hint or "add notes" in footer.lower() or any(
+        "press n to add notes" in ln.lower() for ln in preview_lines)
     preview_lines = [
         ln for ln in preview_lines
         if not any(n in ln.lower() for n in _PREVIEW_NOISE)
@@ -784,9 +823,12 @@ def find_dialog(screen: str) -> Dialog | None:
         question=question,
         options=options,
         title=title,
-        footer=lines[footer_idx].strip() if footer_idx < len(lines) else "",
+        footer=footer,
         preview=preview,
         extras=extras,
+        extra_indexes=extra_indexes,
+        sections=sections,
+        notes=notes,
         cursor_index=cursor_index,
         submit_index=submit_index,
         submit_label=submit_label,
