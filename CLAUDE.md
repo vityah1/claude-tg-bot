@@ -91,7 +91,8 @@ managed/foreign/closed; `keyboards.py` — inline keyboards and the
 `callback_data` format; `paths.py` — XDG paths; `settings.py` —
 `~/.config/ccbot/config.json`; `service.py` — the bot's own process (uptime,
 version, restart); `rich.py` (Bot API 10.x rich messages); `media.py`,
-`render.py` (ASCII→PNG, now only a fallback), `util.py`,
+`render.py` (ASCII→PNG, now only a fallback), `transport.py` (the polling
+session that survives an unparseable update), `util.py`,
 `logsetup.py`.
 
 ## The bot's state
@@ -229,6 +230,16 @@ is still alive, too. That is why rows are read tolerantly
   unhandled with its content type (service ones in `_SERVICE_KINDS` are only
   logged) — keep it last and keep it, it is what turns the next new kind
   Telegram invents into a reply instead of a hole.
+- 🔴 **One update aiogram cannot parse must not stop polling.** aiogram
+  validates a `getUpdates` answer as a whole, so a single update with a kind
+  its models do not know fails the batch, the offset never moves, and every
+  later message queues behind it — the bot looked dead for 15 minutes on
+  2026-10-27 (a rich message with a `document` block, Bot API 10.3, on aiogram
+  3.30). `transport.TolerantSession` validates such a batch update by update,
+  cuts out what the models reject (an unknown block, not the paragraphs around
+  it), logs the raw JSON and tells the chat what was left out
+  (`CCBot._say_damaged`). Keep the bot on it, and still bump aiogram when
+  Telegram adds a block kind — the guard saves the rest, not the new part.
 - 🔴 **A session restart is `/exit` + `claude --resume <id> -n <name>` in the
   same window, and the window is never killed** (`CCBot._restart_session`).
   `--resume` keeps the session id — verified against the live CLI on

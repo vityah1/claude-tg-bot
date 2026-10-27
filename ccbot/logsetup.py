@@ -87,7 +87,10 @@ class UpdateLogMiddleware(BaseMiddleware):
         return await handler(event, data)
 
     def _describe(self, event) -> None:
-        upd = getattr(event, "event_type", "?")
+        try:
+            upd = event.event_type
+        except LookupError:          # reduced to its id by `transport`
+            upd = "?"
         msg = getattr(event, "message", None)
         cb = getattr(event, "callback_query", None)
         if msg is not None:

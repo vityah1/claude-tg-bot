@@ -175,6 +175,9 @@ _MEDIA_BLOCKS = {
     "animation": ("animation", "video/mp4", ".mp4"),
     "audio": ("audio", "audio/mpeg", ".mp3"),
     "voice_note": ("voice_note", "audio/ogg", ".oga"),
+    # A file of any format (Bot API 10.3): its own MIME type and name, if it
+    # has them, win — the same fallback as a classic document's.
+    "document": ("document", "", ".bin"),
 }
 
 # Inline styles Markdown can say; anything else keeps just its text.
@@ -310,7 +313,7 @@ def _block(block, media: list) -> list[str]:
             out.append(f"{mark} {body[0]}")
             out += ["  " + ln for ln in body[1:]]
         return out
-    if kind in ("blockquote", "pullquote"):
+    if kind in ("blockquote", "expandable_blockquote", "pullquote"):
         body = (_blocks(block.blocks, media) if kind == "blockquote"
                 else [_inline(getattr(block, "text", None))])
         credit = _inline(getattr(block, "credit", None))

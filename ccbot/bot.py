@@ -27,6 +27,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     MenuButtonCommands,
     Message,
+    ReplyParameters,
     Update,
 )
 
@@ -77,6 +78,7 @@ from .keyboards import (
 )
 from .settings import Settings
 from .state import Orphan, Store
+from .transport import TolerantSession
 from .util import as_pre, split_text, usage_report
 from .watcher import Watcher
 
@@ -614,7 +616,9 @@ class _Inbox:
 class CCBot:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.bot = Bot(token=cfg.token)
+        session = TolerantSession()
+        session.on_damaged = self._on_damaged
+        self.bot = Bot(token=cfg.token, session=session)
         self.dp = Dispatcher()
         self.store = Store()
         self.settings = Settings()
@@ -2259,6 +2263,48 @@ class CCBot:
                 return
             held.ask_id = msg.message_id
             self.store.remember_message(msg.message_id, held.session_id)
+
+    def _on_damaged(self, chat_id: int | None, message_id: int | None,
+                    parts: list[str]) -> None:
+        """An update lost parts on the way in: say so (see `transport`).
+
+        Only to a chat the bot serves: a stranger's broken message is logged
+        by the transport and answered with nothing, like the rest of theirs.
+        """
+        chat_id = chat_id or self.cfg.owner
+        if chat_id not in self.cfg.allowed:
+            return
+        task = asyncio.get_running_loop().create_task(
+            self._say_damaged(chat_id, message_id, parts))
+        self.expiries.add(task)
+        task.add_done_callback(self.expiries.discard)
+
+    async def _say_damaged(self, chat_id: int, message_id: int | None,
+                           parts: list[str]) -> None:
+        """Silence here would read as "the whole message was received".
+
+        It answers the message that lost the part, so in a forwarded batch
+        the right bubble is the one marked.
+        """
+        with use_locale(self._locale()):
+            if "update" in parts:
+                text = _("⚠️ Telegram sent something this version of the bot "
+                         "cannot read at all, and it was skipped. If it was a "
+                         "message, send it again in another form. Details in "
+                         "/log.")
+            else:
+                text = _("⚠️ Part of this message could not be read by this "
+                         "version of the bot and was left out: {parts}. The "
+                         "rest was received. Send that part again in another "
+                         "form if it matters.").format(
+                             parts=", ".join(dict.fromkeys(parts)))
+        reply = (ReplyParameters(message_id=message_id,
+                                 allow_sending_without_reply=True)
+                 if message_id else None)
+        try:
+            await self.bot.send_message(chat_id, text, reply_parameters=reply)
+        except Exception:
+            log.exception("damaged-update notice failed")
 
     async def _say_held_expired(self, held: _Held) -> None:
         """Silence here would read as "it was delivered"."""
