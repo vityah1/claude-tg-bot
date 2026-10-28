@@ -74,6 +74,7 @@ from .keyboards import (
     session_kb,
     sessions_kb,
     settings_kb,
+    side_kb,
     update_kb,
 )
 from .settings import Settings
@@ -576,6 +577,15 @@ def _batch_text(items: list[_Item]) -> str:
 def _dialog_on_screen(raw: str) -> bool:
     """The refusal test typed text is checked against, under the lock."""
     return screenmod.find_dialog(raw) is not None
+
+
+# The /btw overlay's keys, by the action on its card.
+_SIDE_KEYS = {"up": "Up", "down": "Down", "prev": "S-Left", "next": "S-Right",
+              "close": "Escape"}
+
+
+def _side_on_screen(raw: str) -> bool:
+    return screenmod.side_answer(raw) is not None
 
 
 def _drafts_on_screen(raw: str) -> bool:
@@ -1568,6 +1578,56 @@ class CCBot:
         await c.answer()
         await self._mark(msg, _("📨 Review and send") if what == "send"
                          else _("🗑 Discard and exit"))
+
+    async def _side_callback(self, c: CallbackQuery, msg: Message,
+                             arg: str) -> None:
+        """The card of a `/btw` answer the bot could not copy.
+
+        Every key goes in only while the overlay is still up: closed in the
+        terminal meanwhile, an Esc would interrupt the turn and an arrow
+        would walk the input history.
+        """
+        short, _sep, what = arg.partition(":")
+        mgd = self._resolve(short)
+        if not mgd:
+            await c.answer(_("That session is gone"), show_alert=True)
+            return
+        if what == "copy":
+            if screenmod.side_answer(await tmux.capture(mgd.window_id)) is None:
+                await c.answer(_("That answer is no longer open"), show_alert=True)
+                return
+            self.watcher.retry_side(mgd.session_id)
+            await c.answer(_("Copying again…"))
+            return
+        key = _SIDE_KEYS.get(what)
+        if key is None:
+            await c.answer()
+            return
+        self._typed(mgd)
+        try:
+            pressed = await tmux.press_if(mgd.window_id, key, _side_on_screen)
+        except tmux.TmuxError:
+            pressed = False
+        if not pressed:
+            await c.answer(_("That answer is no longer open"), show_alert=True)
+            await self._mark(msg, _("⏹ Answer closed"))
+            return
+        if what == "close":
+            await c.answer()
+            await self._mark(msg, _("✖️ Closed"))
+            return
+        # An arrow redraws the overlay: the card shows the new frame in
+        # place, so walking a long answer does not post a screen per press.
+        await c.answer()
+        await asyncio.sleep(0.4)
+        raw = await tmux.capture(mgd.window_id)
+        side = screenmod.side_answer(raw)
+        if side is None or not await rich.edit(
+                self.bot, msg.chat.id, msg.message_id,
+                blocks=self.watcher.side_blocks(mgd.full_label, raw),
+                reply_markup=side_kb(mgd.session_id, side.browse)):
+            await self.watcher.send_screen(mgd.window_id, mgd.full_label,
+                                           mgd.session_id)
 
     async def _launch_resume(self, mgd) -> bool:
         """Start `claude --resume` in the session's window; True if it came up."""
@@ -3783,6 +3843,10 @@ class CCBot:
 
         if data.startswith("dr:"):
             await self._drafts_callback(c, msg, chat_id, data[3:])
+            return
+
+        if data.startswith("bw:"):
+            await self._side_callback(c, msg, data[3:])
             return
 
         if data.startswith("k:"):

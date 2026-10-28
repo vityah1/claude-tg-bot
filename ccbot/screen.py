@@ -41,6 +41,22 @@ _ESC_COMPANIONS = ("select", "amend", "explain", "confirm", "interrupt")
 _DRAFTS_RE = re.compile(r"^\s*You have (?P<n>\d+) unsent feedback drafts?\s*$")
 _DRAFTS_FOOTER = ("enter to review", "esc to discard and exit")
 
+# The answer to a `/btw` side question is an overlay, not a question: a rule
+# at column 0, the asked line echoed under it ("  /btw …", one per answer in
+# its history, the newest last), the answer, and "↑/↓ to scroll · c to copy ·
+# f to fork · Esc to close" — "⇧←/→ to browse · … · x to clear history · …"
+# once the history holds more than one (2.1.312). While it is being answered
+# the footer is "Esc to close" alone. The answer is written nowhere, neither
+# to the transcript nor to history.jsonl, so it went to the chat as a screen
+# the bot did not understand, with digits that did nothing (2026-10-27/28,
+# f384fe26, three times).
+_SIDE_CLOSE = "esc to close"
+# For a few seconds after the copy key the footer reads "Copied to clipboard"
+# in its place; taken for a closed overlay, it left the Esc that was to close
+# it unpressed.
+_SIDE_COPY = ("c to copy", "copied to clipboard")
+_SIDE_ECHO_RE = re.compile(r"^  /btw\s+(?P<q>\S.*)$")
+
 # The review step of a multi-part question (AskUserQuestion with several
 # sections) has no footer at all: it lists the answers so far, this line, and
 # two choices. That line is the only anchor the screen offers.
@@ -652,6 +668,57 @@ def _drafts_dialog(lines: list[str]) -> Dialog | None:
                   options=[Option(number=1, label="Review & send"),
                            Option(number=2, label="Discard and exit")],
                   footer=lines[footer].strip(), kind="drafts")
+
+
+def _edge_rule(line: str) -> bool:
+    """A rule drawn from column 0 — the TUI's own, never output or prose.
+
+    It may carry the session name (`──── pay4say-1a2b ─`).
+    """
+    return line.startswith("─") and _NAMED_RULE_RE.match(line) is not None
+
+
+@dataclass
+class SideAnswer:
+    """The `/btw` overlay as it stands on the pane."""
+    question: str      # the newest asked line, the one on show
+    done: bool         # answered: the copy key is offered
+    browse: bool       # its history has more than one answer (⇧←/→)
+    head: str          # the first line of the answer, to check a copy by
+
+
+def side_answer(screen: str) -> SideAnswer | None:
+    """The `/btw` overlay open on the pane, answered or not, or None.
+
+    Anchored at both ends, because this file quotes the footer and a session
+    working on it prints it: above, a rule at column 0 with the echoed
+    `/btw` line first under it; below, nothing but blank lines or the input
+    box (a rule, then "❯"). Tool output and prose are indented and never
+    draw a rule at column 0, so neither can pass for it.
+    """
+    lines = _clean(screen.splitlines())
+    foot = next((i for i in range(len(lines) - 1, -1, -1)
+                 if _SIDE_CLOSE in lines[i].lower()), None)
+    if foot is None or not lines[foot].startswith("  ") \
+            or lines[foot].startswith("   "):
+        return None
+    below = [ln for ln in lines[foot + 1:] if ln.strip()]
+    if below and not (len(below) > 1 and _edge_rule(below[0])
+                      and below[1].startswith("❯")):
+        return None
+    top = next((i for i in range(foot - 1, -1, -1) if _edge_rule(lines[i])), None)
+    if top is None:
+        return None
+    body = [ln for ln in lines[top + 1:foot] if ln.strip()]
+    if not body or _SIDE_ECHO_RE.match(body[0]) is None:
+        return None
+    echoes = [m for ln in body if (m := _SIDE_ECHO_RE.match(ln))]
+    rest = [ln.strip() for ln in body if _SIDE_ECHO_RE.match(ln) is None]
+    low = lines[foot].lower()
+    return SideAnswer(question=echoes[-1].group("q").strip(),
+                      done=any(m in low for m in _SIDE_COPY),
+                      browse="to browse" in low,
+                      head=rest[0] if rest else "")
 
 
 def drafts_count(dialog: Dialog) -> int:

@@ -1066,6 +1066,22 @@ makes it a more honest signal than the parser. When a session is waiting and
 that work without any parsing: digits, arrows, ✅ and Esc. Staying quiet in that
 situation is not an option.
 
+### `/btw` answers are not questions
+
+A `/btw` side question opens an overlay of its own: the asked line under a
+rule, the answer, and `c to copy · f to fork · Esc to close`. The session reads
+as `waiting` while it stands, but nothing is being asked — and the answer is
+written nowhere, neither to the transcript nor to `history.jsonl`, so an Esc
+alone would throw it away. `screen.side_answer()` recognises the finished
+overlay (while it is still answering, the footer has no `c to copy`), the bot
+presses `c`, which loads the whole answer into a tmux buffer in Markdown
+however little of it fits on the pane, sends it to the chat, and closes the
+overlay with Esc. The buffer has to hold the answer's first line, since a
+selection made in another window of the same tmux server is a new buffer too.
+If the copy does not arrive, the screen comes with the overlay's own keys
+instead — 📋 copy again, ⬆️⬇️ to scroll, ⬅️➡️ through its history, ✖️ Close —
+and the overlay is left standing.
+
 ## Later
 
 * **Streaming an answer.** `sendRichMessageDraft` exists for exactly the case

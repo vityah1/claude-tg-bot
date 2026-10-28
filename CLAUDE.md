@@ -567,6 +567,25 @@ is still alive, too. That is why rows are read tolerantly
   it, named after what it does. A line of text pointing at ⬆️⬇️✅ is not a
   control: on 2026-10-24 (d569a86c, a preview question) the user found no way
   to "Chat about this", switch sections or add a note from the chat.
+- 🔴 **A `/btw` answer is copied out, then closed — never just Esc'd.**
+  It is an overlay (`  /btw …` under a column-0 rule, the answer,
+  `c to copy · f to fork · Esc to close`, 2.1.312), the session reads as
+  `waiting`, and the answer exists on the screen only: not in the transcript,
+  not in `history.jsonl`. `screen.side_answer` finds it, `Watcher._side_answer`
+  presses `c` (`tmux.copy_out` takes the new `bufferN` Claude Code loads —
+  the whole answer, Markdown, however much the pane shows — and deletes it),
+  sends it, then Esc. Right after `c` the footer reads `Copied to clipboard`
+  instead; matching only `c to copy` took that for a closed overlay and the
+  Esc was never pressed. The tmux server is shared, so a new buffer counts
+  only if it holds the answer's first line as the pane shows it — otherwise
+  it is somebody's selection in another window. While it is still
+  answering (footer `Esc to close` alone) the overlay is recognised too and
+  nothing is reported. A copy that does not arrive leaves the overlay up with
+  a card of its keys (`bw:` — 📋 again, ⬆️⬇️, ⬅️➡️ through its history,
+  ✖️ Close; arrows edit the card in place); an overlay closed meanwhile gets
+  no card at all. Every key goes through the lock with the overlay
+  re-checked: a stray `c` lands in the input line, a stray Esc interrupts
+  the turn.
 - 🔴 **An unrecognised dialog has no right to be silence.** When
   `claude agents --json` says `waiting` and `find_dialog()` returned None,
   `Watcher._report_blocked` sends the screen with buttons (digits/arrows/Esc)

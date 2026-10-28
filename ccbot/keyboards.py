@@ -481,6 +481,29 @@ def blocked_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def side_kb(session_id: str, browse: bool = False) -> InlineKeyboardMarkup:
+    """Controls for a `/btw` answer the bot could not copy.
+
+    The overlay's own keys: the copy again, ↑/↓ to scroll the answer, ⇧←/→
+    through its history when it has one, and Esc to close it.
+    """
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("📋 Copy again"), callback_data=f"bw:{s}:copy"))
+    row = [InlineKeyboardButton(text="⬆️", callback_data=f"bw:{s}:up"),
+           InlineKeyboardButton(text="⬇️", callback_data=f"bw:{s}:down")]
+    if browse:
+        row = [InlineKeyboardButton(text=_("⬅️ Earlier"), callback_data=f"bw:{s}:prev"),
+               *row,
+               InlineKeyboardButton(text=_("Later ➡️"), callback_data=f"bw:{s}:next")]
+    kb.row(*row)
+    kb.row(
+        InlineKeyboardButton(text=_("✖️ Close"), callback_data=f"bw:{s}:close"),
+        InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
+    )
+    return kb.as_markup()
+
+
 def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
     """Bot-process actions. Restart is offered only when something can bring
     the bot back — otherwise the button would end the conversation."""

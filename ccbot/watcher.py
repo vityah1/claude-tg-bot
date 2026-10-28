@@ -26,7 +26,15 @@ from . import screen as screenmod
 from . import sessions as sess
 from .i18n import _, ngettext, resolve
 from .i18n import use as use_locale
-from .keyboards import blocked_kb, dialog_kb, done_kb, menu_kb, restore_kb, update_notice_kb
+from .keyboards import (
+    blocked_kb,
+    dialog_kb,
+    done_kb,
+    menu_kb,
+    restore_kb,
+    side_kb,
+    update_notice_kb,
+)
 from .settings import Settings
 from .state import Store
 from .transcript import TranscriptReader
@@ -209,6 +217,9 @@ class SessionRuntime:
         self.work_since = 0.0
         self.pulse_msg_id: int | None = None
         self.pulse_edited = 0.0
+        # The `/btw` answer already dealt with while its overlay stands: sent
+        # and closed, or its fallback card sent. Cleared once it is gone.
+        self.side_question: str | None = None
 
     def track_queue(self, op: str, kind: str) -> None:
         """Follow one queue-operation record of the transcript."""
@@ -699,6 +710,18 @@ class Watcher:
             rt.seen_dialog_sig = None
             rt.flushed_sig = None
             await self._retire_dialog(rt)
+            side = screenmod.side_answer(raw)
+            if side is not None:
+                # Waiting, by the agent list, and asking nothing: the answer
+                # is on its way or on show, never a question to report.
+                rt.clear_blocked()
+                if side.done:
+                    await self._side_answer(session_id, window_id, name, rt,
+                                            side, raw, usage, status)
+                else:
+                    rt.side_question = None
+                return
+            rt.side_question = None
             await self._report_blocked(session_id, name, raw, rt,
                                        agent_status, busy)
             return
@@ -812,6 +835,86 @@ class Watcher:
         rt.remember_said(said)
         await self._drop_pulse(rt)
         await self._emit(session_id, name, said, usage, status)
+
+    def retry_side(self, session_id: str) -> None:
+        """Let the next tick try the `/btw` copy again (📋 on its card)."""
+        rt = self.runtimes.get(session_id)
+        if rt is not None:
+            rt.side_question = None
+
+    async def _side_answer(self, session_id: str, window_id: str, name: str,
+                           rt: SessionRuntime, side: screenmod.SideAnswer,
+                           raw: str, usage, status) -> None:
+        """Send a finished `/btw` answer to the chat, then close it.
+
+        The answer lives on the screen and nowhere else, so an Esc on its own
+        would throw it away, and the screen shows only as much of it as fits.
+        Its own "c to copy" hands over the whole of it, in Markdown
+        (`tmux.copy_out`); once that is in the chat the overlay is closed, or
+        it would stand in front of the session until somebody went to the
+        terminal. Both keys are pressed only while the overlay is still
+        there: a "c" would land in the input line, an Esc would interrupt the
+        turn.
+        """
+        if rt.side_question == side.question:
+            return
+        rt.side_question = side.question
+        head = _words(side.head)
+
+        def is_open(screen: str) -> bool:
+            return screenmod.side_answer(screen) is not None
+
+        def is_answer(text: str) -> bool:
+            # The tmux server is shared: a buffer that is not this answer is
+            # somebody's selection in another window.
+            return not head or len(head & _words(text)) >= 0.6 * len(head)
+
+        text = (await tmux.copy_out(window_id, "c", is_open, is_answer) or "").strip()
+        if text:
+            log.info("btw answer id=%s name=%s chars=%d",
+                     session_id[:8], name, len(text))
+            await self._drop_pulse(rt)
+            title = _("🗨 Side question (/btw): {question}").format(
+                question=rich.md_escape(side.question[:300]))
+            await self._emit(session_id, name, f"_{title}_\n\n{text}",
+                             usage, status)
+            self.note_input(session_id)
+            await tmux.press_if(window_id, "Escape", is_open)
+            return
+        try:
+            raw = await tmux.capture(window_id)
+        except tmux.TmuxError:
+            return
+        if screenmod.side_answer(raw) is None:
+            log.info("btw overlay closed before the copy id=%s", session_id[:8])
+            return
+        log.warning("btw answer not copied id=%s name=%s", session_id[:8], name)
+        kb = side_kb(session_id, side.browse)
+        msg = await self._say_rich(session_id, blocks=self.side_blocks(name, raw),
+                                   reply_markup=kb)
+        if msg is None:
+            top, foot = self._side_texts(name)
+            await self._say_html(
+                html.escape(top) + "\n"
+                + as_pre_lines(screenmod.tail_text(raw, 1500))
+                + "\n<i>" + html.escape(foot) + "</i>",
+                session_id=session_id, reply_markup=kb)
+
+    @staticmethod
+    def _side_texts(name: str) -> tuple[str, str]:
+        return (_("⚠️ {name} shows a /btw answer, and I could not copy it. "
+                  "Here is the screen:").format(name=name),
+                _("📋 tries the copy again, ⬆️⬇️ scroll the answer, "
+                  "✖️ Close dismisses it, 🖥 sends a fresh screen."))
+
+    def side_blocks(self, name: str, raw: str) -> list[rich.Block]:
+        """The card of a `/btw` answer that could not be copied."""
+        top, foot = self._side_texts(name)
+        return [
+            rich.para(top),
+            rich.pre(rich.ascii_frame(screenmod.tail_text(raw, rich.PRE_LIMIT))),
+            rich.para(rich.italic(foot)),
+        ]
 
     async def _report_blocked(self, session_id: str, name: str, raw: str,
                               rt: SessionRuntime, agent_status: str,

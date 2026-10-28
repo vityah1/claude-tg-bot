@@ -11,6 +11,7 @@ import asyncio
 import itertools
 import logging
 import shlex
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -187,6 +188,56 @@ async def press_if(window_id: str, key: str,
             return False
         await _run("send-keys", "-t", window_id, key)
         return True
+
+
+async def _buffer_names() -> set[str]:
+    try:
+        out = await _run("list-buffers", "-F", "#{buffer_name}")
+    except TmuxError:
+        return set()
+    return set(out.split())
+
+
+def _buffer_order(name: str) -> tuple[int, str]:
+    """Automatic buffers in the order they were made: buffer9 before buffer10."""
+    digits = name.removeprefix("buffer")
+    return (int(digits), name) if digits.isdigit() else (1 << 62, name)
+
+
+async def copy_out(window_id: str, key: str, when: Callable[[str], bool],
+                   accept: Callable[[str], bool], wait: float = 3.0) -> str | None:
+    """Press *key* where the TUI copies through tmux, and return the copy.
+
+    Claude Code's "c to copy" loads the text into a paste buffer of the
+    server it runs under — an automatic ``bufferN``, whole and in Markdown
+    however much of it the pane can show (measured on 2.1.312). The server
+    is shared, so a new buffer may as well be a selection somebody made in
+    another window: only one *accept* agrees with is taken, and only that
+    one is deleted (left behind, the next paste in the server would pick it
+    up). None when *when* no longer holds or nothing fits within *wait*.
+    """
+    async with input_lock(window_id):
+        if not when(await capture(window_id)):
+            return None
+        before = await _buffer_names()
+        await _run("send-keys", "-t", window_id, key)
+    seen: set[str] = set()
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.2)
+        fresh = await _buffer_names() - before - seen
+        for name in sorted(fresh, key=_buffer_order):
+            seen.add(name)
+            if name.startswith("ccbot-"):
+                continue
+            try:
+                text = await _run("show-buffer", "-b", name)
+            except TmuxError:
+                continue
+            if accept(text):
+                await _ok("delete-buffer", "-b", name)
+                return text
+    return None
 
 
 async def send_keys(window_id: str, *keys: str) -> None:
