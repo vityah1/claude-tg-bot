@@ -191,9 +191,11 @@ class SessionRuntime:
         # A question seen on screen but not sent yet, and since when.
         self.seen_dialog_sig: str | None = None
         self.seen_dialog_at = 0.0
-        # The question the transcript last spoke under. What it said is in
-        # the chat already, so reading it off the screen would say it twice.
+        # The question the transcript last spoke under, and the words of
+        # Claude's text it sent meanwhile. Tool lines are not counted: they
+        # are what Claude did before the reasoning, not the reasoning itself.
         self.flushed_sig: str | None = None
+        self.flushed_words: set[str] = set()
         self.reported_gone = False
         self.alerted: dict[str, int] = {}
         self.title_tried = 0.0
@@ -681,11 +683,14 @@ class Watcher:
         )
         if should_flush:
             body = "\n\n".join(rt.buffer).strip()
+            if dialog is not None:
+                if rt.flushed_sig != sig:
+                    rt.flushed_sig, rt.flushed_words = sig, set()
+                rt.flushed_words |= _words("\n".join(
+                    b for b in rt.buffer if not b.startswith("🔧 ")))
             rt.buffer.clear()
             rt.buffer_since = 0.0
             log.info("flush id=%s name=%s chars=%d", session_id[:8], name, len(body))
-            if dialog is not None:
-                rt.flushed_sig = sig
             await self._drop_pulse(rt)
             await self._emit(session_id, name, body, usage, status)
 
@@ -709,6 +714,7 @@ class Watcher:
             rt.last_dialog_state = None
             rt.seen_dialog_sig = None
             rt.flushed_sig = None
+            rt.flushed_words = set()
             await self._retire_dialog(rt)
             side = screenmod.side_answer(raw)
             if side is not None:
@@ -749,16 +755,17 @@ class Watcher:
             log.info("dialog id=%s title=%r options=%d preview=%s",
                      session_id[:8], dialog.title, len(dialog.options),
                      bool(dialog.preview))
-            if rt.flushed_sig != sig and dialog.kind == "choice":
-                # The transcript has said nothing while this question stood
-                # (the card waits a tick for it, `_TRANSCRIPT_LAG`), which for
-                # a question is the normal case rather than silence — see
+            if dialog.kind == "choice":
+                # The transcript usually says nothing while a question stands
+                # (the card waits a tick for it, `_TRANSCRIPT_LAG`) — see
                 # _preface. The
                 # settings pickers are the exception: nothing is said above
                 # them (the chat opened them), and they draw no rule the
                 # reading could stop at, so it used to send a line of the
                 # picker's own state as the preamble to it.
-                await self._preface(session_id, window_id, name, rt, usage, status)
+                sent = rt.flushed_words if rt.flushed_sig == sig else set()
+                await self._preface(session_id, window_id, name, rt, usage,
+                                    status, sent)
         rt.last_dialog_sig = sig
         rt.last_dialog_state = state
 
@@ -810,7 +817,8 @@ class Watcher:
                             session_id=session_id)
 
     async def _preface(self, session_id: str, window_id: str, name: str,
-                       rt: SessionRuntime, usage, status) -> None:
+                       rt: SessionRuntime, usage, status,
+                       sent: set[str]) -> None:
         """Send the reasoning that leads into a question, before the question.
 
         Claude lays out the options and then asks about them, so the answer
@@ -823,6 +831,15 @@ class Watcher:
         The terminal has it, though, so it is read from there — and the
         transcript's own copy, when it does arrive, is dropped by
         `SessionRuntime.echoes_screen`.
+
+        *sent* is the text the transcript did deliver while this question
+        stood. A permission prompt is recorded before its answer, reasoning
+        and all, and then the screen would only say it twice. That the
+        transcript spoke at all proves nothing: a tool line held while Claude
+        went on thinking is flushed by the question's arrival, and taking that
+        for the reasoning held a whole analysis back until after the answer
+        (2026-10-29, aa9c201c: "🔧 Bash" flushed at 12:40:02, the card at
+        12:40:05 with nothing above it, the 1302 characters at 12:40:42).
         """
         try:
             deep = await tmux.capture(window_id, history=_SAID_HISTORY)
@@ -831,6 +848,11 @@ class Watcher:
         said = screenmod.said_above_dialog(deep, queued=rt.queued_prompts())
         if not said or rt.said_sig == f"{len(said)}:{said[:120]}":
             return          # nothing said, or already sent for this question
+        words = _words(said)
+        if sent and len(words & sent) >= _ECHO_RATIO * len(words):
+            log.info("preface already sent from the transcript id=%s chars=%d",
+                     session_id[:8], len(said))
+            return
         log.info("preface id=%s name=%s chars=%d", session_id[:8], name, len(said))
         rt.remember_said(said)
         await self._drop_pulse(rt)

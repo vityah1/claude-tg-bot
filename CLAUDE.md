@@ -516,7 +516,13 @@ is still alive, too. That is why rows are read tolerantly
   reads it off the terminal (`screen.said_above_dialog`, 400 lines of
   scrollback) before rendering the dialog, and `SessionRuntime.echoes_screen`
   drops the transcript's own copy when it finally arrives (word overlap, not
-  equality: the terminal renders markdown and wraps to its width). A tool call
+  equality: the terminal renders markdown and wraps to its width). The
+  opposite check — the transcript already delivered it, as it does for a
+  permission prompt — compares the **words** flushed under the question
+  (`flushed_words`, tool lines excluded), never "something was flushed": a
+  `🔧 Bash` line held while Claude went on thinking is flushed by the
+  question's arrival, and taking that for the reasoning held a 1302-character
+  analysis back until after the answer (2026-10-29, aa9c201c). A tool call
   that has already printed output means the turn *was* recorded, so nothing is
   read above it — but everything *below* it is (`screen._after_tool_output`):
   that text belongs to the next record, and the next record is written when
