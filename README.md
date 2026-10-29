@@ -378,6 +378,7 @@ has to be typed by hand.
 | `/rename` | your own name for a session (`/rename -` gives the automatic one back) |
 | `/lang` | interface language (`en` and `uk` for now) |
 | `/update` | which Claude Code each session runs, which one is on disk, and a restart that keeps the context |
+| `/login` | logs Claude in to another account: the sign-in link comes to the chat, the code goes back as a message, and the other sessions are restarted onto the new account |
 | `/exit` | **ends the session**: Claude shuts down on its own, then the tmux window closes |
 
 All of them act on the **active** session, or — in a reply — on the one whose
@@ -488,6 +489,55 @@ the watcher says so once — one message per version, remembered in
 notification. Between messages the badge is enough: `⬆️` and a count in
 `/sessions`, the two versions on the session card, and the disk version in
 `/service`.
+
+## Logging in to another account
+
+When one account's limits run out, `/login` switches the machine to another
+without going to it. The bot types `/login` into the session (the active one,
+or the one replied to), picks "Claude account with subscription" itself, and
+sends the link Claude Code prints — under WSL and in a detached tmux the
+browser never opens, so the panel shows `Browser didn't open? Use the url
+below to sign in` and waits on `Paste code here if prompted >`. The link comes
+as a button. The page it opens shows a code (`<code>#<state>`), which goes back
+as an ordinary message: the bot types it into the panel, presses Enter, and
+deletes the message. On success it presses the "Press Enter to continue" too,
+and says which account it now is.
+
+**The screen is the whole state.** `screen.login_screen()` reads the panel into
+its step — the method menu, the code step with the link, the checks, success,
+an OAuth error, a not-saved warning — and `Watcher._tick_login` sends one card
+per step. Nothing is remembered between ticks but which card was sent, so a
+`/login` typed in the terminal gets the same cards, and a bot restarted in the
+middle carries on from the next frame. The link is printed from column 0 and
+broken at the pane's width with real line ends (`capture-pane -J` does not
+join it), so it is joined back from the column-0 lines and taken only once a
+line under it is drawn. A 465-character URL is fine on an inline button.
+
+**The code takes its own road.** Text shaped like a code (`…#…`, base64url on
+both sides, not forwarded) is caught before the inbox: the session it goes to
+is the one whose screen is waiting for a code, not the active one, and the
+paste is refused under the input lock unless the panel still waits — with a
+second check before the Enter, so a panel closed in the terminal meanwhile
+does not turn the code into a prompt. A code no session is waiting for is
+answered and goes nowhere. The log records its length only, in the handler
+and in the update middleware. Any other text sent during the login is held
+like text sent into a question, minus «Close the question and send», which
+would cancel the login.
+
+**The other sessions keep the old account.** Claude Code reads the credentials
+when it starts, so a session that was already running stays on the previous
+account until it is restarted. The success message therefore lists the other
+sessions with a 🔄 button for each idle one and «Restart all idle» — the same
+`/exit` + `claude --resume` restart as `/update`. Which account a session
+runs is not readable anywhere, so every session is listed; busy and waiting
+ones get no button. After a not-saved warning nothing is offered: a restart
+would read the credentials that failed to save.
+
+**Seen live, and not.** The menu, the code step, the OAuth error after a
+wrong code, Enter back to the menu and Esc ("Login interrupted") were
+measured on 2.1.312. The success screen, the "Logged in as" line and the
+warning are known only from the binary's strings; an unknown login panel that
+stands for 15 seconds goes to the chat as an unrecognised screen.
 
 ## Three kinds of session in the list
 

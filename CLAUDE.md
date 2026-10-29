@@ -592,6 +592,18 @@ is still alive, too. That is why rows are read tolerantly
   no card at all. Every key goes through the lock with the overlay
   re-checked: a stray `c` lands in the input line, a stray Esc interrupts
   the turn.
+- 🔴 **`/login` is driven off the screen, and the code never takes the inbox.**
+  The panel (`screen.login_screen`, anchored like `side_answer`: no status
+  line, column-0 rules above and below, "  Login" first) is the whole state;
+  `Watcher._tick_login` sends one card per step and suppresses
+  `_report_blocked` for it, except a panel of unknown shape standing
+  `_LOGIN_OTHER_GRACE`. Every key goes through `login.py`, guarded by the
+  step under the input lock. A message shaped like `code#state` is caught at
+  the top of `_on_text` and typed into the session whose screen waits for a
+  code (`_enter_login_code`); it is masked in both log lines
+  (`login.mask`). Running sessions keep the old account until restarted —
+  hence the restart card after success (`login_done_card`), and none after
+  the not-saved warning. The success screen was never seen live (2.1.312).
 - 🔴 **An unrecognised dialog has no right to be silence.** When
   `claude agents --json` says `waiting` and `find_dialog()` returned None,
   `Watcher._report_blocked` sends the screen with buttons (digits/arrows/Esc)

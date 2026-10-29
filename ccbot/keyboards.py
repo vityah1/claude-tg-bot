@@ -504,6 +504,69 @@ def side_kb(session_id: str, browse: bool = False) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def _login_cancel(s: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=_("✖️ Cancel the login"),
+                                callback_data=f"lg:{s}:esc")
+
+
+def login_menu_kb(session_id: str, options: list) -> InlineKeyboardMarkup:
+    """The login methods `/login` offers, one button each, as the screen reads."""
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    for o in options:
+        label = o.label if len(o.label) <= 60 else o.label[:59].rstrip() + "…"
+        kb.row(InlineKeyboardButton(text=f"{o.number}. {label}",
+                                    callback_data=f"lg:{s}:{o.number}"))
+    kb.row(_login_cancel(s))
+    return kb.as_markup()
+
+
+def login_link_kb(session_id: str, url: str) -> InlineKeyboardMarkup:
+    """The sign-in link as a button (a 465-character URL is accepted)."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("🔑 Open the sign-in page"), url=url))
+    kb.row(_login_cancel(sid8(session_id)))
+    return kb.as_markup()
+
+
+def login_error_kb(session_id: str) -> InlineKeyboardMarkup:
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("🔁 Try again with a new link"),
+                                callback_data=f"lg:{s}:retry"))
+    kb.row(_login_cancel(s))
+    return kb.as_markup()
+
+
+def login_warning_kb(session_id: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("⏎ Continue"),
+                                callback_data=f"lg:{sid8(session_id)}:enter"))
+    return kb.as_markup()
+
+
+def login_done_kb(session_id: str,
+                  idle: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    """Restarts onto the new account, for the sessions that are idle.
+
+    *idle* is (session id, name). A busy or waiting session gets no button:
+    a restart would cut its turn short. With one idle session its own
+    button says everything "all" would.
+    """
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    if len(idle) > 1:
+        kb.row(InlineKeyboardButton(
+            text=_("🔄 Restart all idle ({count})").format(count=len(idle)),
+            callback_data=f"lg:{s}:rall"))
+    for other, name in idle[:8]:
+        label = name if len(name) <= 50 else name[:49].rstrip() + "…"
+        kb.row(InlineKeyboardButton(text=f"🔄 {label}",
+                                    callback_data=f"lg:{s}:r:{sid8(other)}"))
+    kb.row(InlineKeyboardButton(text=_("♻️ Refresh"), callback_data=f"lg:{s}:rfr"))
+    return kb.as_markup()
+
+
 def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
     """Bot-process actions. Restart is offered only when something can bring
     the bot back — otherwise the button would end the conversation."""

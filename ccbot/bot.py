@@ -31,6 +31,7 @@ from aiogram.types import (
     Update,
 )
 
+from . import login as loginmod
 from . import logsetup, media, rich, service, status_feed, tmux, updates, util
 from . import screen as screenmod
 from . import sessions as sess
@@ -89,7 +90,7 @@ log = logging.getLogger("ccbot.bot")
 # to Claude, so /model, /compact, /cost and friends keep working.
 OWN_COMMANDS = {"start", "help", "sessions", "menu", "new", "exit", "screen",
                 "esc", "usage", "clear", "log", "dirs", "rename", "service",
-                "restart", "lang", "update"}
+                "restart", "lang", "update", "login"}
 
 # Telegram's Bot API refuses to serve files larger than this.
 _MAX_ATTACHMENT = 20 * 1024 * 1024
@@ -246,6 +247,10 @@ Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
    on disk, and a restart that keeps the context: Claude
    updates itself in the background, but a running session
    stays on the build it started with.
+/login — log Claude in to another account (when the limits of
+   this one run out). The sign-in link comes here, the code from
+   the page goes back as a message, and then a button restarts
+   the other sessions onto the new account.
 /service — uptime, code version, tmux state, restart button
 /restart — restart the bot (Claude's sessions are unaffected)
 /log — the last lines of the journal
@@ -792,6 +797,14 @@ class CCBot:
                     return
                 await self._ack(m, _("🧹 /clear sent to <b>{name}</b>{note}").format(
                     name=html.escape(mgd.full_label), note=note), mgd)
+
+        @dp.message(Command("login"))
+        async def _login(m: Message):
+            if not self._ok(m):
+                return
+            mgd, note = await self._target(m)
+            if mgd:
+                await self._start_login(m, mgd, note)
 
         @dp.message(Command("usage"))
         async def _usage(m: Message):
@@ -1629,6 +1642,193 @@ class CCBot:
             await self.watcher.send_screen(mgd.window_id, mgd.full_label,
                                            mgd.session_id)
 
+    # ----------------------------------------------------------------- login
+    async def _start_login(self, m: Message, mgd, note: str) -> None:
+        """`/login` in the session, and its first choice made: the subscription.
+
+        Everything after that is the watcher's: it reads each step of the
+        panel off the screen and sends its card (`Watcher._tick_login`).
+        """
+        name = html.escape(mgd.full_label)
+        try:
+            raw = await tmux.capture(mgd.window_id)
+        except tmux.TmuxError:
+            await self._ack(m, _("Its tmux window is gone"), mgd)
+            return
+        if screenmod.login_open(raw):
+            # Its card again, and no key: a menu open in the terminal may be
+            # on its way to another method.
+            self.watcher.repost_login(mgd.session_id)
+            await self._ack(m, _("🔑 <b>{name}</b> is already logging in: its "
+                                 "card comes next.").format(name=name), mgd)
+            return
+        reason = await self._busy_reason(mgd)
+        if reason:
+            await self._ack(m, reason, mgd)
+            return
+        await self._ack(m, _("🔑 Logging in on <b>{name}</b>{note}: the sign-in "
+                             "link comes in a moment.").format(name=name, note=note),
+                        mgd)
+        self._typed(mgd)
+        if await loginmod.start(mgd.window_id):
+            log.info("login started id=%s", mgd.session_id[:8])
+            return
+        log.warning("login did not start id=%s", mgd.session_id[:8])
+        await self._ack(m, _("⚠️ <b>{name}</b> did not open the login. Here is "
+                             "its screen:").format(name=name), mgd)
+        await self.watcher.send_screen(mgd.window_id, mgd.full_label,
+                                       mgd.session_id)
+
+    async def _signing_in(self, mgd) -> bool:
+        try:
+            return screenmod.login_open(await tmux.capture(mgd.window_id))
+        except tmux.TmuxError:
+            return False
+
+    async def _enter_login_code(self, m: Message, code: str, lone: bool) -> bool:
+        """A sign-in code from the chat, typed into the panel that waits for it.
+
+        It never takes the road ordinary text takes: the inbox would hold it
+        for the open "question" the panel looks like, and the session it
+        belongs to is the one showing a link — not necessarily the active
+        one. A message that is nothing but a code is answered even with
+        nowhere to go, not sent to Claude as a prompt; one with words around
+        it is taken only by a session that waits (False: not handled). A
+        handled message is deleted on every path: the code is a credential
+        until it is used, and the reply says what became of it.
+        """
+        waiting = []
+        for mgd in self.store.all_managed():
+            try:
+                ls = screenmod.login_screen(await tmux.capture(mgd.window_id))
+            except tmux.TmuxError:
+                continue
+            if ls is not None and ls.state == "code":
+                waiting.append((mgd, ls))
+        replied = getattr(m, "reply_to_message", None)
+        named = self.store.session_of_message(replied.message_id) if replied else None
+        active = self.store.get_active(m.chat.id)
+        pick = (next((w for w in waiting if w[0].session_id == named), None)
+                or (waiting[0] if len(waiting) == 1 else None)
+                or next((w for w in waiting if w[0].session_id == active), None))
+        if not waiting and not lone:
+            return False
+        await self._delete_quietly(m.chat.id, m.message_id)
+        if pick is None:
+            await m.answer(_(
+                "🔑 Several sessions are waiting for a sign-in code: send it "
+                "as a reply to the link of the right one.") if waiting else _(
+                "🔑 That looks like a sign-in code, and no session is waiting "
+                "for one, so I have not sent it anywhere. /login starts a "
+                "login."))
+            return True
+        mgd, ls = pick
+        name = html.escape(mgd.full_label)
+        if ls.entered:
+            await self._ack(m, _("🔑 <b>{name}</b> already has a code entered: "
+                                 "Claude is checking it.").format(name=name), mgd)
+            return True
+        self._typed(mgd)
+        try:
+            await loginmod.paste_code(mgd.window_id, code)
+        except tmux.Refused:
+            await self._ack(m, _("⚠️ The login on <b>{name}</b> moved on before "
+                                 "the code went in, so it was not entered.")
+                            .format(name=name), mgd)
+            return True
+        log.info("login code entered id=%s chars=%d", mgd.session_id[:8], len(code))
+        await self._ack(m, _("🔑 Code entered on <b>{name}</b>: Claude is "
+                             "checking it…").format(name=name), mgd)
+        return True
+
+    async def _login_callback(self, c: CallbackQuery, msg: Message,
+                              chat_id: int, arg: str) -> None:
+        """The buttons of the login cards and of the restart card after it.
+
+        Every key goes in only while the panel shows the step its card was
+        about (`login.py`): a digit or an Enter that outlived its step would
+        type into whatever stands there now.
+        """
+        short, _sep, what = arg.partition(":")
+        mgd = self._resolve(short)
+        if not mgd:
+            await c.answer(_("That session is gone"), show_alert=True)
+            return
+        if what in ("rall", "rfr") or what.startswith("r:"):
+            await self._login_restarts(c, msg, chat_id, mgd, what)
+            return
+        self._typed(mgd)
+        pressed, answered = False, False
+        try:
+            if what.isdigit():
+                pressed = await loginmod.choose(mgd.window_id, int(what))
+                label = next((b.text for row in (msg.reply_markup.inline_keyboard
+                                                 if msg.reply_markup else [])
+                              for b in row if b.callback_data == c.data), what)
+                done = f"▶️ {label}"
+            elif what == "retry":
+                # Up to eight seconds for the menu: the tap is answered first.
+                await c.answer(_("Getting a new link…"))
+                answered = True
+                pressed = await loginmod.retry(mgd.window_id)
+                done = _("🔁 Tried again")
+            elif what == "esc":
+                pressed = await loginmod.cancel(mgd.window_id)
+                done = _("✖️ Login cancelled")
+            elif what == "enter":
+                pressed = await loginmod.proceed(mgd.window_id)
+                done = _("⏎ Continued")
+            else:
+                await c.answer()
+                return
+        except tmux.TmuxError:
+            pressed, done = False, ""
+        if pressed:
+            if not answered:
+                await c.answer()
+            self.watcher.release_login(mgd.session_id)
+            await self._mark(msg, done)
+            return
+        # The step this card was about has gone: the login moved on (its
+        # next card is below) or was closed.
+        if await self._signing_in(mgd):
+            gone, mark = _("That step of the login has passed: its next "
+                           "card is below."), _("⏭ Step passed")
+        else:
+            gone, mark = _("That login is no longer open."), _("⏹ Login closed")
+        if answered:
+            with contextlib.suppress(Exception):
+                msg2 = await self.bot.send_message(chat_id, gone)
+                self.store.remember_message(msg2.message_id, mgd.session_id)
+        else:
+            await c.answer(gone, show_alert=True)
+        await self._mark(msg, mark)
+
+    async def _login_restarts(self, c: CallbackQuery, msg: Message,
+                              chat_id: int, mgd, what: str) -> None:
+        """Restart sessions onto the new account, then redraw the card."""
+        if what == "rall":
+            idle = {v.session_id for v in await sess.managed_views(self.store)
+                    if v.status in ("idle", "starting")}
+            queue = [m for m in self.store.all_managed()
+                     if m.session_id in idle and m.session_id != mgd.session_id]
+            if not queue:
+                await c.answer(_("No idle session to restart"), show_alert=True)
+            else:
+                await c.answer(_("Restarting…"))
+                await self._restart_sessions(chat_id, queue)
+        elif what.startswith("r:"):
+            other = self._resolve(what[2:])
+            if not other:
+                await c.answer(_("That session is gone"), show_alert=True)
+            else:
+                await c.answer(_("Restarting…"))
+                await self._restart_one(chat_id, other)
+        else:
+            await c.answer()
+        text, kb = await self.watcher.login_done_card(mgd.session_id)
+        await self._safe_edit(msg, text, reply_markup=kb, parse_mode="HTML")
+
     async def _launch_resume(self, mgd) -> bool:
         """Start `claude --resume` in the session's window; True if it came up."""
         await tmux.run_in_window(
@@ -1858,6 +2058,10 @@ class CCBot:
             await self.bot.send_message(chat_id, _(
                 "Nothing to restart: no idle session is behind."))
             return
+        await self._restart_sessions(chat_id, queue)
+
+    async def _restart_sessions(self, chat_id: int, queue: list) -> None:
+        """Restart *queue* one after another, with one message saying how."""
         note = await self.bot.send_message(
             chat_id, ngettext("⏳ Restarting {count} session…",
                               "⏳ Restarting {count} sessions…",
@@ -2295,6 +2499,18 @@ class CCBot:
             if held.waiting:
                 text = self._held_waiting_text(held, mgd)
                 kb = held_wait_kb(held.session_id)
+            elif await self._signing_in(mgd):
+                # Esc would cancel the login, and the code is not typed
+                # through here: the text waits for the panel to close.
+                held.question_sig = ""
+                text = ngettext(
+                    "🔑 <b>{name}</b> is logging in. Your message has not been "
+                    "sent yet: it would land in the login.",
+                    "🔑 <b>{name}</b> is logging in. Your {count} messages "
+                    "have not been sent yet: they would land in the login.",
+                    held.count).format(count=held.count,
+                                       name=html.escape(mgd.full_label))
+                kb = held_kb(held.session_id, free_text=False, closable=False)
             else:
                 _blocked, dialog = await self._question_open(mgd)
                 held.question_sig = self._dialog_sig(dialog)
@@ -3029,8 +3245,12 @@ class CCBot:
             "text chat=%s pending=%s active=%s reply_to=%s text=%r",
             chat_id, pend_kind, (active or "—")[:8],
             getattr(getattr(m, "reply_to_message", None), "message_id", None),
-            text[:120],
+            loginmod.mask(text)[:120],
         )
+        code = loginmod.code_in(text) if m.forward_origin is None else ""
+        if code and await self._enter_login_code(
+                m, code, lone=bool(loginmod.code_of(text))):
+            return
 
         pend = self.pending.pop(chat_id, None)
         if pend and time.time() - pend[-1] > _PENDING_TTL:
@@ -3847,6 +4067,10 @@ class CCBot:
 
         if data.startswith("bw:"):
             await self._side_callback(c, msg, data[3:])
+            return
+
+        if data.startswith("lg:"):
+            await self._login_callback(c, msg, chat_id, data[3:])
             return
 
         if data.startswith("k:"):
@@ -4786,6 +5010,7 @@ class CCBot:
         ("lang", N_("Interface language")),
         ("log", N_("Last entries from the bot's journal")),
         ("update", N_("Claude Code version and session restarts")),
+        ("login", N_("Log Claude in to another account")),
         ("service", N_("Bot state: uptime, version, restart")),
         ("help", N_("Help")),
     ]

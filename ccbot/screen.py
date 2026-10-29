@@ -57,6 +57,25 @@ _SIDE_CLOSE = "esc to close"
 _SIDE_COPY = ("c to copy", "copied to clipboard")
 _SIDE_ECHO_RE = re.compile(r"^  /btw\s+(?P<q>\S.*)$")
 
+# `/login` draws a panel between two column-0 rules, headed "  Login", with
+# no status line under it (2.1.312). Its steps: the method menu (footer "Esc
+# to cancel" alone, so `find_dialog` does not take it), "Opening browser…",
+# the sign-in URL printed from column 0 and hard-broken at the pane's width
+# above "Paste code here if prompted >", the checks, then success ("Login
+# successful. Press Enter to continue…"), an OAuth error ("Press Enter to
+# retry.") or a credentials-not-saved warning. Only the menu, the code step
+# and the error were seen live; the rest is read off the binary's strings.
+_LOGIN_HEAD = "Login"
+_LOGIN_MENU = "Select login method:"
+_LOGIN_PASTE_RE = re.compile(r"^\s*Paste code here if prompted >(?P<typed>.*)$")
+_LOGIN_RETRY = "Press Enter to retry."
+_LOGIN_OK = "Login successful. Press Enter to continue"
+_LOGIN_AS_RE = re.compile(r"^\s*Logged in as\s+(?P<email>\S+)\s*$")
+_LOGIN_WARN = "Logged in for now, but"
+_LOGIN_WORKING = ("Opening browser to sign in", "Creating API key for Claude Code",
+                  "Retrying…")
+_LOGIN_URL_RE = re.compile(r"^https://\S+$")
+
 # The review step of a multi-part question (AskUserQuestion with several
 # sections) has no footer at all: it lists the answers so far, this line, and
 # two choices. That line is the only anchor the screen offers.
@@ -719,6 +738,124 @@ def side_answer(screen: str) -> SideAnswer | None:
                       done=any(m in low for m in _SIDE_COPY),
                       browse="to browse" in low,
                       head=rest[0] if rest else "")
+
+
+@dataclass
+class LoginScreen:
+    """A step of `/login` as it stands on the pane.
+
+    *state* is "menu", "code" (waiting for the sign-in code), "working",
+    "success", "error", "warning" or "other" (a login panel of a shape not
+    known here).
+    """
+    state: str
+    options: list[Option] = field(default_factory=list)   # menu
+    url: str = ""          # code: the sign-in link, joined back into one line
+    entered: bool = False  # code: the input already holds something
+    email: str = ""        # success, when the panel names the account
+    text: str = ""         # error / warning: what the panel says
+
+
+def _login_panel(lines: list[str]) -> list[str] | None:
+    """The lines inside the `/login` panel, or None when there is none.
+
+    Anchored like `side_answer`: nothing of the ordinary bottom anywhere, a
+    column-0 rule as the last thing drawn and another one above it. This
+    file and the README quote every line of the panel, and a session working
+    on them prints them — always above a status line.
+    """
+    if _ordinary_bottom(lines):
+        return None
+    filled = [i for i, ln in enumerate(lines) if ln.strip()]
+    if not filled or not _edge_rule(lines[filled[-1]]):
+        return None
+    bottom = filled[-1]
+    top = next((i for i in range(bottom - 1, -1, -1) if _edge_rule(lines[i])), None)
+    if top is None:
+        return None
+    body = lines[top + 1:bottom]
+    first = next((ln for ln in body if ln.strip()), "")
+    if first == "  " + _LOGIN_HEAD:
+        return body
+    # The heading of the last steps was never seen; their own lines are
+    # distinctive enough on a pane with no status line.
+    if any(_LOGIN_OK in ln or ln.strip().startswith(_LOGIN_WARN) for ln in body):
+        return body
+    return None
+
+
+def _login_url(body: list[str]) -> str:
+    """The sign-in link: column-0 lines from "https://" to the next indent.
+
+    The TUI breaks it at the pane's width with real line ends, so
+    `capture-pane -J` does not join it. A link still being drawn (no blank
+    or indented line under it yet) is not taken.
+    """
+    start = next((i for i, ln in enumerate(body) if ln.startswith("https://")), None)
+    if start is None:
+        return ""
+    parts = []
+    for ln in body[start:]:
+        if not ln.strip() or ln.startswith(" "):
+            break
+        parts.append(ln.strip())
+    else:
+        return ""
+    url = "".join(parts)
+    return url if _LOGIN_URL_RE.match(url) and "state=" in url else ""
+
+
+def _paragraph(body: list[str], start: int, stop: int) -> str:
+    return " ".join(ln.strip() for ln in body[start:stop] if ln.strip())
+
+
+def login_screen(screen: str) -> LoginScreen | None:
+    """The `/login` panel open on the pane, read into its step, or None."""
+    lines = _clean(screen.splitlines())
+    body = _login_panel(lines)
+    if body is None:
+        return None
+    stripped = [ln.strip() for ln in body]
+    if any(_LOGIN_OK in s for s in stripped):
+        email = next((m.group("email") for ln in body
+                      if (m := _LOGIN_AS_RE.match(ln))), "")
+        return LoginScreen(state="success", email=email)
+    warn = next((i for i, s in enumerate(stripped) if s.startswith(_LOGIN_WARN)), None)
+    if warn is not None:
+        end = next((i for i in range(warn, len(body))
+                    if _ESC_MARKER in body[i] or "Press Enter" in body[i]), len(body))
+        return LoginScreen(state="warning", text=_paragraph(body, warn, end))
+    if _LOGIN_RETRY in stripped:
+        head = next(i for i, s in enumerate(stripped) if s == _LOGIN_HEAD) \
+            if _LOGIN_HEAD in stripped else -1
+        return LoginScreen(state="error", text=_paragraph(
+            body, head + 1, stripped.index(_LOGIN_RETRY)))
+    paste = next((m for ln in body if (m := _LOGIN_PASTE_RE.match(ln))), None)
+    if paste is not None:
+        url = _login_url(body)
+        if not url:
+            return LoginScreen(state="working")
+        return LoginScreen(state="code", url=url,
+                           entered=bool(paste.group("typed").strip()))
+    if _LOGIN_MENU in stripped:
+        options = []
+        for ln in body:
+            m = _OPTION_RE.match(ln)
+            if m:
+                options.append(Option(number=int(m.group("num")),
+                                      label=m.group("label").strip(),
+                                      selected=bool(m.group("cursor"))))
+        if options:
+            return LoginScreen(state="menu", options=options)
+    # A link with nothing drawn under it yet is the code step mid-redraw.
+    if any(w in ln for ln in body for w in _LOGIN_WORKING) \
+            or any(ln.startswith("https://") for ln in body):
+        return LoginScreen(state="working")
+    return LoginScreen(state="other")
+
+
+def login_open(screen: str) -> bool:
+    return login_screen(screen) is not None
 
 
 def drafts_count(dialog: Dialog) -> int:

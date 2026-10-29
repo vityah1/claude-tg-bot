@@ -21,15 +21,22 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
+from . import login as loginmod
 from . import render, rich, status_feed, tmux, transcript, updates
 from . import screen as screenmod
 from . import sessions as sess
 from .i18n import _, ngettext, resolve
 from .i18n import use as use_locale
 from .keyboards import (
+    STATUS_ICON,
     blocked_kb,
     dialog_kb,
     done_kb,
+    login_done_kb,
+    login_error_kb,
+    login_link_kb,
+    login_menu_kb,
+    login_warning_kb,
     menu_kb,
     restore_kb,
     side_kb,
@@ -94,6 +101,12 @@ _ACT_GRACE = 8.0
 _BLOCKED_SETTLE = 5.0
 # Older than this, an agent-list reading says nothing about right now.
 _STATUS_MAX_AGE = 10.0
+# A login panel of a shape this bot does not know is given this long to
+# turn into one it does, then goes to the chat as an unrecognised screen.
+_LOGIN_OTHER_GRACE = 15.0
+# The menu gets no card this long after the bot typed: `/login` and «Try
+# again» wait up to 8 s for it and then press «1» themselves.
+_LOGIN_MENU_GRACE = 10.0
 # What heads a dialog card. The settings dialogs are not questions Claude is
 # asking — showing them under a "❓" read as one.
 _DIALOG_ICON = {"model": "🧠 ", "effort": "◉ ", "drafts": "📝 "}
@@ -177,6 +190,11 @@ def _words(text: str) -> set[str]:
     return set(_WORD_RE.findall(text.lower()))
 
 
+def _login_state(raw: str) -> str:
+    ls = screenmod.login_screen(raw)
+    return ls.state if ls else ""
+
+
 class SessionRuntime:
     """Per-session bookkeeping that lives only in memory."""
 
@@ -222,6 +240,13 @@ class SessionRuntime:
         # The `/btw` answer already dealt with while its overlay stands: sent
         # and closed, or its fallback card sent. Cleared once it is gone.
         self.side_question: str | None = None
+        # The `/login` step the chat was last shown ("menu", "code:<url>",
+        # "error:<text>"…), its card, a step seen once and waiting for a
+        # second frame, and since when an unknown panel has stood.
+        self.login_step: str | None = None
+        self.login_msg_id: int | None = None
+        self.login_seen: str | None = None
+        self.login_other_since = 0.0
 
     def track_queue(self, op: str, kind: str) -> None:
         """Follow one queue-operation record of the transcript."""
@@ -304,6 +329,9 @@ class Watcher:
         self.failure_told = 0.0
         # Last time the disk was asked which Claude Code is installed.
         self.version_checked = 0.0
+        # The account each session last logged in as, for redrawing the
+        # restart card that announced it.
+        self.login_emails: dict[str, str] = {}
 
     def start(self) -> None:
         if self._task is None:
@@ -651,6 +679,7 @@ class Watcher:
         except tmux.TmuxError:
             return
         dialog = screenmod.find_dialog(raw)
+        login = screenmod.login_screen(raw) if dialog is None else None
         busy = screenmod.is_busy(raw)
         status = screenmod.read_status(raw)
         usage = status_feed.read(session_id)
@@ -694,9 +723,9 @@ class Watcher:
             await self._drop_pulse(rt)
             await self._emit(session_id, name, body, usage, status)
 
-        await self._pending_screen(session_id, window_id, name, busy,
-                                   dialog is not None)
-        await self._pulse(session_id, name, raw, rt, dialog is not None)
+        blocked = dialog is not None or login is not None
+        await self._pending_screen(session_id, window_id, name, busy, blocked)
+        await self._pulse(session_id, name, raw, rt, blocked)
 
         if dialog is None:
             # An idle session reads its queue at once, so whatever the records
@@ -716,6 +745,12 @@ class Watcher:
             rt.flushed_sig = None
             rt.flushed_words = set()
             await self._retire_dialog(rt)
+            if login is None:
+                await self._retire_login(rt)
+            elif await self._tick_login(session_id, window_id, name, rt, login):
+                # Waiting, by the agent list, on a panel the bot drives.
+                rt.clear_blocked()
+                return
             side = screenmod.side_answer(raw)
             if side is not None:
                 # Waiting, by the agent list, and asking nothing: the answer
@@ -937,6 +972,166 @@ class Watcher:
             rich.pre(rich.ascii_frame(screenmod.tail_text(raw, rich.PRE_LIMIT))),
             rich.para(rich.italic(foot)),
         ]
+
+    async def _tick_login(self, session_id: str, window_id: str, name: str,
+                          rt: SessionRuntime,
+                          login: screenmod.LoginScreen) -> bool:
+        """Put the step `/login` stands at in the chat; False lets it fall
+        through to `_report_blocked`.
+
+        The screen is the whole state: whoever started the login, the chat
+        or the terminal, gets the same cards, and a bot restarted halfway
+        through picks it up from the next frame. Each step is shown once
+        and only after two frames agree — the link is drawn line by line,
+        and the menu stands for a moment between the bot's `/login` and its
+        own «1».
+        """
+        if login.state != "other":
+            rt.login_other_since = 0.0
+        if login.state == "working" or (login.state == "code" and login.entered):
+            return True
+        if login.state == "other":
+            # Never silence: a step this bot cannot read goes out as a screen.
+            now = time.monotonic()
+            rt.login_other_since = rt.login_other_since or now
+            return now - rt.login_other_since < _LOGIN_OTHER_GRACE
+        step = {"code": f"code:{login.url}", "error": f"error:{login.text}",
+                "warning": f"warning:{login.text}"}.get(login.state, login.state)
+        if step == rt.login_step:
+            return True
+        if login.state == "menu" and time.time() - rt.acted_at < _LOGIN_MENU_GRACE:
+            return True         # the bot's own «1» is on its way
+        if rt.login_seen != step:
+            rt.login_seen = step
+            return True
+        rt.login_seen = None
+        previous, rt.login_step = rt.login_step, step
+        await self._settle_login(rt, previous, login.state)
+        log.info("login step id=%s name=%s state=%s", session_id[:8], name,
+                 login.state)
+        if login.state == "success":
+            # "Press Enter to continue": the chat has nothing to add to it.
+            if await loginmod.proceed(window_id):
+                self.note_input(session_id)
+            elif _login_state(await tmux.capture(window_id)) == "success":
+                rt.login_step = None        # not pressed: the next tick tries again
+                return True
+            if login.email:
+                self.login_emails[session_id] = login.email
+            text, kb = await self.login_done_card(session_id)
+            await self._say_html(text, session_id=session_id, reply_markup=kb)
+            return True
+        text, kb = self._login_card(name, session_id, login)
+        msg = await self._say_html(text, session_id=session_id, reply_markup=kb)
+        rt.login_msg_id = getattr(msg, "message_id", None)
+        return True
+
+    @staticmethod
+    def _login_card(name: str, session_id: str, login: screenmod.LoginScreen):
+        who = html.escape(name)
+        if login.state == "menu":
+            return (_("🔑 <b>{name}</b>: Claude asks how to log in.").format(name=who),
+                    login_menu_kb(session_id, login.options))
+        if login.state == "code":
+            return (_("🔑 <b>{name}</b>: sign in to Claude.\n\n"
+                      "1. Open the page with the button below and sign in "
+                      "with the account you want this machine to use.\n"
+                      "2. The page shows a code: copy all of it, the part "
+                      "after # included.\n"
+                      "3. Send it here as a message, and I will enter it.")
+                    .format(name=who), login_link_kb(session_id, login.url))
+        if login.state == "error":
+            return (_("❌ <b>{name}</b>: Claude did not accept the code.")
+                    .format(name=who) + f"\n\n<i>{html.escape(login.text)}</i>",
+                    login_error_kb(session_id))
+        return (_("⚠️ <b>{name}</b>: the login worked, with a warning.")
+                .format(name=who) + f"\n\n<i>{html.escape(login.text)}</i>",
+                login_warning_kb(session_id))
+
+    async def _settle_login(self, rt: SessionRuntime, previous: str | None,
+                            state: str) -> None:
+        """Trade the last step's buttons for a line saying how it ended."""
+        if rt.login_msg_id is None:
+            return
+        msg_id, rt.login_msg_id = rt.login_msg_id, None
+        kind = (previous or "").split(":", 1)[0]
+        if kind == "menu":
+            label = _("▶️ Method chosen")
+        elif kind == "code" and state == "code":
+            label = _("⏹ This link was replaced")
+        elif kind == "code":
+            label = _("🔑 Code entered")
+        elif kind == "error":
+            label = _("🔁 Tried again")
+        else:
+            label = _("⏹ Login closed")
+        with contextlib.suppress(Exception):
+            await self.bot.edit_message_reply_markup(
+                chat_id=self.chat_id, message_id=msg_id, reply_markup=done_kb(label))
+
+    async def _retire_login(self, rt: SessionRuntime) -> None:
+        """The panel is gone: Esc, the terminal, or the Enter after success."""
+        if rt.login_step is None and rt.login_msg_id is None:
+            return
+        await self._settle_login(rt, None, "")
+        rt.login_step = rt.login_seen = None
+        rt.login_other_since = 0.0
+
+    def repost_login(self, session_id: str) -> None:
+        """Send the current login step again, at the bottom of the chat.
+
+        The card above keeps its buttons: its step still stands, and they
+        are guarded by it.
+        """
+        rt = self.runtimes.get(session_id)
+        if rt is not None:
+            rt.login_step = rt.login_seen = None
+            rt.login_msg_id = None
+
+    def release_login(self, session_id: str) -> None:
+        """The chat has marked the login card itself: hands off."""
+        rt = self.runtimes.get(session_id)
+        if rt is not None:
+            rt.login_msg_id = None
+
+    async def login_done_card(self, session_id: str):
+        """The news of a login, with restarts for the sessions it leaves behind.
+
+        Claude Code reads the credentials when it starts, so a session that
+        was already running keeps the old account until it is restarted —
+        which the user did by hand, one terminal at a time. Which account a
+        session runs is nowhere to be read, so every other session is
+        listed; the idle ones get a button.
+        """
+        labels = {m.session_id: m.full_label for m in self.store.all_managed()}
+        me = html.escape(labels.get(session_id, session_id[:8]))
+        email = self.login_emails.get(session_id, "")
+        if email:
+            lines = [_("✅ <b>{name}</b>: logged in as <b>{email}</b>.").format(
+                name=me, email=html.escape(email))]
+        else:
+            lines = [_("✅ <b>{name}</b>: logged in.").format(name=me)]
+        views = [v for v in await sess.managed_views(self.store)
+                 if v.session_id != session_id and v.session_id in labels]
+        if not views:
+            lines += ["", _("No other session is running, so none needs a "
+                            "restart.")]
+            return "\n".join(lines), None
+        lines += ["", _("Sessions that were already running keep the previous "
+                        "account until they are restarted:")]
+        idle = []
+        for v in views:
+            label = labels[v.session_id]
+            row = f"{STATUS_ICON.get(v.status, '•')} <b>{html.escape(label)}</b>"
+            if v.status in ("idle", "starting"):
+                idle.append((v.session_id, label))
+            else:
+                row += " — " + _("busy or waiting, left alone")
+            lines.append(row)
+        lines += ["", _("A restart is <code>/exit</code> and <code>claude "
+                        "--resume</code> in the same window: the conversation "
+                        "and its context stay.")]
+        return "\n".join(lines), login_done_kb(session_id, idle)
 
     async def _report_blocked(self, session_id: str, name: str, raw: str,
                               rt: SessionRuntime, agent_status: str,
