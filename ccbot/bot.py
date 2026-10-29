@@ -4974,6 +4974,12 @@ class CCBot:
                                  "that first"), show_alert=True)
                 return
             await c.answer(_("/clear sent"))
+        elif action == "login":
+            # The same as /login sent as a reply to this session.
+            await c.answer()
+            here = _editable(c)
+            if here is not None:
+                await self._start_login(here, mgd, "")
         elif action == "close":
             # Answered first: `/exit` and the wait for it can outlast
             # Telegram's patience with an unanswered callback, and a button

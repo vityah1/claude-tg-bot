@@ -297,6 +297,11 @@ is still alive, too. That is why rows are read tolerantly
 - **A new bot `/command` means four places**: the handler in `_register()`, the
   `OWN_COMMANDS` set, the `CCBot.MENU` list, and the text of `help_text()`.
   Forget `OWN_COMMANDS` and the command silently travels to Claude as text.
+  🔴 **A command that acts on a session also gets a button on the session
+  card** (`session_kb` → `_session_action`): the user drives the bot from
+  the phone by tapping, and a feature reachable only by typing its command
+  is a feature they cannot find (2026-10-29: `/login` shipped without one —
+  "do you think I have to type it by hand?").
 - **`callback_data` is limited to 64 bytes**: the session id is cut to 8
   characters (`sid8`) and resolved back by prefix (`_resolve`, `_find_foreign`,
   `_find_closed`).

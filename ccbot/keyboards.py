@@ -171,6 +171,7 @@ def session_kb(v: SessionView) -> InlineKeyboardMarkup:
     )
     kb.row(
         InlineKeyboardButton(text=_("✏️ Rename"), callback_data=f"ren:{s}"),
+        InlineKeyboardButton(text=_("🔑 Other account"), callback_data=f"k:{s}:login"),
         InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
     )
     kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))

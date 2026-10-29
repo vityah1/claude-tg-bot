@@ -378,7 +378,7 @@ has to be typed by hand.
 | `/rename` | your own name for a session (`/rename -` gives the automatic one back) |
 | `/lang` | interface language (`en` and `uk` for now) |
 | `/update` | which Claude Code each session runs, which one is on disk, and a restart that keeps the context |
-| `/login` | logs Claude in to another account: the sign-in link comes to the chat, the code goes back as a message, and the other sessions are restarted onto the new account |
+| `/login` | logs Claude in to another account (also «🔑 Other account» on the session card): the sign-in link comes to the chat, the code goes back as a message, and the other sessions are restarted onto the new account |
 | `/exit` | **ends the session**: Claude shuts down on its own, then the tmux window closes |
 
 All of them act on the **active** session, or — in a reply — on the one whose
@@ -492,8 +492,9 @@ notification. Between messages the badge is enough: `⬆️` and a count in
 
 ## Logging in to another account
 
-When one account's limits run out, `/login` switches the machine to another
-without going to it. The bot types `/login` into the session (the active one,
+When one account's limits run out, `/login` — or «🔑 Other account» on the
+session card — switches the machine to another without going to it. The bot
+types `/login` into the session (the active one,
 or the one replied to), picks "Claude account with subscription" itself, and
 sends the link Claude Code prints — under WSL and in a detached tmux the
 browser never opens, so the panel shows `Browser didn't open? Use the url

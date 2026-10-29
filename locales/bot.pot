@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-10-29 19:56+0000\n"
+"POT-Creation-Date: 2026-10-29 20:07+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -173,7 +173,7 @@ msgid ""
 msgstr ""
 
 #: ccbot/bot.py:331 ccbot/bot.py:1236 ccbot/bot.py:3481 ccbot/keyboards.py:117
-#: ccbot/keyboards.py:412
+#: ccbot/keyboards.py:413
 msgid "➕ New session"
 msgstr ""
 
@@ -200,7 +200,7 @@ msgid ""
 "back."
 msgstr ""
 
-#: ccbot/bot.py:347 ccbot/keyboards.py:118 ccbot/keyboards.py:413
+#: ccbot/bot.py:347 ccbot/keyboards.py:118 ccbot/keyboards.py:414
 msgid "🕘 Recent"
 msgstr ""
 
@@ -240,7 +240,7 @@ msgstr ""
 msgid "⏳ Ending {name} — sending /exit…"
 msgstr ""
 
-#: ccbot/bot.py:832 ccbot/bot.py:4226 ccbot/bot.py:4987
+#: ccbot/bot.py:832 ccbot/bot.py:4226 ccbot/bot.py:4993
 #, python-brace-format
 msgid ""
 "❌ Session <b>{name}</b> has ended.\n"
@@ -416,7 +416,7 @@ msgid ""
 "{button}. Press /sessions and try again."
 msgstr ""
 
-#: ccbot/bot.py:1293 ccbot/keyboards.py:712
+#: ccbot/bot.py:1293 ccbot/keyboards.py:713
 msgid "✏️ Another path"
 msgstr ""
 
@@ -508,11 +508,11 @@ msgstr ""
 msgid "⏹ Question closed"
 msgstr ""
 
-#: ccbot/bot.py:1592 ccbot/keyboards.py:261
+#: ccbot/bot.py:1592 ccbot/keyboards.py:262
 msgid "📨 Review and send"
 msgstr ""
 
-#: ccbot/bot.py:1593 ccbot/keyboards.py:263
+#: ccbot/bot.py:1593 ccbot/keyboards.py:264
 msgid "🗑 Discard and exit"
 msgstr ""
 
@@ -1001,7 +1001,7 @@ msgid ""
 "screen: deal with that, then press «{button}»."
 msgstr ""
 
-#: ccbot/bot.py:3002 ccbot/keyboards.py:382
+#: ccbot/bot.py:3002 ccbot/keyboards.py:383
 #, python-brace-format
 msgid "▶️ Current: {name}"
 msgstr ""
@@ -1337,7 +1337,7 @@ msgstr ""
 msgid "🔗 Moving <b>{name}</b> into tmux"
 msgstr ""
 
-#: ccbot/bot.py:3958 ccbot/bot.py:4981
+#: ccbot/bot.py:3958 ccbot/bot.py:4987
 msgid "Ending it…"
 msgstr ""
 
@@ -1676,78 +1676,78 @@ msgstr ""
 msgid "/clear sent"
 msgstr ""
 
-#: ccbot/bot.py:5000
+#: ccbot/bot.py:5006
 msgid "Session list and controls"
 msgstr ""
 
-#: ccbot/bot.py:5001
+#: ccbot/bot.py:5007
 msgid "Controls of the session you are talking to"
 msgstr ""
 
-#: ccbot/bot.py:5002
+#: ccbot/bot.py:5008
 msgid "New session in a chosen directory"
 msgstr ""
 
-#: ccbot/bot.py:5003
+#: ccbot/bot.py:5009
 msgid "Quota and context, without asking Claude"
 msgstr ""
 
-#: ccbot/bot.py:5004
+#: ccbot/bot.py:5010
 msgid "Snapshot of the active session's terminal"
 msgstr ""
 
-#: ccbot/bot.py:5005
+#: ccbot/bot.py:5011
 msgid "Interrupt what Claude is doing"
 msgstr ""
 
-#: ccbot/bot.py:5006
+#: ccbot/bot.py:5012
 msgid "Clear the active session's context"
 msgstr ""
 
-#: ccbot/bot.py:5007
+#: ccbot/bot.py:5013
 msgid "Give a session your own name"
 msgstr ""
 
-#: ccbot/bot.py:5008
+#: ccbot/bot.py:5014
 msgid "End the active session cleanly"
 msgstr ""
 
-#: ccbot/bot.py:5009
+#: ccbot/bot.py:5015
 msgid "Project directories for new sessions"
 msgstr ""
 
-#: ccbot/bot.py:5010
+#: ccbot/bot.py:5016
 msgid "Interface language"
 msgstr ""
 
-#: ccbot/bot.py:5011
+#: ccbot/bot.py:5017
 msgid "Last entries from the bot's journal"
 msgstr ""
 
-#: ccbot/bot.py:5012
+#: ccbot/bot.py:5018
 msgid "Claude Code version and session restarts"
 msgstr ""
 
-#: ccbot/bot.py:5013
+#: ccbot/bot.py:5019
 msgid "Log Claude in to another account"
 msgstr ""
 
-#: ccbot/bot.py:5014
+#: ccbot/bot.py:5020
 msgid "Bot state: uptime, version, restart"
 msgstr ""
 
-#: ccbot/bot.py:5015
+#: ccbot/bot.py:5021
 msgid "Help"
 msgstr ""
 
-#: ccbot/bot.py:5083
+#: ccbot/bot.py:5089
 #, python-brace-format
 msgid ""
 "✅ The bot is back — the restart took {duration}.\n"
 "Code: <code>{version}</code>"
 msgstr ""
 
-#: ccbot/bot.py:5093
+#: ccbot/bot.py:5099
 msgid ""
 "⚠️ I could not find the <code>claude</code> executable. Lists of live "
 "sessions will be empty.\n"
@@ -1758,7 +1758,7 @@ msgstr ""
 msgid "──── 🖥 in tmux ────"
 msgstr ""
 
-#: ccbot/keyboards.py:92 ccbot/keyboards.py:104 ccbot/keyboards.py:408
+#: ccbot/keyboards.py:92 ccbot/keyboards.py:104 ccbot/keyboards.py:409
 msgid "waiting"
 msgstr ""
 
@@ -1776,11 +1776,11 @@ msgid "🔄 Refresh"
 msgstr ""
 
 #: ccbot/keyboards.py:132 ccbot/keyboards.py:141 ccbot/keyboards.py:147
-#: ccbot/keyboards.py:190 ccbot/keyboards.py:416
+#: ccbot/keyboards.py:191 ccbot/keyboards.py:417
 msgid "⬅️ Back"
 msgstr ""
 
-#: ccbot/keyboards.py:139 ccbot/keyboards.py:145 ccbot/keyboards.py:174
+#: ccbot/keyboards.py:139 ccbot/keyboards.py:145 ccbot/keyboards.py:175
 msgid "🚪 End"
 msgstr ""
 
@@ -1788,8 +1788,8 @@ msgstr ""
 msgid "▶️ Open"
 msgstr ""
 
-#: ccbot/keyboards.py:156 ccbot/keyboards.py:248 ccbot/keyboards.py:265
-#: ccbot/keyboards.py:365 ccbot/keyboards.py:479 ccbot/keyboards.py:502
+#: ccbot/keyboards.py:156 ccbot/keyboards.py:249 ccbot/keyboards.py:266
+#: ccbot/keyboards.py:366 ccbot/keyboards.py:480 ccbot/keyboards.py:503
 msgid "🖥 Screen"
 msgstr ""
 
@@ -1813,217 +1813,221 @@ msgstr ""
 msgid "✏️ Rename"
 msgstr ""
 
-#: ccbot/keyboards.py:176 ccbot/keyboards.py:579 ccbot/keyboards.py:667
-#: ccbot/keyboards.py:702 ccbot/keyboards.py:736 ccbot/keyboards.py:778
-#: ccbot/keyboards.py:805 ccbot/keyboards.py:818
+#: ccbot/keyboards.py:174
+msgid "🔑 Other account"
+msgstr ""
+
+#: ccbot/keyboards.py:177 ccbot/keyboards.py:580 ccbot/keyboards.py:668
+#: ccbot/keyboards.py:703 ccbot/keyboards.py:737 ccbot/keyboards.py:779
+#: ccbot/keyboards.py:806 ccbot/keyboards.py:819
 msgid "⬅️ Sessions"
 msgstr ""
 
-#: ccbot/keyboards.py:205
+#: ccbot/keyboards.py:206
 msgid "✅ this session"
 msgstr ""
 
-#: ccbot/keyboards.py:205
+#: ccbot/keyboards.py:206
 msgid "this session"
 msgstr ""
 
-#: ccbot/keyboards.py:208
+#: ccbot/keyboards.py:209
 msgid "✅ + new sessions"
 msgstr ""
 
-#: ccbot/keyboards.py:208
+#: ccbot/keyboards.py:209
 msgid "+ new sessions"
 msgstr ""
 
-#: ccbot/keyboards.py:247
+#: ccbot/keyboards.py:248
 msgid "✖️ Cancel"
 msgstr ""
 
 #. TRANSLATORS: a multi-part question — this moves to its next part.
-#: ccbot/keyboards.py:326
+#: ccbot/keyboards.py:327
 #, python-brace-format
 msgid "➡️ Next question ({n} ticked)"
 msgstr ""
 
-#: ccbot/keyboards.py:327
+#: ccbot/keyboards.py:328
 msgid "➡️ Next question"
 msgstr ""
 
 #. TRANSLATORS: sends the ticked options of a multi-select question.
-#: ccbot/keyboards.py:330
+#: ccbot/keyboards.py:331
 #, python-brace-format
 msgid "✅ Send {n} choice"
 msgid_plural "✅ Send {n} choices"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/keyboards.py:331
+#: ccbot/keyboards.py:332
 msgid "✅ Send answer"
 msgstr ""
 
 #. TRANSLATORS: answers a question with a note of one's own instead
 #. of one of its options ("n to add notes" in the terminal).
-#: ccbot/keyboards.py:344
+#: ccbot/keyboards.py:345
 msgid "📝 Answer with a note"
 msgstr ""
 
-#: ccbot/keyboards.py:349
+#: ccbot/keyboards.py:350
 msgid "⬅️ Previous part"
 msgstr ""
 
-#: ccbot/keyboards.py:351
+#: ccbot/keyboards.py:352
 msgid "Next part ➡️"
 msgstr ""
 
-#: ccbot/keyboards.py:359 ccbot/keyboards.py:475
+#: ccbot/keyboards.py:360 ccbot/keyboards.py:476
 msgid "✅ Select"
 msgstr ""
 
-#: ccbot/keyboards.py:364 ccbot/watcher.py:1496
+#: ccbot/keyboards.py:365 ccbot/watcher.py:1496
 msgid "🖼 Diagram"
 msgstr ""
 
-#: ccbot/keyboards.py:384
+#: ccbot/keyboards.py:385
 msgid "📋 Another session"
 msgstr ""
 
-#: ccbot/keyboards.py:386 ccbot/keyboards.py:419
+#: ccbot/keyboards.py:387 ccbot/keyboards.py:420
 msgid "🗑 Discard"
 msgstr ""
 
-#: ccbot/keyboards.py:436
+#: ccbot/keyboards.py:437
 #, python-brace-format
 msgid "↩️ Restore all ({count})"
 msgstr ""
 
-#: ccbot/keyboards.py:444
+#: ccbot/keyboards.py:445
 msgid "🗑 Forget them"
 msgstr ""
 
-#: ccbot/keyboards.py:457
+#: ccbot/keyboards.py:458
 msgid "🎛 Session controls"
 msgstr ""
 
-#: ccbot/keyboards.py:492
+#: ccbot/keyboards.py:493
 msgid "📋 Copy again"
 msgstr ""
 
-#: ccbot/keyboards.py:496
+#: ccbot/keyboards.py:497
 msgid "⬅️ Earlier"
 msgstr ""
 
-#: ccbot/keyboards.py:498
+#: ccbot/keyboards.py:499
 msgid "Later ➡️"
 msgstr ""
 
-#: ccbot/keyboards.py:501
+#: ccbot/keyboards.py:502
 msgid "✖️ Close"
 msgstr ""
 
-#: ccbot/keyboards.py:508
+#: ccbot/keyboards.py:509
 msgid "✖️ Cancel the login"
 msgstr ""
 
-#: ccbot/keyboards.py:527
+#: ccbot/keyboards.py:528
 msgid "🔑 Open the sign-in page"
 msgstr ""
 
-#: ccbot/keyboards.py:535
+#: ccbot/keyboards.py:536
 msgid "🔁 Try again with a new link"
 msgstr ""
 
-#: ccbot/keyboards.py:543
+#: ccbot/keyboards.py:544
 msgid "⏎ Continue"
 msgstr ""
 
-#: ccbot/keyboards.py:560
+#: ccbot/keyboards.py:561
 #, python-brace-format
 msgid "🔄 Restart all idle ({count})"
 msgstr ""
 
-#: ccbot/keyboards.py:566 ccbot/keyboards.py:578 ccbot/keyboards.py:666
+#: ccbot/keyboards.py:567 ccbot/keyboards.py:579 ccbot/keyboards.py:667
 msgid "♻️ Refresh"
 msgstr ""
 
-#: ccbot/keyboards.py:575
+#: ccbot/keyboards.py:576
 msgid "🔄 Restart the bot"
 msgstr ""
 
-#: ccbot/keyboards.py:595
+#: ccbot/keyboards.py:596
 msgid "✏️ This answers the question"
 msgstr ""
 
-#: ccbot/keyboards.py:598
+#: ccbot/keyboards.py:599
 msgid "💬 Close the question and send"
 msgstr ""
 
-#: ccbot/keyboards.py:600
+#: ccbot/keyboards.py:601
 msgid "⏳ Send after the answer"
 msgstr ""
 
-#: ccbot/keyboards.py:602 ccbot/keyboards.py:610
+#: ccbot/keyboards.py:603 ccbot/keyboards.py:611
 msgid "🗑 Don't send"
 msgstr ""
 
-#: ccbot/keyboards.py:637 ccbot/keyboards.py:684 ccbot/keyboards.py:713
+#: ccbot/keyboards.py:638 ccbot/keyboards.py:685 ccbot/keyboards.py:714
 msgid "⬅️ Cancel"
 msgstr ""
 
-#: ccbot/keyboards.py:652
+#: ccbot/keyboards.py:653
 msgid "⬆️ Restart this session"
 msgstr ""
 
-#: ccbot/keyboards.py:658
+#: ccbot/keyboards.py:659
 #, python-brace-format
 msgid "⬆️ Restart all idle ({count})"
 msgstr ""
 
-#: ccbot/keyboards.py:661
+#: ccbot/keyboards.py:662
 msgid "🆕 What's new"
 msgstr ""
 
-#: ccbot/keyboards.py:662
+#: ccbot/keyboards.py:663
 msgid "🔄 Check for updates"
 msgstr ""
 
-#: ccbot/keyboards.py:675
+#: ccbot/keyboards.py:676
 msgid "⬆️ Update sessions"
 msgstr ""
 
-#: ccbot/keyboards.py:683
+#: ccbot/keyboards.py:684
 msgid "✅ Yes, restart"
 msgstr ""
 
-#: ccbot/keyboards.py:698
+#: ccbot/keyboards.py:699
 msgid "➕ Add a directory"
 msgstr ""
 
-#: ccbot/keyboards.py:700
+#: ccbot/keyboards.py:701
 msgid "🔄 Reset to autodiscovery"
 msgstr ""
 
-#: ccbot/keyboards.py:729
+#: ccbot/keyboards.py:730
 msgid "🌐 Same as Telegram"
 msgstr ""
 
-#: ccbot/keyboards.py:767 ccbot/keyboards.py:796
+#: ccbot/keyboards.py:768 ccbot/keyboards.py:797
 #, python-brace-format
 msgid "page {page} of {pages}"
 msgstr ""
 
-#: ccbot/keyboards.py:774 ccbot/keyboards.py:817
+#: ccbot/keyboards.py:775 ccbot/keyboards.py:818
 msgid "🔍 Find"
 msgstr ""
 
-#: ccbot/keyboards.py:775
+#: ccbot/keyboards.py:776
 msgid "📁 Another directory"
 msgstr ""
 
-#: ccbot/keyboards.py:802
+#: ccbot/keyboards.py:803
 msgid "🔍 Search again"
 msgstr ""
 
-#: ccbot/keyboards.py:803
+#: ccbot/keyboards.py:804
 msgid "📁 Directories"
 msgstr ""
 
