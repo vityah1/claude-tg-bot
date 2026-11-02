@@ -240,6 +240,20 @@ is still alive, too. That is why rows are read tolerantly
   it), logs the raw JSON and tells the chat what was left out
   (`CCBot._say_damaged`). Keep the bot on it, and still bump aiogram when
   Telegram adds a block kind — the guard saves the rest, not the new part.
+- 🔴 **A connect that drops is retried in the transport, and only a connect.**
+  Since 2026-10-27 api.telegram.org resets a single connection now and then
+  (33 in six days, never two in a row); each one was a dead button, a lost
+  download or "could not pass that on". `TolerantSession.make_request`
+  repeats a request whose `ClientConnectorError` came before a byte left
+  (0.5 / 1.5 / 3 s), never a timeout or a hang-up mid-answer — that request
+  may have landed, and a repeated `sendMessage` is a duplicate; only
+  `getUpdates` / `getFile` / `getMe` are repeated after a reset too.
+  Downloads bypass `make_request` (`stream_content`) and repeat on their own
+  until the first byte. And the "➡️ Sent to" after a delivered prompt
+  (`_send_batch`) never raises: the prompt had reached the session when the
+  chat was told it "could not pass" (2026-11-02), so a failed confirmation
+  is re-sent later (`_ack_later`). `_ack` itself still raises — it also
+  carries refusals, and those must not go silent.
 - 🔴 **A session restart is `/exit` + `claude --resume <id> -n <name>` in the
   same window, and the window is never killed** (`CCBot._restart_session`).
   `--resume` keeps the session id — verified against the live CLI on

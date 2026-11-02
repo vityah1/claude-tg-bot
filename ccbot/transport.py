@@ -13,23 +13,62 @@ fails has the parts the models reject cut out of it until it passes — the
 paragraphs around an unknown block still arrive. What was cut is logged with
 its raw JSON and handed to ``on_damaged``, because a message that lost a
 part in silence is the same hole one level down.
+
+It also retries a request whose connection could not be opened. Since
+2026-10-27 the link to api.telegram.org drops a single connect now and then
+("Connection reset by peer", 33 in six days, never two in a row), and every
+one used to surface as a failed button, a lost download or "could not pass
+that on" — once right after the prompt had in fact reached the session. A
+connect error is raised before a byte of the request leaves, so repeating it
+cannot send a message twice; anything that failed later (a timeout, a server
+that hung up mid-answer) is retried only for a method that changes nothing
+(``getUpdates``, ``getFile``), because any other request may have landed.
+A file download goes around ``make_request`` (``stream_content``), so it
+gets the same repeat of its own while no byte has arrived.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from http import HTTPStatus
 from typing import Any
 
 from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.methods import GetUpdates, Response, TelegramMethod
+from aiogram.exceptions import TelegramNetworkError
+from aiogram.methods import GetFile, GetMe, GetUpdates, Response, TelegramMethod
 from aiogram.methods.base import TelegramType
 from aiogram.types import Update
+from aiohttp import ClientConnectionError, ClientConnectorCertificateError, ClientConnectorError
 from pydantic import ValidationError
 
 log = logging.getLogger(__name__)
+
+# Pauses before each repeat of a request whose connection was refused; five
+# seconds in all, long enough for a dropped connect, short enough that a real
+# outage still reaches the caller while the person is looking.
+_CONNECT_RETRIES = (0.5, 1.5, 3.0)
+
+# Methods a second copy of which changes nothing on Telegram's side, so a
+# reset after the request left may be repeated too.
+_READ_ONLY = (GetUpdates, GetFile, GetMe)
+
+
+def _retryable(exc: BaseException, read_only: bool) -> bool:
+    """Whether a failed request may be sent again without doing anything twice.
+
+    aiogram wraps the aiohttp error ``from`` it today; the context is checked
+    as well so that an upgrade that drops the chaining degrades to fewer
+    repeats rather than to none, silently.
+    """
+    cause = exc.__cause__ or exc.__context__
+    if isinstance(cause, ClientConnectorCertificateError):
+        return False
+    if isinstance(cause, ClientConnectorError):
+        return True
+    return read_only and isinstance(cause, ClientConnectionError)
 
 # How many parts one update may lose before it is reduced to its id. Each
 # cut is one validation error, and a block cut whole takes its errors with it.
@@ -143,6 +182,41 @@ class TolerantSession(AiohttpSession):
         # message that lost parts (None if none) and what was cut.
         self.on_damaged: (Callable[[int | None, int | None, list[str]], None]
                           | None) = None
+
+    async def make_request(self, bot: Bot, method: TelegramMethod[TelegramType],
+                           timeout: int | None = None) -> TelegramType:
+        """Send *method*, repeating it while the connection cannot be opened."""
+        for delay in (*_CONNECT_RETRIES, None):
+            try:
+                return await super().make_request(bot, method, timeout)
+            except TelegramNetworkError as exc:
+                if delay is None or not _retryable(
+                        exc, isinstance(method, _READ_ONLY)):
+                    raise
+                log.warning("%s: %s — retrying in %.1fs",
+                            method.__api_method__, exc.message, delay)
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
+    async def stream_content(self, url: str, headers: dict[str, Any] | None = None,
+                             timeout: int = 30, chunk_size: int = 65536,
+                             raise_for_status: bool = True,
+                             ) -> AsyncGenerator[bytes, None]:
+        """Download *url*, repeating the connect until the first byte arrives."""
+        for delay in (*_CONNECT_RETRIES, None):
+            started = False
+            try:
+                async for chunk in super().stream_content(
+                        url, headers, timeout, chunk_size, raise_for_status):
+                    started = True
+                    yield chunk
+                return
+            except ClientConnectionError as exc:
+                if (started or delay is None
+                        or isinstance(exc, ClientConnectorCertificateError)):
+                    raise
+                log.warning("download: %s — retrying in %.1fs", exc, delay)
+                await asyncio.sleep(delay)
 
     def check_response(self, bot: Bot, method: TelegramMethod[TelegramType],
                        status_code: int, content: str) -> Response[TelegramType]:

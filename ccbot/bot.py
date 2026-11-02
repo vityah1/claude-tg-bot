@@ -98,6 +98,8 @@ _MAX_ATTACHMENT = 20 * 1024 * 1024
 # Telegram hands a whole forwarded batch over in a single poll — thirteen
 # messages landed within 190 ms on 2026-08-27 — and an album is no slower, so
 # a short window catches both while costing a lone message almost nothing.
+# Pauses before re-sending a delivery confirmation the network dropped.
+_ACK_RETRIES = (10.0, 30.0, 90.0)
 _INBOX_QUIET = 0.8
 # How often the collector looks at a batch it is holding.
 _INBOX_TICK = 0.2
@@ -2342,14 +2344,35 @@ class CCBot:
         if paths:
             parts.append(ngettext("{count} attachment", "{count} attachments",
                                   len(paths)).format(count=len(paths)))
-        await self._ack(
-            items[-1].message,
-            _("➡️ Sent to <b>{name}</b>{extra}{note}").format(
-                name=html.escape(mgd.full_label),
-                extra=(" · " + " · ".join(parts)) if parts else "",
-                note=note),
-            mgd,
-        )
+        text = _("➡️ Sent to <b>{name}</b>{extra}{note}").format(
+            name=html.escape(mgd.full_label),
+            extra=(" · " + " · ".join(parts)) if parts else "",
+            note=note)
+        try:
+            await self._ack(items[-1].message, text, mgd)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # The prompt is in the session; only the word about it failed.
+            # Raising would tell the chat it "could not pass" (2026-11-02:
+            # it had) or re-hold text that was already delivered, so the
+            # confirmation is sent again later instead.
+            log.warning("ack not delivered, retrying later: %s", exc)
+            task = asyncio.create_task(
+                self._ack_later(items[-1].message, text, mgd))
+            self.expiries.add(task)
+            task.add_done_callback(self.expiries.discard)
+
+    async def _ack_later(self, m: Message, text: str, mgd) -> None:
+        """Keep trying a delivery confirmation that met a network failure."""
+        for delay in _ACK_RETRIES:
+            await asyncio.sleep(delay)
+            try:
+                await self._ack(m, text, mgd)
+                return
+            except Exception as exc:
+                log.warning("ack still not delivered: %s", exc)
+        log.error("ack given up: %r", text[:120])
 
     # ------------------------------------------------- held for an open question
     async def _question_open(self, mgd) -> tuple[bool, screenmod.Dialog | None]:
