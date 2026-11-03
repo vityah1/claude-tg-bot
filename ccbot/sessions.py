@@ -229,6 +229,7 @@ class SessionView:
     saved_name: str = ""  # what the user called it, kept past the session
     launched: str = ""    # `claude -n`, when a human wrote it
     last: str = ""        # the prompt it stopped on
+    account: str = ""     # the Claude account it runs under (`account.fill`)
 
     @property
     def when(self) -> str:
@@ -389,6 +390,7 @@ async def managed_views(store: Store) -> list[SessionView]:
             session_id=m.session_id, name=m.label, cwd=m.cwd, kind="managed",
             status=status, waiting_for=(agent or {}).get("waitingFor", ""),
             window_id=m.window_id, title=m.title, mtime=m.created_at,
+            started_at=float((agent or {}).get("startedAt") or 0) / 1000,
         ))
     return views
 
@@ -413,6 +415,14 @@ async def foreign_views(store: Store) -> list[SessionView]:
             work_dir=work if work != a.get("cwd", "") else "",
         ))
     return out
+
+
+async def started_at(session_id: str) -> float:
+    """When this session's running process started (epoch), 0 if unknown."""
+    for a in await live_agents():
+        if a.get("sessionId") == session_id:
+            return float(a.get("startedAt") or 0) / 1000
+    return 0.0
 
 
 @dataclass

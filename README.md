@@ -529,10 +529,37 @@ would cancel the login.
 when it starts, so a session that was already running stays on the previous
 account until it is restarted. The success message therefore lists the other
 sessions with a 🔄 button for each idle one and «Restart all idle» — the same
-`/exit` + `claude --resume` restart as `/update`. Which account a session
-runs is not readable anywhere, so every session is listed; busy and waiting
-ones get no button. After a not-saved warning nothing is offered: a restart
+`/exit` + `claude --resume` restart as `/update`. A session already on the
+new account is marked so and gets no button (see below); busy and waiting
+ones get none either. After a not-saved warning nothing is offered: a restart
 would read the credentials that failed to save.
+
+### Which account each session runs
+
+`👤 Account: …` stands on the session card, its details, the launch card,
+`/usage` (right under the name — the limits belong to the account), the card
+of a session in your own terminal, and the `/sessions` caption (one line when
+every session shares an account, one line per account otherwise). A limit
+alert ends with the address too: that is the moment to switch. Closed
+sessions show none — a resume runs under the current login.
+
+`~/.claude.json` is **not** the source: it names the last `/login` only, and a
+session that was running before it is still on the old account — exactly the
+one worth knowing about. The session says it itself: Claude Code writes an
+attachment record `session_context` whose `userEmail` names the address into
+the transcript with the first request after a start or a resume, and again
+after the account changed. `ccbot/account.py` takes the last one (read from
+the end once, then only the appended bytes), and trusts it only if it is not
+older than the running process (`startedAt` from `claude agents --json`): a
+resume appends to the same file and writes its own record only with the first
+prompt, so until then nothing is shown rather than the previous run's
+account. The session that just logged in, and one the bot has just restarted,
+are known before their transcript says so (`account.note_login`).
+
+The terminal status line (`~/.claude/statusline-command.sh`, not part of this
+repo) shows the same address next to the profile, by the same rule: the
+process start comes from `~/.claude/sessions/<pid>.json`, and the address is
+cached per session in `~/.cache/ccbot/account/`, so a redraw costs a `stat`.
 
 **Seen live, and not.** The menu, the code step, the OAuth error after a
 wrong code, Enter back to the menu and Esc ("Login interrupted") were

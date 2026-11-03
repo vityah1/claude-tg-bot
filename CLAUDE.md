@@ -623,6 +623,17 @@ is still alive, too. That is why rows are read tolerantly
   (`login.mask`). Running sessions keep the old account until restarted —
   hence the restart card after success (`login_done_card`), and none after
   the not-saved warning. The success screen was never seen live (2.1.312).
+- 🔴 **A session's account is read from its own transcript, never from
+  `~/.claude.json`.** That file names the last `/login`; a session running
+  before it keeps the old account until restarted, so it would show the new
+  one exactly when the difference matters. `ccbot/account.py` takes the last
+  `session_context` attachment (`userEmail`, the address matched by shape,
+  not by the sentence) and drops a record older than the process `startedAt`
+  — a resume writes its own only with the first prompt (verified 2.1.317), so
+  the old run's record sits at the end of the file until then. What the bot
+  knows first (a login it drove, a restart it made) goes in
+  `account.note_login` until a newer record appears. The terminal status line
+  repeats the same rule in bash.
 - 🔴 **An unrecognised dialog has no right to be silence.** When
   `claude agents --json` says `waiting` and `find_dialog()` returned None,
   `Watcher._report_blocked` sends the screen with buttons (digits/arrows/Esc)

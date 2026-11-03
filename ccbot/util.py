@@ -112,9 +112,22 @@ def _limit_note(label: str, reset: str) -> str:
     return _("{window} limit").format(window=label)
 
 
-def usage_report(name: str, usage, status=None) -> str:
-    """Full context/limit breakdown, shown on demand."""
-    lines = [f"📊 <b>{name}</b>", ""]
+def account_line(email: str) -> str:
+    """The account a session runs under, or nothing when it is not known."""
+    return _("👤 Account: {email}").format(email=html.escape(email)) if email else ""
+
+
+def usage_report(name: str, usage, status=None, account: str = "") -> str:
+    """Full context/limit breakdown, shown on demand.
+
+    The account goes right under the name: the limits below belong to it,
+    not to the session.
+    """
+    lines = [f"📊 <b>{name}</b>"]
+    if account:
+        lines.append(account_line(account))
+    lines.append("")
+    head = len(lines)
     if usage:
         if usage.ctx_pct is not None:
             room = _thousands(usage.ctx_window) if usage.ctx_window else "?"
@@ -149,7 +162,7 @@ def usage_report(name: str, usage, status=None) -> str:
     # Fallback: the tee wrapper is not installed, so scrape the status line.
     for _key, pct, note in gauges(None, status):
         lines.append(f"<code>{note[:12]:<12} {bar(pct)} {pct:>3}%</code>")
-    if len(lines) == 2:
+    if len(lines) == head:
         lines.append(_("No metrics yet — the status line has not been drawn."))
     else:
         lines.append("\n<i>" + _(

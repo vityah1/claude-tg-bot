@@ -31,8 +31,8 @@ from aiogram.types import (
     Update,
 )
 
+from . import account, logsetup, media, rich, service, status_feed, tmux, updates, util
 from . import login as loginmod
-from . import logsetup, media, rich, service, status_feed, tmux, updates, util
 from . import screen as screenmod
 from . import sessions as sess
 from .config import Config
@@ -81,7 +81,7 @@ from .keyboards import (
 from .settings import Settings
 from .state import Orphan, Store
 from .transport import TolerantSession
-from .util import as_pre, split_text, usage_report
+from .util import account_line, as_pre, split_text, usage_report
 from .watcher import Watcher
 
 log = logging.getLogger("ccbot.bot")
@@ -297,6 +297,32 @@ def _status_legend(views: list[sess.SessionView],
             for s in _LEGEND_ORDER if s in seen and s in STATUS_ICON]
 
 
+def _account_lines(views: list[sess.SessionView]) -> list[str]:
+    """Which account each listed session runs under, grouped by account.
+
+    After a /login the sessions that were already running stay on the old
+    account, so a list that mixes two is exactly the case worth showing.
+    """
+    groups: dict[str, tuple[str, list[str]]] = {}
+    for v in views:
+        if v.account:
+            groups.setdefault(v.account.lower(), (v.account, []))[1].append(v.name)
+    if not groups:
+        return []
+    live = sum(1 for v in views if v.status not in ("gone", "dead"))
+    if len(groups) == 1:
+        email, names = next(iter(groups.values()))
+        if len(names) == live:
+            return [account_line(email)]
+    out = []
+    for email, names in groups.values():
+        shown = ", ".join(html.escape(n) for n in names[:4])
+        if len(names) > 4:
+            shown += ", …"
+        out.append(f"👤 {html.escape(email)}: {shown}")
+    return out
+
+
 def _sessions_text(managed: list[sess.SessionView],
                    foreign: list[sess.SessionView],
                    active: str | None, behind: int = 0) -> str:
@@ -321,6 +347,7 @@ def _sessions_text(managed: list[sess.SessionView],
             block.append(_("🟢 active: <b>{name}</b> — plain text goes here"
                            ).format(name=html.escape(cur.name)))
         block += _status_legend(managed, active)
+        block += _account_lines(managed)
         if behind:
             block.append(ngettext(
                 "⬆️ {count} session runs an older Claude Code — /update",
@@ -342,6 +369,7 @@ def _sessions_text(managed: list[sess.SessionView],
             block.append(_("⏸ waiting for you at the keyboard: {names}"
                            ).format(names=", ".join(
                                html.escape(v.name) for v in stuck[:3])))
+        block += _account_lines(foreign)
         parts.append("\n".join(block))
     # Named through the button's own string so the sentence and the keyboard
     # cannot drift apart in a translation.
@@ -817,7 +845,8 @@ class CCBot:
                 await self._ack(
                     m,
                     usage_report(mgd.full_label, status_feed.read(mgd.session_id),
-                                 await self._status(mgd)),
+                                 await self._status(mgd),
+                                 await self._account_of(mgd)),
                     mgd,
                 )
 
@@ -1216,6 +1245,8 @@ class CCBot:
         if here is None:
             await target.answer(_stale_card("/sessions"), show_alert=True)
             return
+        await account.fill(managed)
+        await account.fill(foreign)
         active = self.store.get_active(here.chat.id)
         disk = await updates.installed()
         behind = sum(1 for v in managed if updates.stale(v.session_id, disk))
@@ -1312,6 +1343,9 @@ class CCBot:
             # The payload on disk is the previous run's, and its version would
             # put a false "⬆️" on the card below.
             updates.note_restarted(session_id)
+        # A launch reads the credentials on disk; the transcript says so only
+        # with the first request, and a resumed one ends on the old run's.
+        account.note_login(session_id, account.current_login())
         # Skip transcript written before now, or a resume would replay history.
         self.watcher.adopt(session_id, skip_existing=True)
         await self._launch_card(chat_id, session_id, previous,
@@ -1810,8 +1844,14 @@ class CCBot:
                               chat_id: int, mgd, what: str) -> None:
         """Restart sessions onto the new account, then redraw the card."""
         if what == "rall":
-            idle = {v.session_id for v in await sess.managed_views(self.store)
-                    if v.status in ("idle", "starting")}
+            # The same choice the card made: a session already on the new
+            # account is not restarted for nothing.
+            new = self.watcher.login_emails.get(mgd.session_id, "")
+            views = [v for v in await sess.managed_views(self.store)
+                     if v.status in ("idle", "starting")]
+            await account.fill(views)
+            idle = {v.session_id for v in views
+                    if not account.same(v.account, new)}
             queue = [m for m in self.store.all_managed()
                      if m.session_id in idle and m.session_id != mgd.session_id]
             if not queue:
@@ -1942,6 +1982,10 @@ class CCBot:
                     "it did not come back. Its window is untouched, so "
                     "pressing again resumes it"))
         self._typed(mgd)
+        # A resume reads the credentials on disk; its transcript says so only
+        # with the next request, and until then the login card would offer
+        # the same restart again.
+        account.note_login(mgd.session_id, account.current_login())
         version = await self._await_version(mgd.session_id,
                                             await updates.installed())
         if version:
@@ -3954,6 +3998,7 @@ class CCBot:
                 await c.answer(_("Session not found"), show_alert=True)
                 return
             await c.answer()
+            await account.fill([v])
             await self._safe_edit(
                 msg,
                 self._foreign_details(v), parse_mode="HTML",
@@ -4168,6 +4213,8 @@ class CCBot:
         status = sess.status_label(v.status) + (
             f" — {v.waiting_for}" if v.waiting_for else "")
         lines.append(_("📊 Status: <b>{status}</b>").format(status=status))
+        if v.account:
+            lines.append(account_line(v.account))
         if v.started_at:
             started = datetime.fromtimestamp(v.started_at)
             lines.append(_("🕘 Started: {when}").format(
@@ -4377,6 +4424,9 @@ class CCBot:
             status = sess.status_label(view.status) + (
                 f" — {view.waiting_for}" if view.waiting_for else "")
             lines.append(_("📊 Status: <b>{status}</b>").format(status=status))
+            await account.fill([view])
+            if view.account:
+                lines.append(account_line(view.account))
         model = (u.model if u else "") or st.model
         bits = [b for b in (model, f"◉ {u.effort}" if u and u.effort else st.effort,
                             f"🔐 {st.mode_label}" if st.mode else "") if b]
@@ -4440,6 +4490,11 @@ class CCBot:
                        "context.").format(button="«" + _("▶️ Resume") + "»"))
         return "\n".join(lines)
 
+    async def _account_of(self, mgd) -> str:
+        """The account this managed session runs under, "" when not known."""
+        return await account.email_for(
+            mgd.session_id, since=await sess.started_at(mgd.session_id))
+
     async def _status(self, mgd):
         """Model / effort / permission mode as shown in the status line."""
         try:
@@ -4486,6 +4541,9 @@ class CCBot:
                     status=sess.status_label(view.status)))
         if bits:
             text += "\n" + " · ".join(bits)
+        await account.fill([view])
+        if view.account:
+            text += "\n" + account_line(view.account)
         return text, session_kb(view)
 
     async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
@@ -4969,7 +5027,8 @@ class CCBot:
             await self.bot.send_message(
                 c.message.chat.id if c.message else self.cfg.owner,
                 usage_report(mgd.full_label, status_feed.read(mgd.session_id),
-                             await self._status(mgd)),
+                             await self._status(mgd),
+                             await self._account_of(mgd)),
                 parse_mode="HTML",
             )
         elif action == "ctx":

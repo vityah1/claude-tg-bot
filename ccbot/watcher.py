@@ -21,8 +21,8 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.types import FSInputFile
 
+from . import account, render, rich, status_feed, tmux, transcript, updates
 from . import login as loginmod
-from . import render, rich, status_feed, tmux, transcript, updates
 from . import screen as screenmod
 from . import sessions as sess
 from .i18n import _, ngettext, resolve
@@ -699,7 +699,7 @@ class Watcher:
                    and sig == rt.last_dialog_sig
                    and time.monotonic() - rt.dialog_sent_at < _HOLD_MAX)
         if not holding:
-            await self._check_usage(name, rt, usage, status)
+            await self._check_usage(name, session_id, rt, usage, status)
         elif rt.buffer:
             rt.buffer_since = time.time()
 
@@ -1018,6 +1018,10 @@ class Watcher:
                 return True
             if login.email:
                 self.login_emails[session_id] = login.email
+            # Only what the screen said: ~/.claude.json may not be rewritten
+            # yet, and the old address there would mark every session as
+            # already on the new account.
+            account.note_login(session_id, login.email)
             text, kb = await self.login_done_card(session_id)
             await self._say_html(text, session_id=session_id, reply_markup=kb)
             return True
@@ -1098,10 +1102,10 @@ class Watcher:
         """The news of a login, with restarts for the sessions it leaves behind.
 
         Claude Code reads the credentials when it starts, so a session that
-        was already running keeps the old account until it is restarted —
-        which the user did by hand, one terminal at a time. Which account a
-        session runs is nowhere to be read, so every other session is
-        listed; the idle ones get a button.
+        was already running keeps the old account until it is restarted. Each
+        session's own transcript says which account it runs (`account.py`), so
+        the sessions already on the new one are marked as such, and only the
+        idle ones on another account — or one not known yet — get a button.
         """
         labels = {m.session_id: m.full_label for m in self.store.all_managed()}
         me = html.escape(labels.get(session_id, session_id[:8]))
@@ -1117,12 +1121,23 @@ class Watcher:
             lines += ["", _("No other session is running, so none needs a "
                             "restart.")]
             return "\n".join(lines), None
+        await account.fill(views)
+        behind = [v for v in views if not account.same(v.account, email)]
+        if not behind:
+            lines += ["", _("Every other session already runs on this account "
+                            "— nothing to restart.")]
+            return "\n".join(lines), None
         lines += ["", _("Sessions that were already running keep the previous "
                         "account until they are restarted:")]
         idle = []
         for v in views:
             label = labels[v.session_id]
             row = f"{STATUS_ICON.get(v.status, '•')} <b>{html.escape(label)}</b>"
+            if account.same(v.account, email):
+                lines.append(row + " — " + _("✅ already on this account"))
+                continue
+            if v.account:
+                row += f" — 👤 {html.escape(v.account)}"
             if v.status in ("idle", "starting"):
                 idle.append((v.session_id, label))
             else:
@@ -1332,8 +1347,13 @@ class Watcher:
         except Exception:
             log.debug("pulse delete skipped", exc_info=True)
 
-    async def _check_usage(self, name: str, rt: SessionRuntime, usage, status) -> None:
-        """Notify when context or a rate limit crosses a step."""
+    async def _check_usage(self, name: str, session_id: str,
+                           rt: SessionRuntime, usage, status) -> None:
+        """Notify when context or a rate limit crosses a step.
+
+        A rate limit belongs to the account, not the session, and an alert
+        about one is the moment to switch — so it names the account.
+        """
         for key, pct, note in gauges(usage, status):
             steps = _CTX_STEPS if key == "ctx" else _LIMIT_STEPS
             reached = max([t for t in steps if pct >= t], default=0)
@@ -1341,7 +1361,13 @@ class Watcher:
             if reached > previous:
                 log.info("usage alert %s=%d%% (step %d)", key, pct, reached)
                 icon = "🔴" if reached >= 90 else ("🟠" if reached >= 75 else "🟡")
-                await self._say(f"{icon} {name}: {note} — {pct}%")
+                who = ""
+                if key != "ctx":
+                    email = await account.email_for(
+                        session_id, since=await sess.started_at(session_id))
+                    who = f" · {email}" if email else ""
+                await self._say(f"{icon} {name}: {note} — {pct}%{who}",
+                                session_id=session_id)
             if reached != previous:
                 rt.alerted[key] = reached
 
