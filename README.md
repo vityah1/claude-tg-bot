@@ -378,7 +378,7 @@ has to be typed by hand.
 | `/rename` | your own name for a session (`/rename -` gives the automatic one back) |
 | `/lang` | interface language (`en` and `uk` for now) |
 | `/update` | which Claude Code each session runs, which one is on disk, and a restart that keeps the context |
-| `/login` | logs Claude in to another account (also «🔑 Other account» on the session card): the sign-in link comes to the chat, the code goes back as a message, and the other sessions are restarted onto the new account |
+| `/login` | logs Claude in to another account (also «🔑 Other account» on the session card): the sign-in link comes to the chat, the code goes back as a message; the other sessions switch to the new account with their next request, no restart |
 | `/exit` | **ends the session**: Claude shuts down on its own, then the tmux window closes |
 
 All of them act on the **active** session, or — in a reply — on the one whose
@@ -525,14 +525,12 @@ and in the update middleware. Any other text sent during the login is held
 like text sent into a question, minus «Close the question and send», which
 would cancel the login.
 
-**The other sessions keep the old account.** Claude Code reads the credentials
-when it starts, so a session that was already running stays on the previous
-account until it is restarted. The success message therefore lists the other
-sessions with a 🔄 button for each idle one and «Restart all idle» — the same
-`/exit` + `claude --resume` restart as `/update`. A session already on the
-new account is marked so and gets no button (see below); busy and waiting
-ones get none either. After a not-saved warning nothing is offered: a restart
-would read the credentials that failed to save.
+**The other sessions follow on their own.** Every running session of the same
+profile sends its next request with the new credentials — no restart
+(verified on 2.1.318: a session started at 11:44 sent its first request after
+a login made in another session at 13:39 as the new organisation). The
+success message says so and offers nothing; a card from an older build that
+still carries restart buttons answers them with the same news.
 
 ### Which account each session runs
 
@@ -544,16 +542,23 @@ alert ends with the address too: that is the moment to switch. Closed
 sessions show none — a resume runs under the current login.
 
 `~/.claude.json` is **not** the source: it names the last `/login` only, and a
-session that was running before it is still on the old account — exactly the
-one worth knowing about. The session says it itself: Claude Code writes an
-attachment record `session_context` whose `userEmail` names the address into
-the transcript with the first request after a start or a resume, and again
-after the account changed. `ccbot/account.py` takes the last one (read from
-the end once, then only the appended bytes), and trusts it only if it is not
-older than the running process (`startedAt` from `claude agents --json`): a
-resume appends to the same file and writes its own record only with the first
-prompt, so until then nothing is shown rather than the previous run's
-account. The session that just logged in, and one the bot has just restarted,
+session moves to it with its next request — one that has been quiet since is
+still on the account it last used. The session says it itself, in two
+attachment records of its transcript: `session_context`, whose `userEmail`
+names the address, written with the first request after a start, a resume or
+its own login; and `credential_org` (an organisation id), written beside it
+and **alone** when the credentials changed under a running session — the
+address is not repeated then. `ccbot/account.py` takes the newest of both
+(read from the end once, then only the appended bytes). A `credential_org`
+newer than the address is resolved through the organisations whose address
+is known (the pair written together, and `oauthAccount` in `~/.claude.json`,
+remembered in `~/.cache/ccbot/account-orgs.json` across restarts); one that
+cannot be resolved — or that several addresses share, as a team does — shows
+nothing rather than the stale address. A
+record is trusted only if it is not older than the running process
+(`startedAt` from `claude agents --json`): a resume appends to the same file
+and writes its own record only with the first prompt, so until then nothing
+is shown rather than the previous run's account. The session that just logged in, and one the bot has just restarted,
 are known before their transcript says so (`account.note_login`).
 
 The terminal status line (`~/.claude/statusline-command.sh`, not part of this

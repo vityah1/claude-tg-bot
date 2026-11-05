@@ -251,8 +251,8 @@ Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
    stays on the build it started with.
 /login — log Claude in to another account (when the limits of
    this one run out). The sign-in link comes here, the code from
-   the page goes back as a message, and then a button restarts
-   the other sessions onto the new account.
+   the page goes back as a message. The other sessions switch to
+   the new account with their next request, without a restart.
 /service — uptime, code version, tmux state, restart button
 /restart — restart the bot (Claude's sessions are unaffected)
 /log — the last lines of the journal
@@ -300,8 +300,9 @@ def _status_legend(views: list[sess.SessionView],
 def _account_lines(views: list[sess.SessionView]) -> list[str]:
     """Which account each listed session runs under, grouped by account.
 
-    After a /login the sessions that were already running stay on the old
-    account, so a list that mixes two is exactly the case worth showing.
+    A session moves to a new login only with its next request, so one that
+    has been quiet since still names the old account — a list that mixes two
+    is exactly the case worth showing.
     """
     groups: dict[str, tuple[str, list[str]]] = {}
     for v in views:
@@ -1779,19 +1780,33 @@ class CCBot:
 
     async def _login_callback(self, c: CallbackQuery, msg: Message,
                               chat_id: int, arg: str) -> None:
-        """The buttons of the login cards and of the restart card after it.
+        """The buttons of the login cards.
 
         Every key goes in only while the panel shows the step its card was
         about (`login.py`): a digit or an Enter that outlived its step would
         type into whatever stands there now.
         """
         short, _sep, what = arg.partition(":")
+        legacy = what in ("rall", "rfr") or what.startswith("r:")
         mgd = self._resolve(short)
         if not mgd:
             await c.answer(_("That session is gone"), show_alert=True)
+            if legacy:
+                with contextlib.suppress(Exception):
+                    await msg.edit_reply_markup(reply_markup=None)
             return
-        if what in ("rall", "rfr") or what.startswith("r:"):
-            await self._login_restarts(c, msg, chat_id, mgd, what)
+        if legacy:
+            # A card from before sessions were known to follow a login on
+            # their own: redraw it without its restart buttons, and say why
+            # when a restart was what the button asked for.
+            if what == "rfr":
+                await c.answer()
+            else:
+                await c.answer(_("No restart is needed: the sessions switch "
+                                 "to the new account with their next request"),
+                               show_alert=True)
+            text, _kb = await self.watcher.login_done_card(mgd.session_id)
+            await self._safe_edit(msg, text, reply_markup=None, parse_mode="HTML")
             return
         self._typed(mgd)
         pressed, answered = False, False
@@ -1839,37 +1854,6 @@ class CCBot:
         else:
             await c.answer(gone, show_alert=True)
         await self._mark(msg, mark)
-
-    async def _login_restarts(self, c: CallbackQuery, msg: Message,
-                              chat_id: int, mgd, what: str) -> None:
-        """Restart sessions onto the new account, then redraw the card."""
-        if what == "rall":
-            # The same choice the card made: a session already on the new
-            # account is not restarted for nothing.
-            new = self.watcher.login_emails.get(mgd.session_id, "")
-            views = [v for v in await sess.managed_views(self.store)
-                     if v.status in ("idle", "starting")]
-            await account.fill(views)
-            idle = {v.session_id for v in views
-                    if not account.same(v.account, new)}
-            queue = [m for m in self.store.all_managed()
-                     if m.session_id in idle and m.session_id != mgd.session_id]
-            if not queue:
-                await c.answer(_("No idle session to restart"), show_alert=True)
-            else:
-                await c.answer(_("Restarting…"))
-                await self._restart_sessions(chat_id, queue)
-        elif what.startswith("r:"):
-            other = self._resolve(what[2:])
-            if not other:
-                await c.answer(_("That session is gone"), show_alert=True)
-            else:
-                await c.answer(_("Restarting…"))
-                await self._restart_one(chat_id, other)
-        else:
-            await c.answer()
-        text, kb = await self.watcher.login_done_card(mgd.session_id)
-        await self._safe_edit(msg, text, reply_markup=kb, parse_mode="HTML")
 
     async def _launch_resume(self, mgd) -> bool:
         """Start `claude --resume` in the session's window; True if it came up."""

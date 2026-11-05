@@ -29,11 +29,9 @@ from . import sessions as sess
 from .i18n import _, ngettext, resolve
 from .i18n import use as use_locale
 from .keyboards import (
-    STATUS_ICON,
     blocked_kb,
     dialog_kb,
     done_kb,
-    login_done_kb,
     login_error_kb,
     login_link_kb,
     login_menu_kb,
@@ -350,8 +348,8 @@ class Watcher:
         self.failure_told = 0.0
         # Last time the disk was asked which Claude Code is installed.
         self.version_checked = 0.0
-        # The account each session last logged in as, for redrawing the
-        # restart card that announced it.
+        # The account each session last logged in as, for the card that
+        # announces the login (and its redraw from an older card's button).
         self.login_emails: dict[str, str] = {}
 
     def start(self) -> None:
@@ -1042,8 +1040,7 @@ class Watcher:
             if login.email:
                 self.login_emails[session_id] = login.email
             # Only what the screen said: ~/.claude.json may not be rewritten
-            # yet, and the old address there would mark every session as
-            # already on the new account.
+            # yet, and the old address there would be shown as the new one.
             account.note_login(session_id, login.email)
             text, kb = await self.login_done_card(session_id)
             await self._say_html(text, session_id=session_id, reply_markup=kb)
@@ -1122,13 +1119,11 @@ class Watcher:
             rt.login_msg_id = None
 
     async def login_done_card(self, session_id: str):
-        """The news of a login, with restarts for the sessions it leaves behind.
+        """The news of a login.
 
-        Claude Code reads the credentials when it starts, so a session that
-        was already running keeps the old account until it is restarted. Each
-        session's own transcript says which account it runs (`account.py`), so
-        the sessions already on the new one are marked as such, and only the
-        idle ones on another account — or one not known yet — get a button.
+        No restarts are offered: every running session of the profile sends
+        its next request with the new credentials (2.1.318, verified on
+        2026-11-05), so there is nothing left behind to move.
         """
         labels = {m.session_id: m.full_label for m in self.store.all_managed()}
         me = html.escape(labels.get(session_id, session_id[:8]))
@@ -1138,38 +1133,11 @@ class Watcher:
                 name=me, email=html.escape(email))]
         else:
             lines = [_("✅ <b>{name}</b>: logged in.").format(name=me)]
-        views = [v for v in await sess.managed_views(self.store)
-                 if v.session_id != session_id and v.session_id in labels]
-        if not views:
-            lines += ["", _("No other session is running, so none needs a "
+        if any(sid != session_id for sid in labels):
+            lines += ["", _("The other sessions switch to this account with "
+                            "their next request — none of them needs a "
                             "restart.")]
-            return "\n".join(lines), None
-        await account.fill(views)
-        behind = [v for v in views if not account.same(v.account, email)]
-        if not behind:
-            lines += ["", _("Every other session already runs on this account "
-                            "— nothing to restart.")]
-            return "\n".join(lines), None
-        lines += ["", _("Sessions that were already running keep the previous "
-                        "account until they are restarted:")]
-        idle = []
-        for v in views:
-            label = labels[v.session_id]
-            row = f"{STATUS_ICON.get(v.status, '•')} <b>{html.escape(label)}</b>"
-            if account.same(v.account, email):
-                lines.append(row + " — " + _("✅ already on this account"))
-                continue
-            if v.account:
-                row += f" — 👤 {html.escape(v.account)}"
-            if v.status in ("idle", "starting"):
-                idle.append((v.session_id, label))
-            else:
-                row += " — " + _("busy or waiting, left alone")
-            lines.append(row)
-        lines += ["", _("A restart is <code>/exit</code> and <code>claude "
-                        "--resume</code> in the same window: the conversation "
-                        "and its context stay.")]
-        return "\n".join(lines), login_done_kb(session_id, idle)
+        return "\n".join(lines), None
 
     async def _report_blocked(self, session_id: str, name: str, raw: str,
                               rt: SessionRuntime, agent_status: str,

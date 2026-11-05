@@ -1,22 +1,31 @@
 """Which Claude account each session runs under.
 
-`~/.claude.json` names the account of the *last* `/login`, and a session that
-was already running keeps the account it started with until it is restarted —
-so that file answers for the newest session only, and is exactly wrong for
-the ones the user wants to know about after switching accounts.
+A `/login` in one session moves every running session of the same profile:
+each sends its next request with the new credentials, no restart (verified
+on 2.1.318, 2026-11-05 — finman 0585ce76, started at 11:44, sent its first
+request after a login made elsewhere at 13:39 as the new organisation). What a
+session has *not* done yet is say so: `~/.claude.json` names the last login,
+not what a session that has been quiet since then ran under.
 
-The session itself says it: Claude Code writes an attachment record of type
-`session_context` into the transcript with the first request after a start
-(or a resume) and again after the account changed, and its `userEmail` names
-the address. The last such record is the account in force. Two rules keep the
-answer honest:
+So the transcript is read, and it carries two attachment records:
+
+* `session_context`, with the first request after a start or a resume and
+  after the session's own `/login` — its `userEmail` names the address;
+* `credential_org`, written beside it and **alone** when the credentials
+  changed under a running session — an organisation id, no address.
+
+The newest of the two is the account in force. A `credential_org` newer than
+the last address is resolved through the organisations whose address is known:
+the pair written together in any transcript read, and the last login's own
+(`oauthAccount` in `~/.claude.json`). One that cannot be resolved says nothing
+rather than the stale address. Two more rules keep the answer honest:
 
 * a record older than the running process belongs to the previous run (a
   resume appends to the same file, and writes its own record only with the
   first prompt), so it is not trusted — nothing is shown instead;
-* the session that has just logged in, or was just restarted onto the new
-  account by the bot, has no new record until its next request, so the bot
-  remembers what it knows (`note_login`) until the transcript catches up.
+* the session that has just logged in, or was just restarted by the bot, has
+  no new record until its next request, so the bot remembers what it knows
+  (`note_login`) until the transcript catches up.
 
 The e-mail is taken by its shape, never by the English sentence around it.
 """
@@ -32,11 +41,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from . import status_feed, transcript
+from . import paths, status_feed, transcript
 
 log = logging.getLogger("ccbot.account")
 
 _MARK = b'"type":"session_context"'
+_ORG_MARK = b'"type":"credential_org"'
+# How far after a `session_context` its `credential_org` is looked for; they
+# share a timestamp, but other attachments of the same request may sit
+# between them (more than ten lines in some transcripts).
+_PAIR_LINES = 200
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _CHUNK = 1 << 20
 _LINE_CAP = 1 << 16
@@ -62,31 +76,45 @@ class _Entry:
     offset: int = 0          # bytes already looked at, ends on a newline
     email: str = ""
     ts: float = 0.0          # when the record was written (epoch), 0 if unknown
+    email_org: str = ""      # the organisation written beside that address
+    org: str = ""            # the newest `credential_org`
+    org_ts: float = 0.0
     override: str = ""       # what the bot knows before the transcript does
     override_at: int = 0     # file size when the override was set
 
 
 _cache: dict[str, _Entry] = {}
 _login_cache: tuple[float, str] = (0.0, "")
+# Organisation id -> the address last seen with it.
+# Organisation id -> every address seen with it. An organisation can hold
+# several accounts (a team), and then the id alone names none of them. Kept on
+# disk, so a bot restart does not forget organisations no live session pairs.
+_orgs: dict[str, set[str]] | None = None
 
 
-def _parse(line: bytes) -> tuple[str, float] | None:
-    """The address and the time of one `session_context` line.
+def _parse(line: bytes, kind: str = "session_context") -> tuple[str, float] | None:
+    """The value and the time of one attachment line of type *kind*.
 
-    None when the line is not a readable record — the caller then keeps
-    looking, or keeps what it knew. An empty address from a readable record
-    is an answer (an API-key session has none).
+    For `session_context` the value is the address, for `credential_org` the
+    organisation id. None when the line is not a readable record of that
+    kind — the caller then keeps looking, or keeps what it knew. An empty
+    address from a readable record is an answer (an API-key session has none).
     """
     try:
         rec = json.loads(line.decode("utf-8", "replace"))
     except ValueError:
         return None
     att = rec.get("attachment") if isinstance(rec, dict) else None
-    if not isinstance(att, dict) or att.get("type") != "session_context":
+    if not isinstance(att, dict) or att.get("type") != kind:
         return None
-    ctx = att.get("context")
-    said = ctx.get("userEmail") if isinstance(ctx, dict) else None
-    m = _EMAIL_RE.search(said) if isinstance(said, str) else None
+    if kind == "credential_org":
+        org = att.get("organizationUuid")
+        value = org if isinstance(org, str) else ""
+    else:
+        ctx = att.get("context")
+        said = ctx.get("userEmail") if isinstance(ctx, dict) else None
+        m = _EMAIL_RE.search(said) if isinstance(said, str) else None
+        value = m.group(0) if m else ""
     ts = 0.0
     raw_ts = rec.get("timestamp")
     if isinstance(raw_ts, str):
@@ -94,7 +122,65 @@ def _parse(line: bytes) -> tuple[str, float] | None:
             ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).timestamp()
         except ValueError:
             ts = 0.0
-    return (m.group(0) if m else ""), ts
+    return value, ts
+
+
+def _orgs_file() -> Path:
+    return paths.cache_dir() / "account-orgs.json"
+
+
+def _org_map() -> dict[str, set[str]]:
+    global _orgs
+    if _orgs is None:
+        _orgs = {}
+        try:
+            raw = json.loads(_orgs_file().read_text())
+            for org, emails in raw.items():
+                if isinstance(org, str) and isinstance(emails, list):
+                    _orgs[org] = {x for x in emails if isinstance(x, str) and x}
+        except (OSError, ValueError, AttributeError) as exc:
+            log.debug("account orgs not loaded: %s", exc)
+    return _orgs
+
+
+def _learn(org: str, email: str) -> None:
+    """Remember that *email* was seen under *org*; saved when it is news."""
+    if not org or not email:
+        return
+    known = _org_map().setdefault(org, set())
+    if email.lower() in {x.lower() for x in known}:
+        return
+    known.add(email)
+    try:
+        f = _orgs_file()
+        paths.ensure(f.parent)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps({k: sorted(v) for k, v in _org_map().items()}))
+        tmp.replace(f)
+    except OSError as exc:
+        log.debug("account orgs not saved: %s", exc)
+
+
+def _name_of(org: str) -> str:
+    """The one address known for *org*, or "" when none or several are."""
+    current_login()                           # learns the last login's org
+    known = _org_map().get(org, set())
+    return next(iter(known)) if len(known) == 1 else ""
+
+
+def _paired_org(fh, start: int, end: int, ts: float) -> str:
+    """The `credential_org` written with the `session_context` at *start*."""
+    pos = start
+    for _i in range(_PAIR_LINES + 1):
+        if pos >= end:
+            break
+        line = _line_from(fh, pos, end)
+        pos += len(line) + 1
+        if _ORG_MARK in line:
+            got = _parse(line, "credential_org")
+            if got is not None and abs(got[1] - ts) <= _SKEW:
+                return got[0]
+    return ""
 
 
 def _line_from(fh, start: int, end: int) -> bytes:
@@ -140,29 +226,30 @@ def _last_newline(fh, size: int, floor: int) -> int:
     return floor
 
 
-def _newest(fh, floor: int, end: int) -> tuple[int, tuple[str, float]] | None:
+def _newest(fh, floor: int, end: int, mark: bytes = _MARK,
+            kind: str = "session_context") -> tuple[int, tuple[str, float]] | None:
     """The newest readable record in [floor, end), read backwards in chunks.
 
     A record cut off mid-file (a crash while it was written) does not end the
     search: the one before it still says who the session was.
     """
     pos = end
-    overlap = len(_MARK)
+    overlap = len(mark)
     while pos > floor:
         lo = max(floor, pos - _CHUNK)
         fh.seek(lo)
         buf = fh.read(min(pos + overlap, end) - lo)
-        hit = buf.rfind(_MARK)
+        hit = buf.rfind(mark)
         while hit >= 0:
             start = _line_start(fh, lo + hit, floor)
-            got = _parse(_line_from(fh, start, end))
+            got = _parse(_line_from(fh, start, end), kind)
             if got is not None:
                 return start, got
             # Unreadable: look further back, before this line.
             if start <= lo:
                 pos = start
                 break
-            hit = buf.rfind(_MARK, 0, start - lo)
+            hit = buf.rfind(mark, 0, start - lo)
         else:
             pos = lo
     return None
@@ -175,7 +262,8 @@ def _scan(e: _Entry) -> None:
     except OSError:
         return
     if size < e.offset:                       # replaced or truncated
-        e.offset, e.email, e.ts = 0, "", 0.0
+        e.offset, e.email, e.ts, e.email_org = 0, "", 0.0, ""
+        e.org, e.org_ts = "", 0.0
     if size == e.offset:
         return
     with e.path.open("rb") as fh:
@@ -184,11 +272,41 @@ def _scan(e: _Entry) -> None:
         if end == e.offset:
             return
         found = _newest(fh, e.offset, end)
+        floor = e.offset
         if found is not None:
             start, (e.email, e.ts) = found
+            e.email_org = _paired_org(fh, start, end, e.ts)
+            _learn(e.email_org, e.email)
+            if e.override and start >= e.override_at:
+                e.override = ""
+            # Its organisation is written beside it or later, never before:
+            # no need to read the file a second time back to the start.
+            floor = start
+        org = _newest(fh, floor, end, _ORG_MARK, "credential_org")
+        if org is not None:
+            start, (e.org, e.org_ts) = org
+            if not e.email_org and abs(e.org_ts - e.ts) <= _SKEW:
+                # The pair was split by a pass ending between the two lines.
+                e.email_org = e.org
+                _learn(e.org, e.email)
             if e.override and start >= e.override_at:
                 e.override = ""
         e.offset = end
+
+
+def _resolve(e: _Entry, since: float) -> str:
+    """The address in force: the last one named, unless the org moved since.
+
+    The address counts only if this run wrote it (*since*); otherwise only
+    the organisation can name the account.
+    """
+    fresh = not e.ts or e.ts >= since - _SKEW
+    if not e.org or e.org_ts <= e.ts + _SKEW:
+        return e.email if fresh else ""
+    if fresh and e.org == e.email_org and len(_org_map().get(e.org, ())) <= 1:
+        # Moved away and back again (0585ce76 on 2026-11-05).
+        return e.email
+    return _name_of(e.org)
 
 
 def _evict() -> None:
@@ -247,9 +365,10 @@ async def email_for(session_id: str, *, path_hint: str = "",
         log.debug("account scan %s: %s", session_id[:8], exc)
     if e.override:
         return e.override
-    if since <= 0 or (e.ts and e.ts < since - _SKEW):
+    latest = max(e.ts, e.org_ts)
+    if since <= 0 or (latest and latest < since - _SKEW):
         return ""
-    return e.email
+    return _resolve(e, since)
 
 
 async def fill(views) -> None:
@@ -290,12 +409,13 @@ def current_login() -> str:
         return _login_cache[1]
     try:
         data = json.loads(path.read_text())
-        email = (data.get("oauthAccount") or {}).get("emailAddress") or ""
+        acct = data.get("oauthAccount") or {}
+        email = acct.get("emailAddress") or ""
+        org = acct.get("organizationUuid") or ""
     except (OSError, ValueError, AttributeError):
-        email = ""
-    _login_cache = (mtime, email if isinstance(email, str) else "")
+        email, org = "", ""
+    email = email if isinstance(email, str) else ""
+    if isinstance(org, str):
+        _learn(org, email)
+    _login_cache = (mtime, email)
     return _login_cache[1]
-
-
-def same(a: str, b: str) -> bool:
-    return bool(a) and a.lower() == b.lower()

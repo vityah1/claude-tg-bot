@@ -641,15 +641,23 @@ is still alive, too. That is why rows are read tolerantly
   step under the input lock. A message shaped like `code#state` is caught at
   the top of `_on_text` and typed into the session whose screen waits for a
   code (`_enter_login_code`); it is masked in both log lines
-  (`login.mask`). Running sessions keep the old account until restarted —
-  hence the restart card after success (`login_done_card`), and none after
-  the not-saved warning. The success screen was never seen live (2.1.312).
+  (`login.mask`). 🔴 **Running sessions follow a login with their next
+  request — no restart** (2.1.318, verified on 2026-11-05: finman 0585ce76,
+  untouched since 11:44, went out as the new organisation at 13:44 after a
+  login elsewhere at 13:39). The success card (`login_done_card`) says so and
+  offers no restart; it used to, on the opposite belief, and the user caught
+  it. The success screen was never seen live (2.1.312).
 - 🔴 **A session's account is read from its own transcript, never from
-  `~/.claude.json`.** That file names the last `/login`; a session running
-  before it keeps the old account until restarted, so it would show the new
-  one exactly when the difference matters. `ccbot/account.py` takes the last
-  `session_context` attachment (`userEmail`, the address matched by shape,
-  not by the sentence) and drops a record older than the process `startedAt`
+  `~/.claude.json`.** That file names the last `/login`; a session moves to
+  it only with its next request, so it would show the new one for a session
+  still quiet on the old. `ccbot/account.py` takes the newest of two
+  attachments: `session_context` (`userEmail`, the address matched by shape,
+  not by the sentence) and `credential_org` — written **alone**, an org id
+  and no address, when a login elsewhere moved a running session; it is
+  resolved through known org→address pairs (kept in
+  `~/.cache/ccbot/account-orgs.json`), and unresolved — or shared by several
+  addresses, as a team org is — it shows nothing, never the stale address. A record older than the process `startedAt` is
+  dropped
   — a resume writes its own only with the first prompt (verified 2.1.317), so
   the old run's record sits at the end of the file until then. What the bot
   knows first (a login it drove, a restart it made) goes in
