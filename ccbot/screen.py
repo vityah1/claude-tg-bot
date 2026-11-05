@@ -1284,6 +1284,50 @@ def is_busy(screen: str) -> bool:
     return any(_WORKING_RE.match(ln.strip()) for ln in screen.splitlines())
 
 
+# What `claude agents --json` counts as "busy" while the input line is free
+# (2.1.318). Background work is admitted under the prompt: the mode line ends
+# in "· 5 shells", and the agent panel lists "● main" over "◯ general-purpose
+# Running tests". A usage limit hit mid-turn leaves "Continuing automatically
+# at 9pm · Esc to cancel" there.
+_SHELLS_RE = re.compile(r"·\s*\d+\s+shells?\b")
+_PANEL_MAIN_RE = re.compile(r"^\s*●\s+main\s*$")
+_PANEL_AGENT_RE = re.compile(r"^\s*◯\s+\S")
+_LIMIT_WAIT = "continuing automatically"
+
+
+def busy_behind(screen: str) -> str:
+    """Why the agent list may say "busy" while the prompt itself is free.
+
+    "background" — shells or subagents are still running; "limit" — the turn
+    is parked until a usage limit resets; "" — nothing on the screen explains
+    it, so the list is to be believed. Only the lines under the input box
+    count: Claude's output above it, and a draft typed into it, may quote any
+    of these words. A lone "◯" is not the agent panel — the IDE hint draws
+    one too — so a panel row counts only under its "● main".
+    """
+    lines = screen.splitlines()
+    if is_busy(screen) or not _ordinary_bottom(lines) or find_dialog(screen):
+        return ""
+    prompt = next((i for i in range(len(lines) - 1, -1, -1)
+                   if lines[i].lstrip().startswith("❯")), None)
+    if prompt is None:
+        return ""
+    # The box closes with a rule; a multi-line draft sits above it. Some
+    # states (the limit notice) draw no closing rule, and then the box is the
+    # prompt line alone.
+    close = next((i for i in range(prompt + 1, len(lines))
+                  if lines[i].lstrip().startswith("─")), prompt)
+    below = lines[close + 1:]
+    if any(_SHELLS_RE.search(ln) for ln in below):
+        return "background"
+    main = next((i for i, ln in enumerate(below) if _PANEL_MAIN_RE.match(ln)), None)
+    if main is not None and any(_PANEL_AGENT_RE.match(ln) for ln in below[main + 1:]):
+        return "background"
+    if any(_LIMIT_WAIT in ln.lower() for ln in below):
+        return "limit"
+    return ""
+
+
 def read_activity(screen: str) -> str:
     """The spinner line while Claude works: "Fluttering… (2m 4s · ↓ 13.7k tokens)".
 

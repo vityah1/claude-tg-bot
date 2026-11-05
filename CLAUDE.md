@@ -281,6 +281,16 @@ is still alive, too. That is why rows are read tolerantly
   the prompt it had meanwhile been given. Neither source alone is enough: the
   agent list knows about dialogs `find_dialog()` cannot parse (`/model` is
   one), the screen knows about work the list has not caught up with.
+- 🔴 **"busy" in `claude agents --json` is not "the prompt is taken".** The
+  list says `busy` for as long as background shells or subagents run, and for
+  a turn parked on a usage limit ("Continuing automatically at 9pm"), while
+  the input line takes commands (2.1.318). Believed alone, it refused /login
+  on a session sitting at an empty `❯` — the very session that had hit the
+  limit (2026-11-05, 0585ce76). `screen.busy_behind` reads what is drawn
+  *under* the input line (`· 5 shells`, the `◯ general-purpose` panel, the
+  limit notice); `_busy_reason` lets such a session through. A restart still
+  refuses both — `/exit` would kill the background work or cancel the
+  automatic continuation — but names which of the two it is.
 - **A choice that has come true leaves a record of itself, not the choice.**
   A picker is edited into one line saying what was picked (`CCBot._settle`:
   `nd:` and the typed path after `nd:manual`, `dores:`, `grab:` — only on

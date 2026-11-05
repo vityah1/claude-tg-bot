@@ -1902,6 +1902,20 @@ class CCBot:
         status = next((a.get("status", "") for a in agents
                        if a.get("sessionId") == mgd.session_id), "")
         if status == "busy":
+            # The list says "busy" for background work and for a turn parked
+            # on a usage limit too; /exit would end either, so the refusal
+            # stands — but says which it is, as the prompt itself is free.
+            try:
+                behind = screenmod.busy_behind(await tmux.capture(mgd.window_id))
+            except tmux.TmuxError:
+                behind = ""
+            if behind == "background":
+                return _Restart(False, _("background tasks are still running "
+                                         "in it, and /exit would stop them"))
+            if behind == "limit":
+                return _Restart(False, _("it is waiting for the usage limit to "
+                                         "reset, and /exit would cancel the "
+                                         "automatic continuation"))
             return _Restart(False, _("it is working right now"))
         if await self._drafts_open(mgd):
             # An earlier /exit stopped at the feedback-drafts question: the
@@ -4615,16 +4629,21 @@ class CCBot:
         agents = await sess.live_agents(force=True)
         status = next((a.get("status", "") for a in agents
                        if a.get("sessionId") == mgd.session_id), "")
-        if status == "busy":
-            return _("It is working right now — press ⏸ Esc or wait")
         try:
             raw = await tmux.capture(mgd.window_id)
         except tmux.TmuxError:
+            if status == "busy":
+                return _("It is working right now — press ⏸ Esc or wait")
             return _("Its tmux window is gone")
         if screenmod.is_busy(raw):
             return _("It is working right now — press ⏸ Esc or wait")
         if screenmod.find_dialog(raw) is not None or status == "waiting":
             return _("It is waiting for an answer — deal with that first")
+        # The list says "busy" for background shells and subagents, and for a
+        # turn parked on a usage limit, while the input line takes commands —
+        # /login is wanted exactly then (2026-11-05, 0585ce76).
+        if status == "busy" and not screenmod.busy_behind(raw):
+            return _("It is working right now — press ⏸ Esc or wait")
         return ""
 
     async def _pick_model(self, mgd, number: int, scope: str) -> bool:
