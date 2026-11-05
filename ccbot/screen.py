@@ -33,6 +33,21 @@ _ESC_MARKER = "Esc to cancel"
 # session blocked with nothing said in the chat.
 _ESC_COMPANIONS = ("select", "amend", "explain", "confirm", "interrupt")
 
+# A permission prompt in a session nobody watches counts down to its own
+# refusal: "⚠ Claude Code will automatically block this request in 1:52, to
+# avoid holding up an unattended session" — or "in about 2 minutes" with
+# reduced motion (2.1.318). The clock repaints every second, and kept in the
+# question it made every tick a new question: the card waited for a question
+# that stood still, none ever did, and the prompt timed out with nothing in
+# the chat (2026-11-05, 0585ce76). It leaves the question as `expires_in`.
+# Matched on the joined question, as the whole sentence: a narrow pane wraps
+# it, and a command quoting the phrase must not lose its line.
+_AUTO_BLOCK_RE = re.compile(
+    r"(?:\u26a0\ufe0f?\s*)?Claude\s+Code\s+will\s+automatically\s+block\s+"
+    r"this\s+request\s+in\s+(?:(?P<m>\d+):(?P<s>\d{2})"
+    r"|about\s+(?P<n>\d+)\s+(?P<unit>minute|second)s?),\s+to\s+avoid\s+"
+    r"holding\s+up\s+an\s+unattended\s+session")
+
 # What `/exit` asks when the session has queued feedback drafts for Anthropic
 # (2.1.305): "You have 2 unsent feedback drafts" right above
 # "Enter to review & send · Esc to discard and exit", nothing under them, no
@@ -260,6 +275,7 @@ class Dialog:
     # CCBot._pick_model / _pick_effort), so the keyboard has to tell them apart.
     kind: str = "choice"
     note: str = ""             # a line of state that belongs to the dialog
+    expires_in: int | None = None  # seconds until Claude Code refuses it
     preview: str = ""          # ASCII art shown beside the selected option
     extras: list[str] = field(default_factory=list)   # unnumbered choices
     extra_indexes: list[int] = field(default_factory=list)  # their nav positions
@@ -1007,6 +1023,7 @@ def find_dialog(screen: str) -> Dialog | None:
     # A review screen is a list, and flattening it to one line would run the
     # questions and their answers together.
     question = ("\n" if footerless else " ").join(question_lines).strip()
+    question, expires_in = _take_countdown(question)
     if len(question) > _MAX_QUESTION:
         question = question[-_MAX_QUESTION:].lstrip()
 
@@ -1036,7 +1053,29 @@ def find_dialog(screen: str) -> Dialog | None:
         cursor_index=cursor_index,
         submit_index=submit_index,
         submit_label=submit_label,
+        expires_in=expires_in,
     )
+
+
+def _take_countdown(question: str) -> tuple[str, int | None]:
+    """The question without its auto-block clock, and the seconds it showed.
+
+    The last match is the warning: it is drawn under whatever the prompt
+    quotes. "about N minutes" is rounded to the minute, so its lower bound
+    is taken — a deadline shown late is one the user misses.
+    """
+    found = list(_AUTO_BLOCK_RE.finditer(question))
+    if not found:
+        return question, None
+    m = found[-1]
+    if m.group("m") is not None:
+        secs = int(m.group("m")) * 60 + int(m.group("s"))
+    elif m.group("unit") == "minute":
+        secs = max(0, int(m.group("n")) * 60 - 30)
+    else:
+        secs = int(m.group("n"))
+    rest = question[:m.start()].rstrip() + " " + question[m.end():].lstrip()
+    return rest.strip(), secs
 
 
 def is_review(dialog: Dialog) -> bool:

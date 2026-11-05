@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-03 18:09+0000\n"
+"POT-Creation-Date: 2026-11-05 12:14+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -504,7 +504,7 @@ msgstr ""
 msgid "That question is no longer open"
 msgstr ""
 
-#: ccbot/bot.py:1624 ccbot/watcher.py:1334
+#: ccbot/bot.py:1624 ccbot/watcher.py:1360
 msgid "⏹ Question closed"
 msgstr ""
 
@@ -584,7 +584,7 @@ msgstr ""
 msgid "Getting a new link…"
 msgstr ""
 
-#: ccbot/bot.py:1810 ccbot/watcher.py:1069
+#: ccbot/bot.py:1810 ccbot/watcher.py:1092
 msgid "🔁 Tried again"
 msgstr ""
 
@@ -608,7 +608,7 @@ msgstr ""
 msgid "That login is no longer open."
 msgstr ""
 
-#: ccbot/bot.py:1834 ccbot/watcher.py:1071
+#: ccbot/bot.py:1834 ccbot/watcher.py:1094
 msgid "⏹ Login closed"
 msgstr ""
 
@@ -1883,7 +1883,7 @@ msgstr ""
 msgid "✅ Select"
 msgstr ""
 
-#: ccbot/keyboards.py:365 ccbot/watcher.py:1522
+#: ccbot/keyboards.py:365 ccbot/watcher.py:1567
 msgid "🖼 Diagram"
 msgstr ""
 
@@ -2305,19 +2305,19 @@ msgid ""
 "wrapper is in place"
 msgstr ""
 
-#: ccbot/watcher.py:130
+#: ccbot/watcher.py:131
 msgid "Model"
 msgstr ""
 
-#: ccbot/watcher.py:132
+#: ccbot/watcher.py:133
 msgid "Reasoning effort"
 msgstr ""
 
-#: ccbot/watcher.py:134
+#: ccbot/watcher.py:135
 msgid "Feedback drafts"
 msgstr ""
 
-#: ccbot/watcher.py:147
+#: ccbot/watcher.py:148
 #, python-brace-format
 msgid ""
 "Claude Code is closing this session and asks about {count} unsent "
@@ -2332,7 +2332,13 @@ msgid_plural ""
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/watcher.py:471
+#. TRANSLATORS: under a permission question; {time} is HH:MM.
+#: ccbot/watcher.py:169
+#, python-brace-format
+msgid "⏱ Unanswered, Claude Code blocks this request itself at {time}."
+msgstr ""
+
+#: ccbot/watcher.py:492
 #, python-brace-format
 msgid ""
 "⚠️ <b>The session watcher has crashed</b>\n"
@@ -2343,23 +2349,23 @@ msgid ""
 "cures it."
 msgstr ""
 
-#: ccbot/watcher.py:486
+#: ccbot/watcher.py:507
 msgid "✅ The watcher is back — following the sessions again."
 msgstr ""
 
-#: ccbot/watcher.py:520
+#: ccbot/watcher.py:541
 #, python-brace-format
 msgid ""
 "🧹 <b>{name}</b>: context cleared — the session was given a new id, and I "
 "am following it there."
 msgstr ""
 
-#: ccbot/watcher.py:549
+#: ccbot/watcher.py:570
 #, python-brace-format
 msgid "⬆️ <b>Claude Code {version} is on disk</b>"
 msgstr ""
 
-#: ccbot/watcher.py:552
+#: ccbot/watcher.py:573
 #, python-brace-format
 msgid ""
 "{count} session is still running an older build — a session only picks a "
@@ -2370,41 +2376,41 @@ msgid_plural ""
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/watcher.py:557
+#: ccbot/watcher.py:578
 msgid ""
 "A restart keeps the context: the same session id, the same transcript, "
 "the same history. /update"
 msgstr ""
 
-#: ccbot/watcher.py:650
+#: ccbot/watcher.py:671
 #, python-brace-format
 msgid "💀 Session {name} is gone (its tmux window was closed)."
 msgstr ""
 
-#: ccbot/watcher.py:934
+#: ccbot/watcher.py:957
 #, python-brace-format
 msgid "🗨 Side question (/btw): {question}"
 msgstr ""
 
-#: ccbot/watcher.py:962
+#: ccbot/watcher.py:985
 #, python-brace-format
 msgid ""
 "⚠️ {name} shows a /btw answer, and I could not copy it. Here is the "
 "screen:"
 msgstr ""
 
-#: ccbot/watcher.py:964
+#: ccbot/watcher.py:987
 msgid ""
 "📋 tries the copy again, ⬆️⬇️ scroll the answer, ✖️ Close dismisses it, 🖥 "
 "sends a fresh screen."
 msgstr ""
 
-#: ccbot/watcher.py:1037
+#: ccbot/watcher.py:1060
 #, python-brace-format
 msgid "🔑 <b>{name}</b>: Claude asks how to log in."
 msgstr ""
 
-#: ccbot/watcher.py:1040
+#: ccbot/watcher.py:1063
 #, python-brace-format
 msgid ""
 "🔑 <b>{name}</b>: sign in to Claude.\n"
@@ -2415,107 +2421,111 @@ msgid ""
 "3. Send it here as a message, and I will enter it."
 msgstr ""
 
-#: ccbot/watcher.py:1048
+#: ccbot/watcher.py:1071
 #, python-brace-format
 msgid "❌ <b>{name}</b>: Claude did not accept the code."
 msgstr ""
 
-#: ccbot/watcher.py:1051
+#: ccbot/watcher.py:1074
 #, python-brace-format
 msgid "⚠️ <b>{name}</b>: the login worked, with a warning."
 msgstr ""
 
-#: ccbot/watcher.py:1063
+#: ccbot/watcher.py:1086
 msgid "▶️ Method chosen"
 msgstr ""
 
-#: ccbot/watcher.py:1065
+#: ccbot/watcher.py:1088
 msgid "⏹ This link was replaced"
 msgstr ""
 
-#: ccbot/watcher.py:1067
+#: ccbot/watcher.py:1090
 msgid "🔑 Code entered"
 msgstr ""
 
-#: ccbot/watcher.py:1114
+#: ccbot/watcher.py:1137
 #, python-brace-format
 msgid "✅ <b>{name}</b>: logged in as <b>{email}</b>."
 msgstr ""
 
-#: ccbot/watcher.py:1117
+#: ccbot/watcher.py:1140
 #, python-brace-format
 msgid "✅ <b>{name}</b>: logged in."
 msgstr ""
 
-#: ccbot/watcher.py:1121
+#: ccbot/watcher.py:1144
 msgid "No other session is running, so none needs a restart."
 msgstr ""
 
-#: ccbot/watcher.py:1127
+#: ccbot/watcher.py:1150
 msgid "Every other session already runs on this account — nothing to restart."
 msgstr ""
 
-#: ccbot/watcher.py:1130
+#: ccbot/watcher.py:1153
 msgid ""
 "Sessions that were already running keep the previous account until they "
 "are restarted:"
 msgstr ""
 
-#: ccbot/watcher.py:1137
+#: ccbot/watcher.py:1160
 msgid "✅ already on this account"
 msgstr ""
 
-#: ccbot/watcher.py:1144
+#: ccbot/watcher.py:1167
 msgid "busy or waiting, left alone"
 msgstr ""
 
-#: ccbot/watcher.py:1146
+#: ccbot/watcher.py:1169
 msgid ""
 "A restart is <code>/exit</code> and <code>claude --resume</code> in the "
 "same window: the conversation and its context stay."
 msgstr ""
 
-#: ccbot/watcher.py:1257
+#: ccbot/watcher.py:1280
 #, python-brace-format
 msgid ""
 "⚠️ {name} is waiting for an answer, but I did not recognise the question."
 " Here is the screen:"
 msgstr ""
 
-#: ccbot/watcher.py:1262
+#: ccbot/watcher.py:1285
 msgid ""
 "The buttons below work without understanding it: digits pick an option, "
 "the arrows walk the list, Esc backs out. 🖥 sends a fresh screen."
 msgstr ""
 
+#: ccbot/watcher.py:1359
+msgid "⏱ Blocked by Claude Code: no answer in time"
+msgstr ""
+
 #. TRANSLATORS: the row of two buttons under a settings dialog.
-#: ccbot/watcher.py:1411 ccbot/watcher.py:1451
+#: ccbot/watcher.py:1453 ccbot/watcher.py:1496
 msgid ""
 "A button applies the choice. The switch under the list decides whether "
 "new sessions get it as their default too."
 msgstr ""
 
 #. TRANSLATORS: how a multi-select question is answered from a chat.
-#: ccbot/watcher.py:1416 ccbot/watcher.py:1457
+#: ccbot/watcher.py:1458 ccbot/watcher.py:1502
 msgid ""
 "The numbered buttons only tick boxes — nothing goes to Claude until the "
 "button under them."
 msgstr ""
 
-#: ccbot/watcher.py:1421 ccbot/watcher.py:1461
+#: ccbot/watcher.py:1463 ccbot/watcher.py:1506
 #, python-brace-format
 msgid "🖼 Diagram for option {n}:"
 msgstr ""
 
-#: ccbot/watcher.py:1422 ccbot/watcher.py:1462
+#: ccbot/watcher.py:1464 ccbot/watcher.py:1507
 msgid "🖼 Diagram:"
 msgstr ""
 
-#: ccbot/watcher.py:1466
+#: ccbot/watcher.py:1511
 msgid "🖼 The diagram is wider than the screen — sent as a picture"
 msgstr ""
 
-#: ccbot/watcher.py:1521
+#: ccbot/watcher.py:1566
 #, python-brace-format
 msgid "🖼 Diagram for option {n}"
 msgstr ""

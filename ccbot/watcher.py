@@ -16,6 +16,7 @@ import logging
 import re
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 from aiogram import Bot
@@ -155,6 +156,20 @@ def _dialog_question(dialog) -> str:
             n).format(count=n)
     return dialog.question
 
+
+def _expiry_line(at: float) -> str:
+    """When an unanswered permission prompt refuses itself, as a clock time.
+
+    The terminal counts down; a card cannot, and "in 1:52" would be wrong a
+    second after it was sent. The time of day stays true for as long as the
+    card stands.
+    """
+    when = datetime.fromtimestamp(at, status_feed.TZ)
+    # TRANSLATORS: under a permission question; {time} is HH:MM.
+    return _("⏱ Unanswered, Claude Code blocks this request itself at "
+             "{time}.").format(time=f"{when:%H:%M}")
+
+
 # A dialog redraws in stages once a key lands: the chosen row disappears
 # before the rest of it does. Reporting a frame from inside that redraw is how
 # an answered question came back with only "Cancel" left on it.
@@ -166,6 +181,9 @@ _DIALOG_SETTLE = 3.0
 # the buttons — 120 of 1063 cards by 2026-10-01. A tick later the record has
 # been read and goes out ahead of the card.
 _TRANSCRIPT_LAG = 1.0
+# How early a countdown may be read as run out: the deadline is computed from
+# a capture that is a tick old, and the card is retired a tick late.
+_EXPIRY_SLACK = 3.0
 # How long a standing card holds back the rest of its session's output. Only
 # late records of the same turn are expected meanwhile; a card that sits
 # longer than this is not about to be pressed, and a screen misread as a
@@ -206,6 +224,9 @@ class SessionRuntime:
         self.last_dialog_state: str | None = None
         self.dialog_msg_id: int | None = None
         self.dialog_sent_at = 0.0
+        # When the standing question refuses itself (`Dialog.expires_in`),
+        # fixed once per question so every edit of its card shows one time.
+        self.expires_at: float | None = None
         # A question seen on screen but not sent yet, and since when.
         self.seen_dialog_sig: str | None = None
         self.seen_dialog_at = 0.0
@@ -787,6 +808,8 @@ class Watcher:
             await self._retire_dialog(rt)
             if time.monotonic() - rt.seen_dialog_at < _TRANSCRIPT_LAG:
                 return      # the transcript has not caught up with the screen
+            rt.expires_at = (None if dialog.expires_in is None
+                             else time.time() + dialog.expires_in)
             log.info("dialog id=%s title=%r options=%d preview=%s",
                      session_id[:8], dialog.title, len(dialog.options),
                      bool(dialog.preview))
@@ -1328,10 +1351,17 @@ class Watcher:
         if rt.dialog_msg_id is None:
             return
         msg_id, rt.dialog_msg_id = rt.dialog_msg_id, None
+        # A prompt that counted down and left at its deadline was refused by
+        # Claude Code, not answered — "closed" would read as somebody's answer.
+        timed_out = (rt.expires_at is not None
+                     and time.time() >= rt.expires_at - _EXPIRY_SLACK)
+        rt.expires_at = None
+        label = (_("⏱ Blocked by Claude Code: no answer in time") if timed_out
+                 else _("⏹ Question closed"))
         try:
             await self.bot.edit_message_reply_markup(
                 chat_id=self.chat_id, message_id=msg_id,
-                reply_markup=done_kb(_("⏹ Question closed")))
+                reply_markup=done_kb(label))
         except Exception:
             # Already stripped by the handler that answered it, or too old.
             log.debug("dialog card retire skipped", exc_info=True)
@@ -1371,6 +1401,15 @@ class Watcher:
             if reached != previous:
                 rt.alerted[key] = reached
 
+    def _expires_at(self, session_id: str, dialog) -> float | None:
+        """The deadline of a question that counts down, fixed per question."""
+        if dialog.expires_in is None:
+            return None
+        rt = self.runtimes.get(session_id)
+        if rt is not None and rt.expires_at is not None:
+            return rt.expires_at
+        return time.time() + dialog.expires_in
+
     def _dialog_blocks(self, name: str, session_id: str, dialog) -> tuple:
         """The question as rich blocks — nothing in here is parsed as markup.
 
@@ -1389,6 +1428,9 @@ class Watcher:
             blocks.append(rich.para(question))
         if dialog.note:
             blocks.append(rich.para(dialog.note))
+        expires = self._expires_at(session_id, dialog)
+        if expires is not None:
+            blocks.append(rich.para(_expiry_line(expires)))
         # The slider's levels carry no description, so the buttons already
         # say everything a list of them would.
         for o in (dialog.options
@@ -1434,6 +1476,9 @@ class Watcher:
             parts += [html.escape(question), ""]
         if dialog.note:
             parts += [html.escape(dialog.note), ""]
+        expires = self._expires_at(session_id, dialog)
+        if expires is not None:
+            parts += [html.escape(_expiry_line(expires)), ""]
         for o in (dialog.options
                   if dialog.kind not in ("effort", "drafts") else []):
             mark = "▸ " if o.selected else ""

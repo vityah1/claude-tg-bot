@@ -507,6 +507,17 @@ is still alive, too. That is why rows are read tolerantly
   a new question with options missing. `Watcher._tick_session` therefore
   reports no *new* dialog within `_DIALOG_SETTLE` of the bot's own keypress
   (`note_input`), the same mark `_report_blocked` uses.
+- 🔴 **The question text must stand still, so a countdown is taken out of
+  it.** A permission prompt can count down to its own refusal ("⚠ Claude Code
+  will automatically block this request in 1:52, to avoid holding up an
+  unattended session", or "in about 2 minutes", 2.1.318). Left in
+  `Dialog.question`, the clock made every tick a new question, and the card,
+  which waits `_TRANSCRIPT_LAG` for a question that holds still, was never
+  sent. The prompt timed out with no card in the chat, and text typed meanwhile
+  sat held under "the question above" that was not there (2026-11-05, 0585ce76).
+  `screen._AUTO_BLOCK_RE` moves it into `Dialog.expires_in`, and the card
+  shows it as a clock time (`watcher._expiry_line`). Any other line that
+  repaints on its own belongs out of the question for the same reason.
 - 🔴 **Nothing from a session lands under its own open question card.**
   Claude Code draws a permission dialog 60–115 ms *before* it writes the tool
   call to the transcript (measured on 2.1.286), so a tick that read the
