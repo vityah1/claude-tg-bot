@@ -1286,10 +1286,11 @@ def is_busy(screen: str) -> bool:
 
 # What `claude agents --json` counts as "busy" while the input line is free
 # (2.1.318). Background work is admitted under the prompt: the mode line ends
-# in "· 5 shells", and the agent panel lists "● main" over "◯ general-purpose
+# in "· 5 shells" (or "· 1 monitor", a Monitor tool watching in the
+# background, 2.1.321), and the agent panel lists "● main" over "◯ general-purpose
 # Running tests". A usage limit hit mid-turn leaves "Continuing automatically
 # at 9pm · Esc to cancel" there.
-_SHELLS_RE = re.compile(r"·\s*\d+\s+shells?\b")
+_SHELLS_RE = re.compile(r"·\s*\d+\s+(?:shells?|monitors?)\b")
 _PANEL_MAIN_RE = re.compile(r"^\s*●\s+main\s*$")
 _PANEL_AGENT_RE = re.compile(r"^\s*◯\s+\S")
 _LIMIT_WAIT = "continuing automatically"
@@ -1298,8 +1299,8 @@ _LIMIT_WAIT = "continuing automatically"
 def busy_behind(screen: str) -> str:
     """Why the agent list may say "busy" while the prompt itself is free.
 
-    "background" — shells or subagents are still running; "limit" — the turn
-    is parked until a usage limit resets; "" — nothing on the screen explains
+    "background" — shells, monitors or subagents are still running;
+    "limit" — the turn is parked until a usage limit resets; "" — nothing on the screen explains
     it, so the list is to be believed. Only the lines under the input box
     count: Claude's output above it, and a draft typed into it, may quote any
     of these words. A lone "◯" is not the agent panel — the IDE hint draws

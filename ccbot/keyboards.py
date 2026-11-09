@@ -591,6 +591,20 @@ def held_wait_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def anyway_kb(session_id: str, command: str) -> InlineKeyboardMarkup:
+    """A way past a "busy" refusal: the bot's reading of the screen can be wrong.
+
+    *command* is the bare name (`model`, `effort`, `login`); the press goes
+    through `CCBot._on_callback`'s `anyway:` route, which still refuses to
+    type over an open question.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text=_("📤 Send /{command} anyway").format(command=command),
+        callback_data=f"anyway:{sid8(session_id)}:{command}"))
+    return kb.as_markup()
+
+
 def done_kb(label: str) -> InlineKeyboardMarkup:
     """The keyboard of a settled card: one button that says how it settled.
 

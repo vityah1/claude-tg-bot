@@ -290,7 +290,12 @@ is still alive, too. That is why rows are read tolerantly
   *under* the input line (`· 5 shells`, the `◯ general-purpose` panel, the
   limit notice); `_busy_reason` lets such a session through. A restart still
   refuses both — `/exit` would kill the background work or cancel the
-  automatic continuation — but names which of the two it is.
+  automatic continuation — but names which of the two it is. The list of
+  background kinds grows with Claude Code: `· 1 monitor` (a `Monitor` tool,
+  2.1.321) was missing and refused `/model` on an idle session (2026-11-09,
+  9fc6902d). So a refusal of `/model`, `/effort` or `/login` is a card with
+  «📤 Send … anyway» (`anyway:`), never a bare alert: the bot's reading can
+  be wrong, and the forced send still refuses to type over a question.
 - **A choice that has come true leaves a record of itself, not the choice.**
   A picker is edited into one line saying what was picked (`CCBot._settle`:
   `nd:` and the typed path after `nd:manual`, `dores:`, `grab:` — only on

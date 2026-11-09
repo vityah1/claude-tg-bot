@@ -53,6 +53,7 @@ from .keyboards import (
     ACTIVE_ICON,
     HISTORY_PAGE,
     STATUS_ICON,
+    anyway_kb,
     cancel_rename_kb,
     choice_kb,
     confirm_kb,
@@ -1048,14 +1049,15 @@ class CCBot:
                  m.chat.id, mgd.full_label, sid[:8])
         return mgd, " · " + _("in reply, now active")
 
-    async def _ack(self, m: Message, text: str, mgd) -> None:
+    async def _ack(self, m: Message, text: str, mgd,
+                   reply_markup: InlineKeyboardMarkup | None = None) -> None:
         """Confirm an action, and let a reply to that confirmation land back.
 
         The last message in the chat is the one a phone replies to fastest, so
         the bot's own acknowledgements route like the session's output does.
         """
         try:
-            msg = await m.answer(text, parse_mode="HTML")
+            msg = await m.answer(text, parse_mode="HTML", reply_markup=reply_markup)
         except TelegramBadRequest:
             log.exception("ack failed: %r", text[:120])
             return
@@ -1680,7 +1682,8 @@ class CCBot:
                                            mgd.session_id)
 
     # ----------------------------------------------------------------- login
-    async def _start_login(self, m: Message, mgd, note: str) -> None:
+    async def _start_login(self, m: Message, mgd, note: str,
+                           force: bool = False) -> None:
         """`/login` in the session, and its first choice made: the subscription.
 
         Everything after that is the watcher's: it reads each step of the
@@ -1699,9 +1702,10 @@ class CCBot:
             await self._ack(m, _("🔑 <b>{name}</b> is already logging in: its "
                                  "card comes next.").format(name=name), mgd)
             return
-        reason = await self._busy_reason(mgd)
+        reason = "" if force else await self._busy_reason(mgd)
         if reason:
-            await self._ack(m, reason, mgd)
+            await self._ack(m, self._busy_text(mgd, reason, "login"), mgd,
+                            reply_markup=anyway_kb(mgd.session_id, "login"))
             return
         await self._ack(m, _("🔑 Logging in on <b>{name}</b>{note}: the sign-in "
                              "link comes in a moment.").format(name=name, note=note),
@@ -4026,6 +4030,24 @@ class CCBot:
                 await self._show_sessions(c)
             return
 
+        if data.startswith("anyway:"):
+            # The way past a "busy" refusal the bot may have got wrong.
+            _kind, short, what = data.split(":", 2)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            if what == "login":
+                await c.answer()
+                await self._mark(msg, _("📤 /{command} sent").format(command=what))
+                await self._start_login(msg, mgd, "", force=True)
+            elif what in ("model", "effort") and await self._open_picker(
+                    c, mgd, what, force=True):
+                await self._mark(msg, _("📤 /{command} sent").format(command=what))
+            elif what not in ("model", "effort"):
+                await c.answer()
+            return
+
         if data.startswith("cfg:"):
             _kind, short, kind = data.split(":", 2)
             mgd = self._resolve(short)
@@ -4574,7 +4596,8 @@ class CCBot:
         if msg:
             self.store.remember_message(msg.message_id, mgd.session_id)
 
-    async def _open_picker(self, c: CallbackQuery, mgd, kind: str) -> None:
+    async def _open_picker(self, c: CallbackQuery, mgd, kind: str,
+                           force: bool = False) -> bool:
         """Ask the session for its own /model or /effort dialog.
 
         The card is not built here: the dialog is a dialog like any other, so
@@ -4588,20 +4611,43 @@ class CCBot:
             # Already on screen, so its card is already in the chat: asking
             # again would type "/model" into the dialog itself.
             await c.answer(_("It is already open — scroll down to its card"))
-            return
+            return False
         if open_now is not None and open_now.kind in ("model", "effort"):
             # The other settings dialog: close it rather than refusing, so
             # moving from the model list to the effort slider takes one tap.
             self._typed(mgd)
             await tmux.send_keys(mgd.window_id, "Escape")
             await asyncio.sleep(_NAV_SETTLE)
-        else:
+        elif not force:
             busy = await self._busy_reason(mgd)
             if busy:
-                await c.answer(busy, show_alert=True)
-                return
+                # A card, not an alert: the reading can be wrong (a background
+                # monitor once passed for work, 2026-11-09), and the card
+                # carries the way past it.
+                await c.answer()
+                here = _editable(c)
+                if here is not None:
+                    await self._ack(here, self._busy_text(mgd, busy, kind), mgd,
+                                    reply_markup=anyway_kb(mgd.session_id, kind))
+                return False
+        try:
+            # Forced or not, never typed over a question: there "/model"
+            # would be swallowed and its Enter would pick an option.
+            await self._send_prompt(mgd, f"/{kind}", guard=True)
+        except tmux.Refused:
+            await c.answer(_("It is waiting for an answer — deal with that "
+                             "first"), show_alert=True)
+            return False
         await c.answer(_("Asking Claude Code…"))
-        await self._send_prompt(mgd, f"/{kind}")
+        return True
+
+    @staticmethod
+    def _busy_text(mgd, reason: str, command: str) -> str:
+        """A refusal that names the session and says the bot may be wrong."""
+        return _("⏳ <b>{name}</b>: {reason}.\nIf the bot misreads the "
+                 "session, send /{command} anyway.").format(
+                     name=html.escape(mgd.full_label), reason=reason,
+                     command=command)
 
     async def _busy_reason(self, mgd) -> str:
         """Why the session cannot be asked a question right now, if it cannot.
