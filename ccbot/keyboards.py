@@ -156,13 +156,14 @@ def session_kb(v: SessionView) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
         InlineKeyboardButton(text=_("📊 Limits"), callback_data=f"k:{s}:usage"),
     )
-    # The three context controls travel together, and "End" leaves the row
-    # they are in: it used to sit where the thumb lands for /clear.
+    # The context controls travel together, and "End" leaves the row they are
+    # in: it used to sit where the thumb lands for /clear. "Restart" took the
+    # place of /context on 2026-11-10 (the user asked; /context is still a
+    # command to type). Old cards keep their `k:…:ctx`, which still works.
     kb.row(
         InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
         InlineKeyboardButton(text="🗜 /compact", callback_data=f"k:{s}:compact"),
-        InlineKeyboardButton(text=_("📉 Context breakdown"),
-                             callback_data=f"k:{s}:ctx"),
+        InlineKeyboardButton(text=_("🔁 Restart"), callback_data=f"k:{s}:restart"),
     )
     kb.row(
         InlineKeyboardButton(text=_("🧠 Model"), callback_data=f"cfg:{s}:model"),
@@ -605,6 +606,26 @@ def anyway_kb(session_id: str, command: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def restart_anyway_kb(items: list[tuple[str, str, str]]) -> InlineKeyboardMarkup:
+    """The way past a restart refused for work /exit ends: (id, label, kind).
+
+    One session gets a button under its own refusal that names what the
+    restart ends ("background" tasks or the "limit" wait's continuation);
+    several (after «Restart all») are named, one row each, the reason being
+    on the line above.
+    """
+    kb = InlineKeyboardBuilder()
+    for sid, label, kind in items:
+        if len(items) > 1:
+            text = _("🔁 Restart anyway: {name}").format(name=label)
+        elif kind == "limit":
+            text = _("🔁 Restart anyway — cancels the automatic continuation")
+        else:
+            text = _("🔁 Restart anyway — stops the background tasks")
+        kb.row(InlineKeyboardButton(text=text, callback_data=f"rsa:{sid8(sid)}"))
+    return kb.as_markup()
+
+
 def done_kb(label: str) -> InlineKeyboardMarkup:
     """The keyboard of a settled card: one button that says how it settled.
 
@@ -632,12 +653,16 @@ def cancel_rename_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def update_kb(session_id: str | None, outdated: int) -> InlineKeyboardMarkup:
+def update_kb(session_id: str | None, outdated: int,
+              forceable: list[tuple[str, str, str]] | None = None
+              ) -> InlineKeyboardMarkup:
     """Actions on the Claude Code version card.
 
     A restart button appears only for a session that is both behind and idle:
     offering it for one that is working would promise something the bot then
-    refuses to do.
+    refuses to do. *forceable* are the sessions «Restart all» passes by for
+    background work alone — the prompt is free, so a restart that stops that
+    work is offered by name.
     """
     kb = InlineKeyboardBuilder()
     if session_id:
@@ -650,6 +675,10 @@ def update_kb(session_id: str | None, outdated: int) -> InlineKeyboardMarkup:
         kb.row(InlineKeyboardButton(
             text=_("⬆️ Restart all idle ({count})").format(count=outdated),
             callback_data="upd:all"))
+    for sid, label, _kind in forceable or []:
+        kb.row(InlineKeyboardButton(
+            text=_("🔁 Restart anyway: {name}").format(name=label),
+            callback_data=f"upd:force:{sid8(sid)}"))
     kb.row(
         InlineKeyboardButton(text=_("🆕 What's new"), callback_data="upd:news"),
         InlineKeyboardButton(text=_("🔄 Check for updates"),

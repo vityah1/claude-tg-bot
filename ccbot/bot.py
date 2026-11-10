@@ -66,6 +66,7 @@ from .keyboards import (
     history_kb,
     lang_kb,
     project_dirs_kb,
+    restart_anyway_kb,
     restart_confirm_kb,
     restore_kb,
     route_kb,
@@ -167,6 +168,10 @@ class _Restart:
     ok: bool
     reason: str = ""     # why not, phrased for the chat
     version: str = ""    # the build it came back as, when it could be read
+    # Refused only for work /exit would stop — "background" tasks or a
+    # "limit" wait: the prompt is free, so a "restart anyway" is worth
+    # offering, and the button says which of the two it ends.
+    forceable: str = ""
 
 
 def restart_ask() -> str:
@@ -204,7 +209,7 @@ def help_text() -> str:
 <b>Sessions</b>
 /sessions — the session list, cards and controls
 /menu — the controls of one session, without the list in the
-   way: 🧠 model, ◉ effort, 🔐 permission mode, 📉 context,
+   way: 🧠 model, ◉ effort, 🔐 permission mode, 🔁 restart,
    ✏️ rename, 🚪 end. Without a reply it is the active session;
    as a reply to a session's message, that one (which then
    becomes active).
@@ -220,14 +225,16 @@ follow the same rule.
 /usage — how much of the 5-hour and 7-day quota is spent, and
    how full this session's context is. Read off the status line,
    so it is instant, costs no tokens and does not disturb the
-   session. Not to be confused with «📉 Context breakdown» on the
-   card: that one runs Claude Code's own <code>/context</code> in
-   the session and sends back the breakdown it draws — which
-   files, tools and messages the context is spent on.
-   «🗜 /compact» next to it sums the conversation up and carries
+   session. Not to be confused with <code>/context</code>: that is
+   Claude Code's own breakdown of which files, tools and messages
+   the context is spent on, drawn in the session.
+   «🗜 /compact» on the card sums the conversation up and carries
    on with the summary instead of the history: the session, its
    name and its id all stay, and the screen with the result
    arrives once it is done.
+   «🔁 Restart» next to it relaunches the session with its
+   context (<code>/exit</code>, then resume). If background tasks
+   are running in it, it says which and asks before stopping them.
 /screen — a text snapshot of the terminal
 /esc — <b>interrupt what Claude is doing</b> (the Esc key).
    The session stays alive and its context is untouched.
@@ -692,6 +699,9 @@ class CCBot:
         # Sessions whose drafts question was answered: brought back by
         # `_resume_after_exit` once `claude` has left the window.
         self.resuming: set[str] = set()
+        # Sessions a restart is under way in: a second press would type a
+        # second `claude --resume` into the shell or the new TUI.
+        self.restarting: set[str] = set()
         # Notices sent from outside a handler (an expired batch, the question
         # re-asked after a launch): kept only so the task is not
         # garbage-collected while it is still speaking.
@@ -1173,6 +1183,24 @@ class CCBot:
         with contextlib.suppress(Exception):
             await msg.edit_reply_markup(reply_markup=done_kb(label))
 
+    async def _drop_button(self, msg: Message, data: str, label: str) -> None:
+        """Take the pressed button off a card, keeping the others.
+
+        A «Restart all» result may offer several sessions; settling the whole
+        card on the first press would leave the rest out of reach. The last
+        one settles it the usual way (`_mark`).
+        """
+        markup = msg.reply_markup
+        rows = [[b for b in row if b.callback_data != data]
+                for row in (markup.inline_keyboard if markup else [])]
+        rows = [row for row in rows if row]
+        if not rows:
+            await self._mark(msg, label)
+            return
+        with contextlib.suppress(Exception):
+            await msg.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
     @staticmethod
     def _option_label(dialog, number: int) -> str:
         """The label of option *number*, or the number itself."""
@@ -1544,14 +1572,23 @@ class CCBot:
             await asyncio.sleep(1.0)
         return seen
 
-    async def _await_exit(self, mgd) -> str:
-        """Wait for `/exit` to take: "gone", "drafts" (asked first) or ""."""
+    async def _await_exit(self, mgd, tasks: bool = True) -> str:
+        """Wait for `/exit` to take: "gone", "drafts" or "tasks" (asked
+        first), or "" when it did not.
+
+        *tasks* False once the tasks question has been answered: the process
+        takes seconds to stop them, and the question stays drawn meanwhile —
+        read as asked again, the resume was typed into the dying `claude`.
+        """
         deadline = time.monotonic() + _RESTART_EXIT_TIMEOUT
         while time.monotonic() < deadline:
             if not await tmux.claude_running(mgd.window_id):
                 return "gone"
-            if await self._drafts_open(mgd):
+            dialog = await self._dialog_now(mgd)
+            if dialog is not None and dialog.kind == "drafts":
                 return "drafts"
+            if tasks and screenmod.is_exit_tasks(dialog):
+                return "tasks"
             await asyncio.sleep(0.5)
         return "" if await tmux.claude_running(mgd.window_id) else "gone"
 
@@ -1869,7 +1906,42 @@ class CCBot:
         return await self._await_claude(mgd.window_id, True,
                                         _RESTART_START_TIMEOUT)
 
-    async def _restart_session(self, mgd) -> _Restart:
+    @staticmethod
+    def _behind_reason(behind: str, what: str) -> str:
+        """Why a free-looking prompt is not restarted, naming the work."""
+        if behind == "limit":
+            return _("it is waiting for the usage limit to reset, and /exit "
+                     "would cancel the automatic continuation")
+        if what:
+            return _("background tasks are still running in it ({what}), and "
+                     "/exit would stop them").format(what=html.escape(what))
+        return _("background tasks are still running in it, and /exit would "
+                 "stop them")
+
+    def _busy_refusal(self, raw: str) -> _Restart:
+        """The refusal for a session the agent list calls busy.
+
+        One decision for the restart and for the version card, so the card
+        never offers «Restart anyway» for a state the forced restart refuses.
+        """
+        behind, what = screenmod.background_state(raw)
+        if not behind:
+            return _Restart(False, _("it is working right now"))
+        return _Restart(False, self._behind_reason(behind, ", ".join(what)),
+                        forceable=behind)
+
+    async def _restart_session(self, mgd, force: bool = False) -> _Restart:
+        """`_restart_in_place`, once at a time per session."""
+        sid = mgd.session_id
+        if sid in self.restarting:
+            return _Restart(False, _("a restart of it is already under way"))
+        self.restarting.add(sid)
+        try:
+            return await self._restart_in_place(mgd, force)
+        finally:
+            self.restarting.discard(sid)
+
+    async def _restart_in_place(self, mgd, force: bool) -> _Restart:
         """Relaunch a session's `claude` in place, context and all.
 
         `/exit`, then `claude --resume <id> -n <name>` in the same window. The
@@ -1880,6 +1952,10 @@ class CCBot:
 
         Unlike `_close`, this never kills the window. A restart that goes
         wrong must leave the session where it stood, not take it down.
+
+        *force* goes past background tasks and a usage-limit wait — the work
+        /exit stops — and nothing else: a turn in progress or an open
+        question still refuses.
         """
         if not await tmux.window_exists(mgd.window_id):
             return _Restart(False, _("its tmux window is gone"))
@@ -1891,20 +1967,17 @@ class CCBot:
                        if a.get("sessionId") == mgd.session_id), "")
         if status == "busy":
             # The list says "busy" for background work and for a turn parked
-            # on a usage limit too; /exit would end either, so the refusal
-            # stands — but says which it is, as the prompt itself is free.
+            # on a usage limit too, while the prompt itself is free; /exit
+            # would end either, so the refusal names the work and leaves the
+            # call to the user (a subagent that died can sit in the panel for
+            # days — 0585ce76, 2026-11-10).
             try:
-                behind = screenmod.busy_behind(await tmux.capture(mgd.window_id))
+                raw = await tmux.capture(mgd.window_id)
             except tmux.TmuxError:
-                behind = ""
-            if behind == "background":
-                return _Restart(False, _("background tasks are still running "
-                                         "in it, and /exit would stop them"))
-            if behind == "limit":
-                return _Restart(False, _("it is waiting for the usage limit to "
-                                         "reset, and /exit would cancel the "
-                                         "automatic continuation"))
-            return _Restart(False, _("it is working right now"))
+                raw = ""
+            refusal = self._busy_refusal(raw)
+            if not refusal.forceable or not force:
+                return refusal
         if await self._drafts_open(mgd):
             # An earlier /exit stopped at the feedback-drafts question: the
             # restart is half done, and the answer is what lets it finish.
@@ -1943,14 +2016,54 @@ class CCBot:
             await asyncio.sleep(0.3)
             await self._send_prompt(mgd, "/exit")
             gone = await self._await_exit(mgd)
+            if gone == "tasks":
+                gone = await self._exit_tasks(mgd, force)
+                if isinstance(gone, _Restart):
+                    return gone
             if gone == "drafts":
                 return self._wait_drafts(mgd)
-            if not gone:
+            if gone != "gone":
                 updates.forget(mgd.session_id)
                 log.warning("restart aborted: %s did not exit", mgd.session_id[:8])
                 return _Restart(False, _("it did not shut down within {n} s")
                                 .format(n=int(_RESTART_EXIT_TIMEOUT)))
         return await self._relaunch(mgd)
+
+    async def _exit_tasks(self, mgd, force: bool) -> str | _Restart:
+        """Answer `/exit`'s "the following will stop" question.
+
+        Forced: "Exit and stop tasks", then the wait goes on. Otherwise the
+        question is cancelled (Esc is its own "Stay") and the refusal names
+        what would have stopped — the agent list said idle, yet a shell was
+        running, so the user is the one to decide.
+        """
+        dialog = await self._dialog_now(mgd)
+        if not screenmod.is_exit_tasks(dialog):
+            # Gone meanwhile (or unreadable): the exit is under way or not,
+            # and the wait says which; no key goes in blind.
+            return await self._await_exit(mgd, tasks=False)
+        num = screenmod.exit_tasks_option(dialog)
+
+        def standing(raw: str) -> bool:
+            return screenmod.is_exit_tasks(screenmod.find_dialog(raw))
+
+        if not force or not num:
+            await tmux.press_if(mgd.window_id, "Escape", standing)
+            updates.forget(mgd.session_id)
+            if force:
+                log.warning("restart: no 'Exit and stop tasks' row in %r",
+                            [o.label for o in dialog.options] if dialog else [])
+                return _Restart(False, _(
+                    "/exit asked about its background tasks in a way I do not "
+                    "recognise, so I answered «Stay»"))
+            return _Restart(False, self._behind_reason(
+                "background", screenmod.exit_tasks_named(dialog)),
+                forceable="background")
+        log.info("restart stops background tasks id=%s: %s",
+                 mgd.session_id[:8], screenmod.exit_tasks_named(dialog))
+        self._typed(mgd)
+        await tmux.press_if(mgd.window_id, str(num), standing)
+        return await self._await_exit(mgd, tasks=False)
 
     def _wait_drafts(self, mgd) -> _Restart:
         """The restart waits for the feedback-drafts answer, then finishes.
@@ -2019,6 +2132,7 @@ class CCBot:
         one = next((m for m in idle
                     if active and m.session_id == active.session_id), None)
         lines = [_("⬆️ <b>Claude Code</b>"), ""]
+        forceable: list[tuple[str, str, str]] = []
         if disk:
             lines.append(_("On disk: <code>{version}</code> — what a session "
                            "gets the moment it is started again.").format(
@@ -2039,13 +2153,19 @@ class CCBot:
             lines += ["", _("✅ Every session is already running the version "
                             "that is on disk.")]
         else:
-            skipped = [m for m, st in behind if st not in ("idle", "starting")]
+            skipped = [(m, st) for m, st in behind
+                       if st not in ("idle", "starting")]
             lines += ["", ngettext("{count} session is behind.",
                                    "{count} sessions are behind.",
                                    len(behind)).format(count=len(behind))]
             if skipped:
-                lines.append(_("Busy or waiting, so left alone: {names}").format(
-                    names=", ".join(html.escape(m.full_label) for m in skipped)))
+                lines.append(_("Left alone by «Restart all»:"))
+            reasons = await asyncio.gather(
+                *(self._skip_reason(m, st) for m, st in skipped))
+            for (m, _st), r in zip(skipped, reasons, strict=True):
+                lines.append(f"• <b>{html.escape(m.full_label)}</b> — {r.reason}")
+                if r.forceable:
+                    forceable.append((m.session_id, m.full_label, r.forceable))
             lines += ["", _(
                 "A restart is <code>/exit</code> followed by "
                 "<code>claude --resume</code> in the same window: the session "
@@ -2053,7 +2173,19 @@ class CCBot:
                 "anything half-typed into its input line, and the prompt cache — "
                 "so the first reply after a restart takes a little longer.")]
         return "\n".join(lines), update_kb(
-            one.session_id if one else None, len(idle))
+            one.session_id if one else None, len(idle), forceable)
+
+    async def _skip_reason(self, mgd, status: str) -> _Restart:
+        """Why «Restart all» passes a session by, and whether to offer it anyway."""
+        if status == "waiting":
+            return _Restart(False, _("it is waiting for an answer"))
+        if status != "busy":
+            return _Restart(False, _("its state could not be read"))
+        try:
+            raw = await tmux.capture(mgd.window_id)
+        except tmux.TmuxError:
+            raw = ""
+        return self._busy_refusal(raw)
 
     async def _show_update(self, target: Message | CallbackQuery) -> None:
         here = _editable(target)
@@ -2066,16 +2198,21 @@ class CCBot:
         else:
             await here.answer(text, reply_markup=kb, parse_mode="HTML")
 
-    async def _restart_one(self, chat_id: int, mgd) -> None:
+    async def _restart_one(self, chat_id: int, mgd, force: bool = False) -> None:
         """Restart a single session, saying so before, during and after."""
         note = await self.bot.send_message(
             chat_id,
             _("⏳ Restarting <b>{name}</b> — /exit, then resume…").format(
                 name=html.escape(mgd.full_label)),
             parse_mode="HTML")
-        res = await self._restart_session(mgd)
+        self.store.remember_message(note.message_id, mgd.session_id)
+        res = await self._restart_session(mgd, force=force)
+        kb = (restart_anyway_kb([(mgd.session_id, mgd.full_label,
+                                  res.forceable)])
+              if res.forceable else None)
         with contextlib.suppress(Exception):
-            await note.edit_text(self._restart_text(mgd, res), parse_mode="HTML")
+            await note.edit_text(self._restart_text(mgd, res),
+                                 reply_markup=kb, parse_mode="HTML")
 
     @staticmethod
     def _restart_text(mgd, res: _Restart) -> str:
@@ -2125,7 +2262,7 @@ class CCBot:
             if res.ok:
                 done.append((mgd, res.version))
             else:
-                failed.append((mgd, res.reason))
+                failed.append((mgd, res))
         lines = []
         if done:
             lines.append(ngettext("✅ Restarted {count} session:",
@@ -2135,10 +2272,14 @@ class CCBot:
                       f"<code>{html.escape(v or '?')}</code>" for m, v in done]
         if failed:
             lines.append(_("⚠️ Left as they were:"))
-            lines += [f"• <b>{html.escape(m.full_label)}</b> — {r}"
+            lines += [f"• <b>{html.escape(m.full_label)}</b> — {r.reason}"
                       for m, r in failed]
+        forceable = [(m.session_id, m.full_label, r.forceable)
+                     for m, r in failed if r.forceable]
         with contextlib.suppress(Exception):
-            await note.edit_text("\n".join(lines), parse_mode="HTML")
+            await note.edit_text(
+                "\n".join(lines), parse_mode="HTML",
+                reply_markup=restart_anyway_kb(forceable) if forceable else None)
 
     async def _show_news(self, chat_id: int) -> None:
         """Release notes between the oldest session and what is on disk.
@@ -2382,7 +2523,12 @@ class CCBot:
                           guard: bool = False) -> None:
         """Fold a batch into one prompt, send it, and say where it went."""
         paths = [p for i in items for p in i.paths]
-        await self._send_prompt(mgd, _batch_text(items), guard=guard)
+        prompt = _batch_text(items)
+        await self._send_prompt(mgd, prompt, guard=guard)
+        if prompt.split(maxsplit=1)[:1] in (["/context"], ["/compact"]):
+            # Typed rather than pressed: these print on the terminal only,
+            # so the result comes back as a screen, as from the card.
+            self.watcher.screen_when_idle(mgd.session_id)
         parts = []
         if len(items) > 1:
             parts.append(ngettext("{count} message", "{count} messages",
@@ -3470,13 +3616,14 @@ class CCBot:
                 await c.answer(_("Restarting…"))
                 await self._restart_all(chat_id)
                 await self._show_update(c)
-            elif action.startswith("one:"):
-                mgd = self._resolve(action[4:])
+            elif action.startswith(("one:", "force:")):
+                kind, short = action.split(":", 1)
+                mgd = self._resolve(short)
                 if not mgd:
                     await c.answer(_stale_card("/update"), show_alert=True)
                     return
                 await c.answer(_("Restarting…"))
-                await self._restart_one(chat_id, mgd)
+                await self._restart_one(chat_id, mgd, force=kind == "force")
                 await self._show_update(c)
             else:
                 await c.answer()
@@ -4028,6 +4175,17 @@ class CCBot:
             await c.answer(_("Ending it…"))
             if await self._end_foreign(chat_id, v):
                 await self._show_sessions(c)
+            return
+
+        if data.startswith("rsa:"):
+            # "Restart anyway" under a refusal that named background work.
+            mgd = self._resolve(data[4:])
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            await c.answer(_("Restarting…"))
+            await self._drop_button(msg, data, _("🔁 Restarting anyway"))
+            await self._restart_one(chat_id, mgd, force=True)
             return
 
         if data.startswith("anyway:"):
@@ -5088,6 +5246,12 @@ class CCBot:
             self.watcher.screen_when_idle(mgd.session_id)
             await c.answer(_("/context sent — the breakdown comes back as a "
                              "screen"))
+        elif action == "restart":
+            # Answered first: /exit and the resume take seconds, and a button
+            # that seems to do nothing gets pressed again.
+            await c.answer(_("Restarting…"))
+            await self._restart_one(
+                c.message.chat.id if c.message else self.cfg.owner, mgd)
         elif action == "compact":
             # Claude Code's own /compact: it summarises the context in place
             # and keeps the session id, so nothing has to be rebound — and it

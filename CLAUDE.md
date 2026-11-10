@@ -288,9 +288,18 @@ is still alive, too. That is why rows are read tolerantly
   on a session sitting at an empty `❯` — the very session that had hit the
   limit (2026-11-05, 0585ce76). `screen.busy_behind` reads what is drawn
   *under* the input line (`· 5 shells`, the `◯ general-purpose` panel, the
-  limit notice); `_busy_reason` lets such a session through. A restart still
-  refuses both — `/exit` would kill the background work or cancel the
-  automatic continuation — but names which of the two it is. The list of
+  limit notice); `_busy_reason` lets such a session through. A restart
+  refuses both by default — `/exit` would kill the background work or cancel
+  the automatic continuation — but names the work
+  (`screen.background_summary`: "2 shells", the panel's subagents) and offers
+  «🔁 Restart anyway» (`rsa:`, `upd:force:`): a finman session sat out
+  «Restart all» for a wait loop stuck three days and a subagent long finished
+  but still drawn (2026-11-10, 0585ce76), and the user saw only "busy". Forced,
+  `/exit` asks "The following will stop when you exit" (2.1.322) and the bot
+  answers "Exit and stop tasks", never "Move to background"; after the answer
+  the question stays drawn while the tasks stop, so the wait is for the
+  process to leave (`_await_exit(tasks=False)`) — reading the question as
+  asked again typed the resume into the dying `claude`. The list of
   background kinds grows with Claude Code: `· 1 monitor` (a `Monitor` tool,
   2.1.321) was missing and refused `/model` on an idle session (2026-11-09,
   9fc6902d). So a refusal of `/model`, `/effort` or `/login` is a card with

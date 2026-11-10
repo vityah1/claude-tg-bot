@@ -1296,37 +1296,113 @@ _PANEL_AGENT_RE = re.compile(r"^\s*◯\s+\S")
 _LIMIT_WAIT = "continuing automatically"
 
 
-def busy_behind(screen: str) -> str:
-    """Why the agent list may say "busy" while the prompt itself is free.
+def _below_input(screen: str) -> list[str] | None:
+    """The lines drawn under the input box, or None when it is not standing.
 
-    "background" — shells, monitors or subagents are still running;
-    "limit" — the turn is parked until a usage limit resets; "" — nothing on the screen explains
-    it, so the list is to be believed. Only the lines under the input box
-    count: Claude's output above it, and a draft typed into it, may quote any
-    of these words. A lone "◯" is not the agent panel — the IDE hint draws
-    one too — so a panel row counts only under its "● main".
+    None also when Claude is working or a dialog is open: then the bottom is
+    not the idle prompt, and nothing under it tells about background work.
     """
     lines = screen.splitlines()
     if is_busy(screen) or not _ordinary_bottom(lines) or find_dialog(screen):
-        return ""
+        return None
     prompt = next((i for i in range(len(lines) - 1, -1, -1)
                    if lines[i].lstrip().startswith("❯")), None)
     if prompt is None:
-        return ""
+        return None
     # The box closes with a rule; a multi-line draft sits above it. Some
     # states (the limit notice) draw no closing rule, and then the box is the
     # prompt line alone.
     close = next((i for i in range(prompt + 1, len(lines))
                   if lines[i].lstrip().startswith("─")), prompt)
-    below = lines[close + 1:]
-    if any(_SHELLS_RE.search(ln) for ln in below):
-        return "background"
+    return lines[close + 1:]
+
+
+def _panel_agents(below: list[str]) -> list[str]:
+    """The rows of the agent panel under its "● main", without the mark."""
     main = next((i for i, ln in enumerate(below) if _PANEL_MAIN_RE.match(ln)), None)
-    if main is not None and any(_PANEL_AGENT_RE.match(ln) for ln in below[main + 1:]):
-        return "background"
+    if main is None:
+        return []
+    # A row is "◯ general-purpose  What it does   1h 9m · ↓ 277k tokens",
+    # its columns held apart by runs of spaces; the clock and the token count
+    # are dropped, as they can freeze on a subagent that is long gone.
+    rows = []
+    for ln in below[main + 1:]:
+        if _PANEL_AGENT_RE.match(ln):
+            cols = re.split(r"\s{2,}", ln.strip()[1:].strip())
+            rows.append(": ".join(c for c in cols[:2] if c))
+    return rows
+
+
+def background_state(screen: str) -> tuple[str, list[str]]:
+    """Why the agent list may say "busy" while the prompt itself is free.
+
+    The kind is "background" — shells, monitors or subagents are still
+    running — "limit" — the turn is parked until a usage limit resets — or
+    "" when nothing on the screen explains it, so the list is to be believed.
+    The list names the background work as the screen does: "2 shells" off the
+    mode line, then one entry per subagent in the panel ("general-purpose:
+    Checking the frames…"). The prompt looks free in this state, so a refusal
+    that says only "busy" reads as the bot being wrong; naming the work is
+    what lets the user judge whether stopping it is fine.
+
+    Only the lines under the input box count: Claude's output above it, and
+    a draft typed into it, may quote any of these words. A lone "◯" is not
+    the agent panel — the IDE hint draws one too — so a panel row counts
+    only under its "● main".
+    """
+    below = _below_input(screen)
+    if below is None:
+        return "", []
+    what = [m.group(0).lstrip("·").strip() for ln in below
+            for m in [_SHELLS_RE.search(ln)] if m] + _panel_agents(below)
+    if what:
+        return "background", what
     if any(_LIMIT_WAIT in ln.lower() for ln in below):
-        return "limit"
-    return ""
+        return "limit", []
+    return "", []
+
+
+def busy_behind(screen: str) -> str:
+    """The kind alone of `background_state`."""
+    return background_state(screen)[0]
+
+
+# `/exit` with background work asks first (2.1.322): "Background work is
+# running / The following will stop when you exit: shell · sleep 900" and
+# "1. Exit and stop tasks / 2. Move to background and exit / 3. Stay".
+_EXIT_TASKS_MARK = "will stop when you exit"
+
+
+def exit_tasks_option(dialog: Dialog | None) -> int:
+    """The number of "Exit and stop tasks" on `/exit`'s question, else 0.
+
+    Matched by the words of the row and never guessed: "Move to background"
+    is not a restart — the tasks would outlive a process the resume no longer
+    owns — and a reworded list is better refused than pressed blind.
+    """
+    if dialog is None or not is_exit_tasks(dialog):
+        return 0
+    for opt in dialog.options:
+        low = opt.label.lower()
+        if "exit" in low and "stop" in low:
+            return opt.number
+    return 0
+
+
+def is_exit_tasks(dialog: Dialog | None) -> bool:
+    """Whether this is `/exit`'s "the following will stop" question."""
+    return dialog is not None and _EXIT_TASKS_MARK in dialog.question.lower()
+
+
+def exit_tasks_named(dialog: Dialog | None) -> str:
+    """What `/exit`'s question says will stop ("shell · sleep 900")."""
+    if dialog is None:
+        return ""
+    low = dialog.question.lower()
+    at = low.find(_EXIT_TASKS_MARK)
+    if at < 0:
+        return ""
+    return dialog.question[at + len(_EXIT_TASKS_MARK):].lstrip(" :").strip()
 
 
 def read_activity(screen: str) -> str:

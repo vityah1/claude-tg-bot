@@ -388,15 +388,17 @@ A distinction worth keeping in mind: `/esc` stops the *action*, `/clear` erases
 the *memory*, `/exit` closes the *session*. After `/exit` the transcript stays,
 so the session can be brought back from 🕘 in the list.
 
-`/usage` and the card's "📉 Context breakdown" are not the same thing either.
-`/usage` is the bot's own summary, read off the status-line payload: how much of
-the 5-hour and 7-day quota is spent, how full the context is, plus model, effort
-and cost. It is instant, costs no tokens and does not disturb the session.
-"📉 Context breakdown" runs Claude Code's own `/context` in the session and
-sends back the breakdown it draws — what is filling the window: system prompt,
-tools, MCP, memory files, messages. "🗜 /compact" next to it runs `/compact`:
-the conversation is summed up and the session carries on with the summary
-instead of the history, keeping its id, its name and its tmux window.
+`/usage` and `/context` are not the same thing either. `/usage` is the bot's own
+summary, read off the status-line payload: how much of the 5-hour and 7-day
+quota is spent, how full the context is, plus model, effort and cost. It is
+instant, costs no tokens and does not disturb the session. `/context` is Claude
+Code's own breakdown of what is filling the window (system prompt, tools, MCP,
+memory files, messages), typed into the session like any other command. The
+card's "🗜 /compact" runs `/compact`: the conversation is summed up and the
+session carries on with the summary instead of the history, keeping its id, its
+name and its tmux window. "🔁 Restart" next to it is the restart `/update`
+offers (below), for one session and whatever version it is on — it took the
+place of a "📉 Context breakdown" button on 2026-11-10.
 
 Both of those print their answer on the terminal and nowhere else — a local
 command leaves no assistant record, and only assistant records are forwarded —
@@ -469,6 +471,23 @@ immediately for a session that has only just been relaunched and is missing
 from the agent list for a couple of seconds. If `/exit` does not finish in
 20 seconds, or the resumed `claude` does not appear within 40, the restart
 stops and says so — the window is never killed, unlike `/exit` from the menu.
+
+**Background work is the user's call, not a "busy".** `claude agents --json`
+says `busy` while background shells or subagents run, and the prompt looks free
+— so a refusal that said only "busy" read as the bot being wrong. On
+2026-11-10 «Restart all» passed a finman session by for a wait loop stuck since
+three days earlier (`pgrep -f` matching its own shell) and a subagent long
+finished but still drawn in the panel. Now the refusal names the work, read off
+the lines under the input box (`screen.background_summary`: "2 shells",
+"general-purpose: Checking the frames…"), and offers «🔁 Restart anyway» — on
+the session's own refusal and, by name, on the `/update` card. Forced, the
+restart answers the question `/exit` asks in that state ("The following will
+stop when you exit" — `1. Exit and stop tasks / 2. Move to background and exit
+/ 3. Stay`, 2.1.322) with "Exit and stop tasks": moving them to the background
+would leave them running for a process the resume no longer owns. Unforced, the
+same question (the agent list called the session idle, yet a shell was running)
+is cancelled with Esc and turned into the same refusal. A turn in progress or
+an open question is never forced.
 
 **"🆕 What's new"** answers the obvious next question — what a restart would
 actually bring in. Claude Code keeps the full changelog at
