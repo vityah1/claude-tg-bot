@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: claude-tg-bot 1.0\n"
 "Report-Msgid-Bugs-To: https://github.com/\n"
-"POT-Creation-Date: 2026-11-10 14:57+0000\n"
+"POT-Creation-Date: 2026-11-10 15:05+0000\n"
 "PO-Revision-Date: 2026-08-24 20:08+0000\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: uk\n"
@@ -286,8 +286,8 @@ msgstr ""
 "\n"
 "У tmux бот поки не веде жодної — почни з {button}."
 
-#: ccbot/bot.py:369 ccbot/bot.py:1300 ccbot/bot.py:3697 ccbot/keyboards.py:117
-#: ccbot/keyboards.py:419
+#: ccbot/bot.py:369 ccbot/bot.py:1300 ccbot/bot.py:3697 ccbot/keyboards.py:119
+#: ccbot/keyboards.py:421
 msgid "➕ New session"
 msgstr "➕ Нова сесія"
 
@@ -300,7 +300,7 @@ msgstr ""
 "🔗 <b>У твоєму терміналі</b> — бот їх лише показує; «{button}» у картці "
 "забирає керування."
 
-#: ccbot/bot.py:373 ccbot/bot.py:4414 ccbot/keyboards.py:138
+#: ccbot/bot.py:373 ccbot/bot.py:4421 ccbot/keyboards.py:140
 msgid "🔗 Move into tmux"
 msgstr "🔗 Перенести в tmux"
 
@@ -318,7 +318,7 @@ msgstr ""
 "<b>{button}</b> — завершені раніше сесії; відновлення повертає їхній "
 "контекст."
 
-#: ccbot/bot.py:386 ccbot/keyboards.py:118 ccbot/keyboards.py:420
+#: ccbot/bot.py:386 ccbot/keyboards.py:120 ccbot/keyboards.py:422
 msgid "🕘 Recent"
 msgstr "🕘 Останні"
 
@@ -346,8 +346,8 @@ msgstr "хтось"
 msgid "⏸ Esc sent to <b>{name}</b>{note}"
 msgstr "⏸ Esc надіслано в <b>{name}</b>{note}"
 
-#: ccbot/bot.py:837 ccbot/bot.py:4799 ccbot/bot.py:4832 ccbot/bot.py:5253
-#: ccbot/bot.py:5270 ccbot/bot.py:5278
+#: ccbot/bot.py:837 ccbot/bot.py:4821 ccbot/bot.py:4854 ccbot/bot.py:5274
+#: ccbot/bot.py:5291 ccbot/bot.py:5299
 msgid "It is waiting for an answer — deal with that first"
 msgstr "Вона чекає на відповідь — спершу розберись із нею"
 
@@ -361,7 +361,7 @@ msgstr "🧹 /clear надіслано в <b>{name}</b>{note}"
 msgid "⏳ Ending {name} — sending /exit…"
 msgstr "⏳ Завершую {name} — надсилаю /exit…"
 
-#: ccbot/bot.py:875 ccbot/bot.py:4474 ccbot/bot.py:5298
+#: ccbot/bot.py:875 ccbot/bot.py:4481 ccbot/bot.py:5319
 #, python-brace-format
 msgid ""
 "❌ Session <b>{name}</b> has ended.\n"
@@ -396,7 +396,7 @@ msgstr "Помилка: {error} — дивись /log"
 msgid "No active session — /sessions"
 msgstr "Немає активної сесії — /sessions"
 
-#: ccbot/bot.py:1053 ccbot/bot.py:4753
+#: ccbot/bot.py:1053 ccbot/bot.py:4775
 msgid "That session has already ended — see /sessions"
 msgstr "Та сесія вже завершена — дивись /sessions"
 
@@ -567,7 +567,7 @@ msgstr ""
 "Якщо це було звичайне повідомлення — я чекав на шлях після {button}. "
 "Натисни /sessions і спробуй ще раз."
 
-#: ccbot/bot.py:1357 ccbot/keyboards.py:739
+#: ccbot/bot.py:1357 ccbot/keyboards.py:741
 msgid "✏️ Another path"
 msgstr "✏️ Інший шлях"
 
@@ -576,7 +576,7 @@ msgstr "✏️ Інший шлях"
 msgid "🟢 Text now goes to <b>{name}</b>"
 msgstr "🟢 Текст тепер іде в <b>{name}</b>"
 
-#: ccbot/bot.py:1413 ccbot/bot.py:3820
+#: ccbot/bot.py:1413 ccbot/bot.py:3827
 #, python-brace-format
 msgid ""
 "🟢 Text now goes to <b>{name}</b>.\n"
@@ -648,11 +648,11 @@ msgstr "❌ Не змогло дійти — дивись /log"
 
 #: ccbot/bot.py:1653 ccbot/bot.py:1682 ccbot/bot.py:1834 ccbot/bot.py:2839
 #: ccbot/bot.py:3317 ccbot/bot.py:3504 ccbot/bot.py:3527 ccbot/bot.py:3536
-#: ccbot/bot.py:3799 ccbot/bot.py:3812 ccbot/bot.py:3840 ccbot/bot.py:3856
-#: ccbot/bot.py:3885 ccbot/bot.py:3925 ccbot/bot.py:3952 ccbot/bot.py:3978
-#: ccbot/bot.py:4049 ccbot/bot.py:4066 ccbot/bot.py:4108 ccbot/bot.py:4184
-#: ccbot/bot.py:4196 ccbot/bot.py:4213 ccbot/bot.py:4239 ccbot/bot.py:4249
-#: ccbot/bot.py:4263 ccbot/bot.py:4297 ccbot/bot.py:4326
+#: ccbot/bot.py:3800 ccbot/bot.py:3819 ccbot/bot.py:3847 ccbot/bot.py:3863
+#: ccbot/bot.py:3892 ccbot/bot.py:3932 ccbot/bot.py:3959 ccbot/bot.py:3985
+#: ccbot/bot.py:4056 ccbot/bot.py:4073 ccbot/bot.py:4115 ccbot/bot.py:4191
+#: ccbot/bot.py:4203 ccbot/bot.py:4220 ccbot/bot.py:4246 ccbot/bot.py:4256
+#: ccbot/bot.py:4270 ccbot/bot.py:4304 ccbot/bot.py:4333
 msgid "That session is gone"
 msgstr "Сесія зникла"
 
@@ -660,15 +660,15 @@ msgstr "Сесія зникла"
 msgid "That question is no longer open"
 msgstr "Цього питання вже немає"
 
-#: ccbot/bot.py:1664 ccbot/watcher.py:1405
+#: ccbot/bot.py:1664 ccbot/watcher.py:1387
 msgid "⏹ Question closed"
 msgstr "⏹ Питання закрито"
 
-#: ccbot/bot.py:1668 ccbot/keyboards.py:268
+#: ccbot/bot.py:1668 ccbot/keyboards.py:270
 msgid "📨 Review and send"
 msgstr "📨 Переглянути й надіслати"
 
-#: ccbot/bot.py:1669 ccbot/keyboards.py:270
+#: ccbot/bot.py:1669 ccbot/keyboards.py:272
 msgid "🗑 Discard and exit"
 msgstr "🗑 Відкинути й вийти"
 
@@ -688,7 +688,7 @@ msgstr "⏹ Відповідь закрито"
 msgid "✖️ Closed"
 msgstr "✖️ Закрито"
 
-#: ccbot/bot.py:1733 ccbot/bot.py:4828
+#: ccbot/bot.py:1733 ccbot/bot.py:4850
 msgid "Its tmux window is gone"
 msgstr "Її вікно tmux зникло"
 
@@ -756,7 +756,7 @@ msgstr ""
 msgid "Getting a new link…"
 msgstr "Отримую нове посилання…"
 
-#: ccbot/bot.py:1866 ccbot/watcher.py:1166
+#: ccbot/bot.py:1866 ccbot/watcher.py:1136
 msgid "🔁 Tried again"
 msgstr "🔁 Спробували ще раз"
 
@@ -780,7 +780,7 @@ msgstr "⏭ Крок минув"
 msgid "That login is no longer open."
 msgstr "Цей вхід уже закрито."
 
-#: ccbot/bot.py:1890 ccbot/watcher.py:1168
+#: ccbot/bot.py:1890 ccbot/watcher.py:1138
 msgid "⏹ Login closed"
 msgstr "⏹ Вхід закрито"
 
@@ -1288,7 +1288,7 @@ msgstr ""
 "щось питає (про нову теку питає завжди). Ось її екран: розберись із цим, "
 "а тоді натисни «{button}»."
 
-#: ccbot/bot.py:3217 ccbot/keyboards.py:389
+#: ccbot/bot.py:3217 ccbot/keyboards.py:391
 #, python-brace-format
 msgid "▶️ Current: {name}"
 msgstr "▶️ Поточна: {name}"
@@ -1317,7 +1317,7 @@ msgstr[2] "🗑 {count} повідомлень відкинуто — вони �
 msgid "No active session — pick one below"
 msgstr "Немає активної сесії — вибери нижче"
 
-#: ccbot/bot.py:3300 ccbot/bot.py:3320 ccbot/bot.py:4080
+#: ccbot/bot.py:3300 ccbot/bot.py:3320 ccbot/bot.py:4087
 msgid "Sending…"
 msgstr "Надсилаю…"
 
@@ -1426,8 +1426,8 @@ msgstr "Читаю нотатки до релізів…"
 msgid "Checking…"
 msgstr "Перевіряю…"
 
-#: ccbot/bot.py:3616 ccbot/bot.py:3625 ccbot/bot.py:4186 ccbot/bot.py:4290
-#: ccbot/bot.py:5262
+#: ccbot/bot.py:3616 ccbot/bot.py:3625 ccbot/bot.py:4193 ccbot/bot.py:4297
+#: ccbot/bot.py:5283
 msgid "Restarting…"
 msgstr "Перезапускаю…"
 
@@ -1485,16 +1485,20 @@ msgstr ""
 "▶️ Відновлюю <b>{name}</b>\n"
 "<code>{path}</code>"
 
-#: ccbot/bot.py:3827
+#: ccbot/bot.py:3808
+msgid "🔔 It is waiting for your choice — the question is posted below."
+msgstr "🔔 Сесія чекає на ваш вибір — питання надіслано нижче."
+
+#: ccbot/bot.py:3834
 #, python-brace-format
 msgid "Active: {name}"
 msgstr "Активна: {name}"
 
-#: ccbot/bot.py:3861 ccbot/bot.py:3905 ccbot/bot.py:4125
+#: ccbot/bot.py:3868 ccbot/bot.py:3912 ccbot/bot.py:4132
 msgid "It did not go through"
 msgstr "Не пройшло"
 
-#: ccbot/bot.py:3863
+#: ccbot/bot.py:3870
 #, python-brace-format
 msgid ""
 "⚠️ That row did not go through — the question is still open in "
@@ -1503,31 +1507,31 @@ msgstr ""
 "⚠️ Цей рядок не спрацював — питання в <b>{name}</b> ще відкрите, кнопки "
 "працюють."
 
-#: ccbot/bot.py:3871
+#: ccbot/bot.py:3878
 msgid "Picked"
 msgstr "Обрано"
 
-#: ccbot/bot.py:3890 ccbot/bot.py:3929
+#: ccbot/bot.py:3897 ccbot/bot.py:3936
 msgid "The question has already closed"
 msgstr "Питання вже закрите"
 
-#: ccbot/bot.py:3908
+#: ccbot/bot.py:3915
 msgid "This is the first part"
 msgstr "Це вже перша частина"
 
-#: ccbot/bot.py:3909
+#: ccbot/bot.py:3916
 msgid "This is the last part"
 msgstr "Це вже остання частина"
 
-#: ccbot/bot.py:3915
+#: ccbot/bot.py:3922
 msgid "⬅️ Went to the previous part"
 msgstr "⬅️ Перейшли до попередньої частини"
 
-#: ccbot/bot.py:3917
+#: ccbot/bot.py:3924
 msgid "➡️ Went to the next part"
 msgstr "➡️ Перейшли до наступної частини"
 
-#: ccbot/bot.py:3939
+#: ccbot/bot.py:3946
 #, python-brace-format
 msgid ""
 "📝 Write the note — it answers this question in <b>{name}</b> instead of "
@@ -1536,33 +1540,33 @@ msgstr ""
 "📝 Напишіть нотатку — вона стане відповіддю на це питання в <b>{name}</b> "
 "замість варіанта."
 
-#: ccbot/bot.py:3963
+#: ccbot/bot.py:3970
 #, python-brace-format
 msgid "Ticked {n}"
 msgstr "Позначено {n}"
 
-#: ccbot/bot.py:3983 ccbot/bot.py:4053
+#: ccbot/bot.py:3990 ccbot/bot.py:4060
 msgid "That dialog has left the screen"
 msgstr "Цього діалогу на екрані вже немає"
 
-#: ccbot/bot.py:3988
+#: ccbot/bot.py:3995
 msgid "That option has left the screen"
 msgstr "Цього варіанту на екрані вже немає"
 
-#: ccbot/bot.py:3994
+#: ccbot/bot.py:4001
 #, python-brace-format
 msgid "Switching to {label}…"
 msgstr "Перемикаю на {label}…"
 
-#: ccbot/bot.py:4001 ccbot/keyboards.py:174
+#: ccbot/bot.py:4008 ccbot/keyboards.py:176
 msgid "🧠 Model"
 msgstr "🧠 Модель"
 
-#: ccbot/bot.py:4002
+#: ccbot/bot.py:4009
 msgid "◉ Reasoning effort"
 msgstr "◉ Рівень міркування"
 
-#: ccbot/bot.py:4005
+#: ccbot/bot.py:4012
 #, python-brace-format
 msgid ""
 "⚠️ Could not set {title} to <b>{label}</b>. Open 🖥 Screen and pick it by "
@@ -1571,7 +1575,7 @@ msgstr ""
 "⚠️ Не вдалося встановити {title} → <b>{label}</b>. Відкрий 🖥 Екран і "
 "вибери вручну."
 
-#: ccbot/bot.py:4019
+#: ccbot/bot.py:4026
 #, python-brace-format
 msgid ""
 "{title} of <b>{name}</b> → <b>{label}</b>?\n"
@@ -1581,7 +1585,7 @@ msgstr ""
 "Claude Code просить підтвердити перемикання — дайте відповідь на картці "
 "нижче."
 
-#: ccbot/bot.py:4029
+#: ccbot/bot.py:4036
 #, python-brace-format
 msgid ""
 "{title} of <b>{name}</b> → <b>{label}</b>\n"
@@ -1590,7 +1594,7 @@ msgstr ""
 "{title} у <b>{name}</b> → <b>{label}</b>\n"
 "Тільки для цієї сесії — нові сесії лишаються зі своїм типовим."
 
-#: ccbot/bot.py:4032
+#: ccbot/bot.py:4039
 #, python-brace-format
 msgid ""
 "{title} of <b>{name}</b> → <b>{label}</b>\n"
@@ -1599,51 +1603,51 @@ msgstr ""
 "{title} у <b>{name}</b> → <b>{label}</b>\n"
 "Збережено і як типове для нових сесій."
 
-#: ccbot/bot.py:4056
+#: ccbot/bot.py:4063
 msgid "Only this session"
 msgstr "Тільки ця сесія"
 
-#: ccbot/bot.py:4057
+#: ccbot/bot.py:4064
 msgid "This session and new ones"
 msgstr "Ця сесія і нові"
 
-#: ccbot/bot.py:4070
+#: ccbot/bot.py:4077
 msgid "That question has left the screen"
 msgstr "Цього питання на екрані вже немає"
 
-#: ccbot/bot.py:4074
+#: ccbot/bot.py:4081
 msgid "Tick at least one option first"
 msgstr "Спершу познач хоча б один пункт"
 
-#: ccbot/bot.py:4082
+#: ccbot/bot.py:4089
 #, python-brace-format
 msgid "⚠️ Could not press <b>{label}</b>. Open 🖥 Screen and press it by hand."
 msgstr "⚠️ Не вдалося натиснути <b>{label}</b>. Відкрий 🖥 Екран і натисни вручну."
 
-#: ccbot/bot.py:4092
+#: ccbot/bot.py:4099
 msgid "➡️ Moving on to the next question"
 msgstr "➡️ Переходжу до наступного питання"
 
-#: ccbot/bot.py:4097
+#: ccbot/bot.py:4104
 #, python-brace-format
 msgid "✅ Answer sent: <b>{picked}</b>"
 msgstr "✅ Відповідь надіслано: <b>{picked}</b>"
 
-#: ccbot/bot.py:4099
+#: ccbot/bot.py:4106
 msgid "✅ Answer sent"
 msgstr "✅ Відповідь надіслано"
 
-#: ccbot/bot.py:4115
+#: ccbot/bot.py:4122
 #, python-brace-format
 msgid "Write your own answer — it goes to <b>{name}</b>"
 msgstr "Напиши свій варіант відповіді — він піде в <b>{name}</b>"
 
-#: ccbot/bot.py:4124
+#: ccbot/bot.py:4131
 #, python-brace-format
 msgid "Picked {n}"
 msgstr "Обрано {n}"
 
-#: ccbot/bot.py:4133
+#: ccbot/bot.py:4140
 #, python-brace-format
 msgid ""
 "⚠️ Option <b>{n}</b> did not go through — the question is still open in "
@@ -1654,33 +1658,33 @@ msgstr ""
 " Кнопки працюють: натисніть ще раз або пройдіть список через ⬆️⬇️ і "
 "підтвердьте ✅."
 
-#: ccbot/bot.py:4147 ccbot/bot.py:4161 ccbot/bot.py:4173 ccbot/bot.py:4494
+#: ccbot/bot.py:4154 ccbot/bot.py:4168 ccbot/bot.py:4180 ccbot/bot.py:4501
 msgid "Session not found"
 msgstr "Сесію не знайдено"
 
-#: ccbot/bot.py:4163
+#: ccbot/bot.py:4170
 msgid "Moving it over…"
 msgstr "Переношу…"
 
-#: ccbot/bot.py:4166
+#: ccbot/bot.py:4173
 #, python-brace-format
 msgid "🔗 Moving <b>{name}</b> into tmux"
 msgstr "🔗 Переношу <b>{name}</b> у tmux"
 
-#: ccbot/bot.py:4175 ccbot/bot.py:5292
+#: ccbot/bot.py:4182 ccbot/bot.py:5313
 msgid "Ending it…"
 msgstr "Завершую…"
 
-#: ccbot/bot.py:4187
+#: ccbot/bot.py:4194
 msgid "🔁 Restarting anyway"
 msgstr "🔁 Перезапускаю все одно"
 
-#: ccbot/bot.py:4200 ccbot/bot.py:4204
+#: ccbot/bot.py:4207 ccbot/bot.py:4211
 #, python-brace-format
 msgid "📤 /{command} sent"
 msgstr "📤 /{command} надіслано"
 
-#: ccbot/bot.py:4226
+#: ccbot/bot.py:4233
 #, python-brace-format
 msgid ""
 "{title} for <b>{name}</b>\n"
@@ -1689,35 +1693,35 @@ msgstr ""
 "{title} для <b>{name}</b>\n"
 "Зараз: <code>{value}</code>"
 
-#: ccbot/bot.py:4227
+#: ccbot/bot.py:4234
 msgid "🔐 Permission mode"
 msgstr "🔐 Режим дозволів"
 
-#: ccbot/bot.py:4242
+#: ccbot/bot.py:4249
 msgid "Done"
 msgstr "Готово"
 
-#: ccbot/bot.py:4242
+#: ccbot/bot.py:4249
 msgid "Could not switch that"
 msgstr "Не вдалося перемкнути"
 
-#: ccbot/bot.py:4251
+#: ccbot/bot.py:4258
 msgid "Drawing…"
 msgstr "Малюю…"
 
-#: ccbot/bot.py:4256
+#: ccbot/bot.py:4263
 msgid "The diagram has left the screen"
 msgstr "Схеми на екрані вже немає"
 
-#: ccbot/bot.py:4270
+#: ccbot/bot.py:4277
 msgid "Selected"
 msgstr "Обрано"
 
-#: ccbot/bot.py:4283
+#: ccbot/bot.py:4290
 msgid "The bot was started by hand"
 msgstr "Бот запущений вручну"
 
-#: ccbot/bot.py:4337
+#: ccbot/bot.py:4344
 #, python-brace-format
 msgid ""
 "🌐 <b>Interface language</b>\n"
@@ -1728,50 +1732,50 @@ msgstr ""
 "\n"
 "Говорю: <b>{name}</b>"
 
-#: ccbot/bot.py:4340
+#: ccbot/bot.py:4347
 msgid "following your Telegram profile"
 msgstr "як у твоєму профілі Telegram"
 
-#: ccbot/bot.py:4364
+#: ccbot/bot.py:4371
 msgid "I do not know that language"
 msgstr "Я не знаю такої мови"
 
-#: ccbot/bot.py:4369
+#: ccbot/bot.py:4376
 #, python-brace-format
 msgid "Language: {name}"
 msgstr "Мова: {name}"
 
-#: ccbot/bot.py:4385
+#: ccbot/bot.py:4392
 #, python-brace-format
 msgid "📁 Working in <code>{path}</code>"
 msgstr "📁 Працює в <code>{path}</code>"
 
-#: ccbot/bot.py:4387
+#: ccbot/bot.py:4394
 #, python-brace-format
 msgid "🚀 Launched from <code>{path}</code>"
 msgstr "🚀 Запущена з <code>{path}</code>"
 
-#: ccbot/bot.py:4393 ccbot/bot.py:4604
+#: ccbot/bot.py:4400 ccbot/bot.py:4624
 #, python-brace-format
 msgid "📊 Status: <b>{status}</b>"
 msgstr "📊 Статус: <b>{status}</b>"
 
-#: ccbot/bot.py:4398
+#: ccbot/bot.py:4405
 #, python-brace-format
 msgid "🕘 Started: {when}"
 msgstr "🕘 Запущена: {when}"
 
 #. TRANSLATORS: strftime format — a date this year, plus the time.
-#: ccbot/bot.py:4399 ccbot/bot.py:4637 ccbot/sessions.py:248
+#: ccbot/bot.py:4406 ccbot/bot.py:4657 ccbot/sessions.py:248
 #, python-format
 msgid "%d.%m %H:%M"
 msgstr "%d.%m %H:%M"
 
-#: ccbot/bot.py:4404
+#: ccbot/bot.py:4411
 msgid "⚠️ This session belongs to your terminal — it cannot be driven from here."
 msgstr "⚠️ Це сесія з твого термінала — керувати нею звідси не можна."
 
-#: ccbot/bot.py:4407
+#: ccbot/bot.py:4414
 #, python-brace-format
 msgid ""
 "{button} sends the process a <b>termination signal</b> (SIGTERM) and "
@@ -1789,26 +1793,26 @@ msgstr ""
 "До stdin термінальної сесії ззовні не достукатись, тому коректний "
 "<code>/exit</code> тут неможливий — саме тому й потрібен сигнал."
 
-#: ccbot/bot.py:4417
+#: ccbot/bot.py:4424
 msgid ""
 "🔴 The session is <b>working</b> right now — better to wait until it "
 "finishes."
 msgstr "🔴 Зараз сесія <b>працює</b> — краще дочекатись, поки завершить."
 
-#: ccbot/bot.py:4430
+#: ccbot/bot.py:4437
 msgid "❌ Unknown PID — I cannot stop this one"
 msgstr "❌ Невідомий PID — зупинити не можу"
 
-#: ccbot/bot.py:4434
+#: ccbot/bot.py:4441
 #, python-brace-format
 msgid "⏳ Stopping {name} (PID {pid})…"
 msgstr "⏳ Зупиняю {name} (PID {pid})…"
 
-#: ccbot/bot.py:4440
+#: ccbot/bot.py:4447
 msgid "❌ Not allowed to stop that process"
 msgstr "❌ Немає прав зупинити цей процес"
 
-#: ccbot/bot.py:4448
+#: ccbot/bot.py:4455
 #, python-brace-format
 msgid ""
 "⚠️ Process {pid} did not exit within {seconds} s. End the session in the "
@@ -1817,16 +1821,16 @@ msgstr ""
 "⚠️ Процес {pid} не завершився за {seconds} с. Заверши сесію в терміналі і"
 " спробуй знову."
 
-#: ccbot/bot.py:4460
+#: ccbot/bot.py:4467
 #, python-brace-format
 msgid "✅ {name} stopped — bringing it up in tmux…"
 msgstr "✅ {name} зупинено — піднімаю в tmux…"
 
-#: ccbot/bot.py:4493
+#: ccbot/bot.py:4500
 msgid "That session is running again — open it in /sessions."
 msgstr "Ця сесія вже працює — відкрий її в /sessions."
 
-#: ccbot/bot.py:4525
+#: ccbot/bot.py:4532
 #, python-brace-format
 msgid ""
 "🕘 <b>Closed sessions</b> — resuming brings the context back.\n"
@@ -1835,7 +1839,7 @@ msgstr ""
 "🕘 <b>Завершені сесії</b> — відновлення повертає контекст.\n"
 "📁 <code>{path}</code>"
 
-#: ccbot/bot.py:4528 ccbot/bot.py:4567
+#: ccbot/bot.py:4535 ccbot/bot.py:4574
 #, python-brace-format
 msgid "{n} session"
 msgid_plural "{n} sessions"
@@ -1843,7 +1847,7 @@ msgstr[0] "{n} сесія"
 msgstr[1] "{n} сесії"
 msgstr[2] "{n} сесій"
 
-#: ccbot/bot.py:4530
+#: ccbot/bot.py:4537
 #, python-brace-format
 msgid ""
 "{count} · tap one for details — whether to resume it is decided there.\n"
@@ -1852,16 +1856,16 @@ msgstr ""
 "{count} · тап покаже деталі — продовжувати чи ні, вирішиш там.\n"
 "<i>час · тема · живі сесії — в /sessions</i>"
 
-#: ccbot/bot.py:4543
+#: ccbot/bot.py:4550
 msgid "Too short to search for — send at least two characters."
 msgstr "Закоротко для пошуку — надішли хоча б два символи."
 
-#: ccbot/bot.py:4547
+#: ccbot/bot.py:4554
 #, python-brace-format
 msgid "🔍 Looking for «{query}»…"
 msgstr "🔍 Шукаю «{query}»…"
 
-#: ccbot/bot.py:4557
+#: ccbot/bot.py:4564
 #, python-brace-format
 msgid ""
 "🔍 Nothing matches «{query}».\n"
@@ -1872,7 +1876,7 @@ msgstr ""
 "<i>Пошук іде по назвах, першому й останньому промпту завершених сесій — "
 "не по всій розмові.</i>"
 
-#: ccbot/bot.py:4571
+#: ccbot/bot.py:4578
 #, python-brace-format
 msgid ""
 "🔍 «{query}» — {count}.\n"
@@ -1881,11 +1885,11 @@ msgstr ""
 "🔍 «{query}» — {count}.\n"
 "<i>час · каталог · тема</i>"
 
-#: ccbot/bot.py:4581
+#: ccbot/bot.py:4588
 msgid "🕘 No closed sessions found in the project directories."
 msgstr "🕘 Завершених сесій у робочих каталогах не знайдено."
 
-#: ccbot/bot.py:4588
+#: ccbot/bot.py:4595
 #, python-brace-format
 msgid ""
 "🕘 <b>Closed sessions</b> — {total} in all, by directory.\n"
@@ -1894,7 +1898,7 @@ msgstr ""
 "🕘 <b>Завершені сесії</b> — усього {total}, по каталогах.\n"
 "Обери проєкт, щоб побачити його список."
 
-#: ccbot/bot.py:4615
+#: ccbot/bot.py:4635
 #, python-brace-format
 msgid ""
 "⬆️ Claude Code <code>{old}</code> — <code>{new}</code> is on disk; "
@@ -1903,7 +1907,7 @@ msgstr ""
 "⬆️ Claude Code <code>{old}</code> — на диску вже <code>{new}</code>; "
 "/update перезапустить сесію без втрати контексту."
 
-#: ccbot/bot.py:4622
+#: ccbot/bot.py:4642
 #, python-brace-format
 msgid "📈 Context: {pct}% ({tokens} token)"
 msgid_plural "📈 Context: {pct}% ({tokens} tokens)"
@@ -1911,51 +1915,51 @@ msgstr[0] "📈 Контекст: {pct}% ({tokens} токен)"
 msgstr[1] "📈 Контекст: {pct}% ({tokens} токени)"
 msgstr[2] "📈 Контекст: {pct}% ({tokens} токенів)"
 
-#: ccbot/bot.py:4627
+#: ccbot/bot.py:4647
 msgid "📈 Context: metrics appear after the first request"
 msgstr "📈 Контекст: метрики з'являться після першого запиту"
 
-#: ccbot/bot.py:4630 ccbot/util.py:143
+#: ccbot/bot.py:4650 ccbot/util.py:143
 #, python-brace-format
 msgid "resets {when}"
 msgstr "скидання {when}"
 
-#: ccbot/bot.py:4633
+#: ccbot/bot.py:4653
 #, python-brace-format
 msgid "💵 Session cost: ${amount}"
 msgstr "💵 Вартість сесії: ${amount}"
 
-#: ccbot/bot.py:4636
+#: ccbot/bot.py:4656
 #, python-brace-format
 msgid "🕘 Created: {when}"
 msgstr "🕘 Створена: {when}"
 
-#: ccbot/bot.py:4650
+#: ccbot/bot.py:4670
 #, python-brace-format
 msgid "🕘 Last active: {when}"
 msgstr "🕘 Остання активність: {when}"
 
-#: ccbot/bot.py:4652
+#: ccbot/bot.py:4672
 #, python-brace-format
 msgid "💬 It started with: {text}"
 msgstr "💬 Починалась з: {text}"
 
-#: ccbot/bot.py:4656
+#: ccbot/bot.py:4676
 #, python-brace-format
 msgid "⏹ It stopped on: {text}"
 msgstr "⏹ Зупинилась на: {text}"
 
-#: ccbot/bot.py:4660
+#: ccbot/bot.py:4680
 #, python-brace-format
 msgid "📦 Transcript: {size} MB"
 msgstr "📦 Транскрипт: {size} МБ"
 
-#: ccbot/bot.py:4663
+#: ccbot/bot.py:4683
 #, python-brace-format
 msgid "📦 Transcript: {size} KB"
 msgstr "📦 Транскрипт: {size} КБ"
 
-#: ccbot/bot.py:4666
+#: ccbot/bot.py:4686
 #, python-brace-format
 msgid ""
 "{button} runs <code>claude --resume</code> in a new tmux window — the "
@@ -1964,29 +1968,29 @@ msgstr ""
 "{button} запустить <code>claude --resume</code> у новому вікні tmux — "
 "сесія підхопить весь свій контекст."
 
-#: ccbot/bot.py:4668 ccbot/keyboards.py:131
+#: ccbot/bot.py:4688 ccbot/keyboards.py:133
 msgid "▶️ Resume"
 msgstr "▶️ Продовжити"
 
-#: ccbot/bot.py:4715
+#: ccbot/bot.py:4735
 #, python-brace-format
 msgid "▶️ Active session: <b>{name}</b>"
 msgstr "▶️ Активна сесія: <b>{name}</b>"
 
-#: ccbot/bot.py:4718
+#: ccbot/bot.py:4738
 #, python-brace-format
 msgid "Status: {status}"
 msgstr "Статус: {status}"
 
-#: ccbot/bot.py:4774
+#: ccbot/bot.py:4796
 msgid "It is already open — scroll down to its card"
 msgstr "Вже відкрито — прокрути до його картки"
 
-#: ccbot/bot.py:4802
+#: ccbot/bot.py:4824
 msgid "Asking Claude Code…"
 msgstr "Питаю Claude Code…"
 
-#: ccbot/bot.py:4808
+#: ccbot/bot.py:4830
 #, python-brace-format
 msgid ""
 "⏳ <b>{name}</b>: {reason}.\n"
@@ -1995,20 +1999,20 @@ msgstr ""
 "⏳ <b>{name}</b>: {reason}.\n"
 "Якщо бот помиляється щодо сесії — надішли /{command} все одно."
 
-#: ccbot/bot.py:4827 ccbot/bot.py:4830 ccbot/bot.py:4837
+#: ccbot/bot.py:4849 ccbot/bot.py:4852 ccbot/bot.py:4859
 msgid "It is working right now — press ⏸ Esc or wait"
 msgstr "Вона зараз працює — натисни ⏸ Esc або дочекайся"
 
-#: ccbot/bot.py:5051
+#: ccbot/bot.py:5073
 #, python-brace-format
 msgid "✏️ Answer sent to <b>{name}</b> · it is the active session now"
 msgstr "✏️ Відповідь надіслано в <b>{name}</b> · тепер це активна сесія"
 
-#: ccbot/bot.py:5154
+#: ccbot/bot.py:5176
 msgid "Question dropped"
 msgstr "Питання відхилено"
 
-#: ccbot/bot.py:5158
+#: ccbot/bot.py:5180
 #, python-brace-format
 msgid ""
 "💬 Question dropped in <b>{name}</b>. It is the active session now — write"
@@ -2017,118 +2021,118 @@ msgstr ""
 "💬 Питання відхилено в <b>{name}</b>. Тепер це активна сесія — напиши, що "
 "саме уточнити, і текст піде туди."
 
-#: ccbot/bot.py:5175
+#: ccbot/bot.py:5197
 #, python-brace-format
 msgid ""
 "⚠️ The question in <b>{name}</b> has already closed — the note was not "
 "sent."
 msgstr "⚠️ Питання в <b>{name}</b> уже закрите — нотатку не надіслано."
 
-#: ccbot/bot.py:5194
+#: ccbot/bot.py:5216
 #, python-brace-format
 msgid ""
 "⚠️ The note did not go through — the question is still open in "
 "<b>{name}</b>."
 msgstr "⚠️ Нотатка не пройшла — питання в <b>{name}</b> ще відкрите."
 
-#: ccbot/bot.py:5205
+#: ccbot/bot.py:5227
 #, python-brace-format
 msgid "📝 Note sent to <b>{name}</b> · it is the active session now"
 msgstr "📝 Нотатку надіслано в <b>{name}</b> · тепер це активна сесія"
 
-#: ccbot/bot.py:5231
+#: ccbot/bot.py:5253
 msgid "Esc sent"
 msgstr "Esc надіслано"
 
-#: ccbot/bot.py:5235
+#: ccbot/bot.py:5256
 msgid "It is not asking anything right now"
 msgstr "Сесія зараз нічого не питає"
 
-#: ccbot/bot.py:5238
+#: ccbot/bot.py:5259
 msgid "The question is below"
 msgstr "Питання — внизу чату"
 
-#: ccbot/bot.py:5240
+#: ccbot/bot.py:5261
 msgid "Taking a snapshot…"
 msgstr "Знімаю…"
 
-#: ccbot/bot.py:5257
+#: ccbot/bot.py:5278
 msgid "/context sent — the breakdown comes back as a screen"
 msgstr "/context надіслано — розкладка прийде екраном"
 
-#: ccbot/bot.py:5274
+#: ccbot/bot.py:5295
 msgid "/compact sent — the result comes back as a screen when it finishes"
 msgstr "/compact надіслано — екран із результатом прийде після стискання"
 
-#: ccbot/bot.py:5281
+#: ccbot/bot.py:5302
 msgid "/clear sent"
 msgstr "/clear надіслано"
 
-#: ccbot/bot.py:5311
+#: ccbot/bot.py:5332
 msgid "Session list and controls"
 msgstr "Список сесій і керування"
 
-#: ccbot/bot.py:5312
+#: ccbot/bot.py:5333
 msgid "Controls of the session you are talking to"
 msgstr "Керування сесією, з якою ти говориш"
 
-#: ccbot/bot.py:5313
+#: ccbot/bot.py:5334
 msgid "New session in a chosen directory"
 msgstr "Нова сесія у вибраному каталозі"
 
-#: ccbot/bot.py:5314
+#: ccbot/bot.py:5335
 msgid "Quota and context, without asking Claude"
 msgstr "Витрата лімітів і контекст, не питаючи Claude"
 
-#: ccbot/bot.py:5315
+#: ccbot/bot.py:5336
 msgid "Snapshot of the active session's terminal"
 msgstr "Знімок термінала активної сесії"
 
-#: ccbot/bot.py:5316
+#: ccbot/bot.py:5337
 msgid "Interrupt what Claude is doing"
 msgstr "Перервати те, що Claude зараз робить"
 
-#: ccbot/bot.py:5317
+#: ccbot/bot.py:5338
 msgid "Clear the active session's context"
 msgstr "Очистити контекст активної сесії"
 
-#: ccbot/bot.py:5318
+#: ccbot/bot.py:5339
 msgid "Give a session your own name"
 msgstr "Перейменувати сесію"
 
-#: ccbot/bot.py:5319
+#: ccbot/bot.py:5340
 msgid "End the active session cleanly"
 msgstr "Завершити активну сесію коректно"
 
-#: ccbot/bot.py:5320
+#: ccbot/bot.py:5341
 msgid "Project directories for new sessions"
 msgstr "Робочі каталоги для нових сесій"
 
-#: ccbot/bot.py:5321
+#: ccbot/bot.py:5342
 msgid "Interface language"
 msgstr "Мова інтерфейсу"
 
-#: ccbot/bot.py:5322
+#: ccbot/bot.py:5343
 msgid "Last entries from the bot's journal"
 msgstr "Останні записи журналу бота"
 
-#: ccbot/bot.py:5323
+#: ccbot/bot.py:5344
 msgid "Claude Code version and session restarts"
 msgstr "Версія Claude Code і перезапуск сесій"
 
-#: ccbot/bot.py:5324
+#: ccbot/bot.py:5345
 msgid "Log Claude in to another account"
 msgstr "Увійти в Claude іншим акаунтом"
 
-#: ccbot/bot.py:5325
+#: ccbot/bot.py:5346
 msgid "Bot state: uptime, version, restart"
 msgstr "Стан бота: аптайм, версія, перезапуск"
 
-#: ccbot/bot.py:5326
+#: ccbot/bot.py:5347
 msgid "Help"
 msgstr "Довідка"
 
-#: ccbot/bot.py:5394
+#: ccbot/bot.py:5415
 #, python-brace-format
 msgid ""
 "✅ The bot is back — the restart took {duration}.\n"
@@ -2137,7 +2141,7 @@ msgstr ""
 "✅ Бот знову тут — перезапуск зайняв {duration}.\n"
 "Код: <code>{version}</code>"
 
-#: ccbot/bot.py:5404
+#: ccbot/bot.py:5425
 msgid ""
 "⚠️ I could not find the <code>claude</code> executable. Lists of live "
 "sessions will be empty.\n"
@@ -2151,107 +2155,107 @@ msgstr ""
 msgid "──── 🖥 in tmux ────"
 msgstr "──── 🖥 у tmux ────"
 
-#: ccbot/keyboards.py:92 ccbot/keyboards.py:104 ccbot/keyboards.py:415
+#: ccbot/keyboards.py:92 ccbot/keyboards.py:106 ccbot/keyboards.py:417
 msgid "waiting"
 msgstr "чекає"
 
-#: ccbot/keyboards.py:101
+#: ccbot/keyboards.py:103
 msgid "──── 🔗 in your terminal ────"
 msgstr "──── 🔗 у терміналі ────"
 
-#: ccbot/keyboards.py:114
+#: ccbot/keyboards.py:116
 #, python-brace-format
 msgid "🔌 Restore stopped sessions ({count})"
 msgstr "🔌 Відновити зупинені сесії ({count})"
 
-#: ccbot/keyboards.py:120
+#: ccbot/keyboards.py:122
 msgid "🔄 Refresh"
 msgstr "🔄 Оновити"
 
-#: ccbot/keyboards.py:132 ccbot/keyboards.py:141 ccbot/keyboards.py:147
-#: ccbot/keyboards.py:197 ccbot/keyboards.py:423
+#: ccbot/keyboards.py:134 ccbot/keyboards.py:143 ccbot/keyboards.py:149
+#: ccbot/keyboards.py:199 ccbot/keyboards.py:425
 msgid "⬅️ Back"
 msgstr "⬅️ Назад"
 
-#: ccbot/keyboards.py:139 ccbot/keyboards.py:145 ccbot/keyboards.py:181
+#: ccbot/keyboards.py:141 ccbot/keyboards.py:147 ccbot/keyboards.py:183
 msgid "🚪 End"
 msgstr "🚪 Завершити"
 
-#: ccbot/keyboards.py:144
+#: ccbot/keyboards.py:146
 msgid "▶️ Open"
 msgstr "▶️ Відкрити"
 
-#: ccbot/keyboards.py:157
+#: ccbot/keyboards.py:159
 msgid "🔔 Show the question"
 msgstr "🔔 Показати питання"
 
-#: ccbot/keyboards.py:161 ccbot/keyboards.py:255 ccbot/keyboards.py:272
-#: ccbot/keyboards.py:372 ccbot/keyboards.py:486 ccbot/keyboards.py:509
+#: ccbot/keyboards.py:163 ccbot/keyboards.py:257 ccbot/keyboards.py:274
+#: ccbot/keyboards.py:374 ccbot/keyboards.py:488 ccbot/keyboards.py:511
 msgid "🖥 Screen"
 msgstr "🖥 Екран"
 
-#: ccbot/keyboards.py:162
+#: ccbot/keyboards.py:164
 msgid "📊 Limits"
 msgstr "📊 Ліміти"
 
-#: ccbot/keyboards.py:171
+#: ccbot/keyboards.py:173
 msgid "🔁 Restart"
 msgstr "🔁 Перезапустити"
 
-#: ccbot/keyboards.py:175
+#: ccbot/keyboards.py:177
 msgid "◉ Effort"
 msgstr "◉ Роздуми"
 
-#: ccbot/keyboards.py:176
+#: ccbot/keyboards.py:178
 msgid "🔐 Mode"
 msgstr "🔐 Режим"
 
-#: ccbot/keyboards.py:179
+#: ccbot/keyboards.py:181
 msgid "✏️ Rename"
 msgstr "✏️ Назва"
 
-#: ccbot/keyboards.py:180
+#: ccbot/keyboards.py:182
 msgid "🔑 Other account"
 msgstr "🔑 Інший акаунт"
 
-#: ccbot/keyboards.py:183 ccbot/keyboards.py:564 ccbot/keyboards.py:694
-#: ccbot/keyboards.py:729 ccbot/keyboards.py:763 ccbot/keyboards.py:805
-#: ccbot/keyboards.py:832 ccbot/keyboards.py:845
+#: ccbot/keyboards.py:185 ccbot/keyboards.py:566 ccbot/keyboards.py:696
+#: ccbot/keyboards.py:731 ccbot/keyboards.py:765 ccbot/keyboards.py:807
+#: ccbot/keyboards.py:834 ccbot/keyboards.py:847
 msgid "⬅️ Sessions"
 msgstr "⬅️ До списку"
 
-#: ccbot/keyboards.py:212
+#: ccbot/keyboards.py:214
 msgid "✅ this session"
 msgstr "✅ ця сесія"
 
-#: ccbot/keyboards.py:212
+#: ccbot/keyboards.py:214
 msgid "this session"
 msgstr "ця сесія"
 
-#: ccbot/keyboards.py:215
+#: ccbot/keyboards.py:217
 msgid "✅ + new sessions"
 msgstr "✅ + нові сесії"
 
-#: ccbot/keyboards.py:215
+#: ccbot/keyboards.py:217
 msgid "+ new sessions"
 msgstr "+ нові сесії"
 
-#: ccbot/keyboards.py:254
+#: ccbot/keyboards.py:256
 msgid "✖️ Cancel"
 msgstr "✖️ Скасувати"
 
 #. TRANSLATORS: a multi-part question — this moves to its next part.
-#: ccbot/keyboards.py:333
+#: ccbot/keyboards.py:335
 #, python-brace-format
 msgid "➡️ Next question ({n} ticked)"
 msgstr "➡️ Далі (позначено: {n})"
 
-#: ccbot/keyboards.py:334
+#: ccbot/keyboards.py:336
 msgid "➡️ Next question"
 msgstr "➡️ Далі"
 
 #. TRANSLATORS: sends the ticked options of a multi-select question.
-#: ccbot/keyboards.py:337
+#: ccbot/keyboards.py:339
 #, python-brace-format
 msgid "✅ Send {n} choice"
 msgid_plural "✅ Send {n} choices"
@@ -2259,186 +2263,186 @@ msgstr[0] "✅ Надіслати {n} пункт"
 msgstr[1] "✅ Надіслати {n} пункти"
 msgstr[2] "✅ Надіслати {n} пунктів"
 
-#: ccbot/keyboards.py:338
+#: ccbot/keyboards.py:340
 msgid "✅ Send answer"
 msgstr "✅ Надіслати відповідь"
 
 #. TRANSLATORS: answers a question with a note of one's own instead
 #. of one of its options ("n to add notes" in the terminal).
-#: ccbot/keyboards.py:351
+#: ccbot/keyboards.py:353
 msgid "📝 Answer with a note"
 msgstr "📝 Відповісти нотаткою"
 
-#: ccbot/keyboards.py:356
+#: ccbot/keyboards.py:358
 msgid "⬅️ Previous part"
 msgstr "⬅️ Попередня частина"
 
-#: ccbot/keyboards.py:358
+#: ccbot/keyboards.py:360
 msgid "Next part ➡️"
 msgstr "Наступна частина ➡️"
 
-#: ccbot/keyboards.py:366 ccbot/keyboards.py:482
+#: ccbot/keyboards.py:368 ccbot/keyboards.py:484
 msgid "✅ Select"
 msgstr "✅ Обрати"
 
-#: ccbot/keyboards.py:371 ccbot/watcher.py:1612
+#: ccbot/keyboards.py:373 ccbot/watcher.py:1594
 msgid "🖼 Diagram"
 msgstr "🖼 Схема"
 
-#: ccbot/keyboards.py:391
+#: ccbot/keyboards.py:393
 msgid "📋 Another session"
 msgstr "📋 Інша сесія"
 
-#: ccbot/keyboards.py:393 ccbot/keyboards.py:426
+#: ccbot/keyboards.py:395 ccbot/keyboards.py:428
 msgid "🗑 Discard"
 msgstr "🗑 Відкинути"
 
-#: ccbot/keyboards.py:443
+#: ccbot/keyboards.py:445
 #, python-brace-format
 msgid "↩️ Restore all ({count})"
 msgstr "↩️ Відновити всі ({count})"
 
-#: ccbot/keyboards.py:451
+#: ccbot/keyboards.py:453
 msgid "🗑 Forget them"
 msgstr "🗑 Забути їх"
 
-#: ccbot/keyboards.py:464
+#: ccbot/keyboards.py:466
 msgid "🎛 Session controls"
 msgstr "🎛 Керування сесією"
 
-#: ccbot/keyboards.py:499
+#: ccbot/keyboards.py:501
 msgid "📋 Copy again"
 msgstr "📋 Скопіювати ще раз"
 
-#: ccbot/keyboards.py:503
+#: ccbot/keyboards.py:505
 msgid "⬅️ Earlier"
 msgstr "⬅️ Попередня"
 
-#: ccbot/keyboards.py:505
+#: ccbot/keyboards.py:507
 msgid "Later ➡️"
 msgstr "Наступна ➡️"
 
-#: ccbot/keyboards.py:508
+#: ccbot/keyboards.py:510
 msgid "✖️ Close"
 msgstr "✖️ Закрити"
 
-#: ccbot/keyboards.py:515
+#: ccbot/keyboards.py:517
 msgid "✖️ Cancel the login"
 msgstr "✖️ Скасувати вхід"
 
-#: ccbot/keyboards.py:534
+#: ccbot/keyboards.py:536
 msgid "🔑 Open the sign-in page"
 msgstr "🔑 Відкрити сторінку входу"
 
-#: ccbot/keyboards.py:542
+#: ccbot/keyboards.py:544
 msgid "🔁 Try again with a new link"
 msgstr "🔁 Ще раз, з новим посиланням"
 
-#: ccbot/keyboards.py:550
+#: ccbot/keyboards.py:552
 msgid "⏎ Continue"
 msgstr "⏎ Продовжити"
 
-#: ccbot/keyboards.py:560
+#: ccbot/keyboards.py:562
 msgid "🔄 Restart the bot"
 msgstr "🔄 Перезапустити бота"
 
-#: ccbot/keyboards.py:563 ccbot/keyboards.py:693
+#: ccbot/keyboards.py:565 ccbot/keyboards.py:695
 msgid "♻️ Refresh"
 msgstr "♻️ Оновити"
 
-#: ccbot/keyboards.py:580
+#: ccbot/keyboards.py:582
 msgid "✏️ This answers the question"
 msgstr "✏️ Це відповідь на питання"
 
-#: ccbot/keyboards.py:583
+#: ccbot/keyboards.py:585
 msgid "💬 Close the question and send"
 msgstr "💬 Закрити питання й надіслати"
 
-#: ccbot/keyboards.py:585
+#: ccbot/keyboards.py:587
 msgid "⏳ Send after the answer"
 msgstr "⏳ Надіслати після відповіді"
 
-#: ccbot/keyboards.py:587 ccbot/keyboards.py:595
+#: ccbot/keyboards.py:589 ccbot/keyboards.py:597
 msgid "🗑 Don't send"
 msgstr "🗑 Не надсилати"
 
-#: ccbot/keyboards.py:609
+#: ccbot/keyboards.py:611
 #, python-brace-format
 msgid "📤 Send /{command} anyway"
 msgstr "📤 Надіслати /{command} все одно"
 
-#: ccbot/keyboards.py:625 ccbot/keyboards.py:685
+#: ccbot/keyboards.py:627 ccbot/keyboards.py:687
 #, python-brace-format
 msgid "🔁 Restart anyway: {name}"
 msgstr "🔁 Перезапустити все одно: {name}"
 
-#: ccbot/keyboards.py:627
+#: ccbot/keyboards.py:629
 msgid "🔁 Restart anyway — cancels the automatic continuation"
 msgstr "🔁 Перезапустити все одно — автопродовження скасується"
 
-#: ccbot/keyboards.py:629
+#: ccbot/keyboards.py:631
 msgid "🔁 Restart anyway — stops the background tasks"
 msgstr "🔁 Перезапустити все одно — фонові завдання зупиняться"
 
-#: ccbot/keyboards.py:656 ccbot/keyboards.py:711 ccbot/keyboards.py:740
+#: ccbot/keyboards.py:658 ccbot/keyboards.py:713 ccbot/keyboards.py:742
 msgid "⬅️ Cancel"
 msgstr "⬅️ Скасувати"
 
-#: ccbot/keyboards.py:675
+#: ccbot/keyboards.py:677
 msgid "⬆️ Restart this session"
 msgstr "⬆️ Перезапустити цю сесію"
 
-#: ccbot/keyboards.py:681
+#: ccbot/keyboards.py:683
 #, python-brace-format
 msgid "⬆️ Restart all idle ({count})"
 msgstr "⬆️ Перезапустити всі вільні ({count})"
 
-#: ccbot/keyboards.py:688
+#: ccbot/keyboards.py:690
 msgid "🆕 What's new"
 msgstr "🆕 Що нового"
 
-#: ccbot/keyboards.py:689
+#: ccbot/keyboards.py:691
 msgid "🔄 Check for updates"
 msgstr "🔄 Перевірити оновлення"
 
-#: ccbot/keyboards.py:702
+#: ccbot/keyboards.py:704
 msgid "⬆️ Update sessions"
 msgstr "⬆️ Оновити сесії"
 
-#: ccbot/keyboards.py:710
+#: ccbot/keyboards.py:712
 msgid "✅ Yes, restart"
 msgstr "✅ Так, перезапустити"
 
-#: ccbot/keyboards.py:725
+#: ccbot/keyboards.py:727
 msgid "➕ Add a directory"
 msgstr "➕ Додати каталог"
 
-#: ccbot/keyboards.py:727
+#: ccbot/keyboards.py:729
 msgid "🔄 Reset to autodiscovery"
 msgstr "🔄 Скинути до автовизначення"
 
-#: ccbot/keyboards.py:756
+#: ccbot/keyboards.py:758
 msgid "🌐 Same as Telegram"
 msgstr "🌐 Як у Telegram"
 
-#: ccbot/keyboards.py:794 ccbot/keyboards.py:823
+#: ccbot/keyboards.py:796 ccbot/keyboards.py:825
 #, python-brace-format
 msgid "page {page} of {pages}"
 msgstr "стор. {page} з {pages}"
 
-#: ccbot/keyboards.py:801 ccbot/keyboards.py:844
+#: ccbot/keyboards.py:803 ccbot/keyboards.py:846
 msgid "🔍 Find"
 msgstr "🔍 Знайти"
 
-#: ccbot/keyboards.py:802
+#: ccbot/keyboards.py:804
 msgid "📁 Another directory"
 msgstr "📁 Інший каталог"
 
-#: ccbot/keyboards.py:829
+#: ccbot/keyboards.py:831
 msgid "🔍 Search again"
 msgstr "🔍 Шукати ще"
 
-#: ccbot/keyboards.py:830
+#: ccbot/keyboards.py:832
 msgid "📁 Directories"
 msgstr "📁 Каталоги"
 
@@ -2781,7 +2785,7 @@ msgstr[2] ""
 msgid "⏱ Unanswered, Claude Code blocks this request itself at {time}."
 msgstr "⏱ Якщо не відповісти, Claude Code сам заблокує цей запит о {time}."
 
-#: ccbot/watcher.py:490
+#: ccbot/watcher.py:508
 #, python-brace-format
 msgid ""
 "⚠️ <b>The session watcher has crashed</b>\n"
@@ -2798,11 +2802,11 @@ msgstr ""
 "все одно долітають до сесії. Подробиці — /log, лікується зазвичай через "
 "/restart."
 
-#: ccbot/watcher.py:505
+#: ccbot/watcher.py:523
 msgid "✅ The watcher is back — following the sessions again."
 msgstr "✅ Спостерігач знову працює — стежу за сесіями далі."
 
-#: ccbot/watcher.py:539
+#: ccbot/watcher.py:557
 #, python-brace-format
 msgid ""
 "🧹 <b>{name}</b>: context cleared — the session was given a new id, and I "
@@ -2811,12 +2815,12 @@ msgstr ""
 "🧹 <b>{name}</b>: контекст очищено — сесія отримала новий id, стежу далі "
 "за нею."
 
-#: ccbot/watcher.py:568
+#: ccbot/watcher.py:586
 #, python-brace-format
 msgid "⬆️ <b>Claude Code {version} is on disk</b>"
 msgstr "⬆️ <b>На диску Claude Code {version}</b>"
 
-#: ccbot/watcher.py:571
+#: ccbot/watcher.py:589
 #, python-brace-format
 msgid ""
 "{count} session is still running an older build — a session only picks a "
@@ -2834,7 +2838,7 @@ msgstr[2] ""
 "{count} сесій досі працюють на старішій збірці — нову сесія підхоплює "
 "лише тоді, коли її запускають знову."
 
-#: ccbot/watcher.py:576
+#: ccbot/watcher.py:594
 msgid ""
 "A restart keeps the context: the same session id, the same transcript, "
 "the same history. /update"
@@ -2842,28 +2846,28 @@ msgstr ""
 "Перезапуск зберігає контекст: той самий id сесії, той самий транскрипт, "
 "та сама історія. /update"
 
-#: ccbot/watcher.py:669
+#: ccbot/watcher.py:687
 #, python-brace-format
 msgid "💀 Session {name} is gone (its tmux window was closed)."
 msgstr "💀 Сесія {name} зникла (вікно tmux закрито)."
 
-#: ccbot/watcher.py:926
+#: ccbot/watcher.py:896
 msgid "⬇️ Shown again below"
 msgstr "⬇️ Показано ще раз нижче"
 
-#: ccbot/watcher.py:1032
+#: ccbot/watcher.py:1002
 #, python-brace-format
 msgid "🗨 Side question (/btw): {question}"
 msgstr "🗨 Бічне питання (/btw): {question}"
 
-#: ccbot/watcher.py:1060
+#: ccbot/watcher.py:1030
 #, python-brace-format
 msgid ""
 "⚠️ {name} shows a /btw answer, and I could not copy it. Here is the "
 "screen:"
 msgstr "⚠️ {name} показує відповідь /btw, але скопіювати її не вдалося. Ось екран:"
 
-#: ccbot/watcher.py:1062
+#: ccbot/watcher.py:1032
 msgid ""
 "📋 tries the copy again, ⬆️⬇️ scroll the answer, ✖️ Close dismisses it, 🖥 "
 "sends a fresh screen."
@@ -2871,12 +2875,12 @@ msgstr ""
 "📋 пробує скопіювати ще раз, ⬆️⬇️ гортають відповідь, ✖️ Закрити прибирає "
 "її, 🖥 надсилає свіжий екран."
 
-#: ccbot/watcher.py:1134
+#: ccbot/watcher.py:1104
 #, python-brace-format
 msgid "🔑 <b>{name}</b>: Claude asks how to log in."
 msgstr "🔑 <b>{name}</b>: Claude питає, як увійти."
 
-#: ccbot/watcher.py:1137
+#: ccbot/watcher.py:1107
 #, python-brace-format
 msgid ""
 "🔑 <b>{name}</b>: sign in to Claude.\n"
@@ -2894,39 +2898,39 @@ msgstr ""
 "#.\n"
 "3. Надішліть його сюди повідомленням, і я його введу."
 
-#: ccbot/watcher.py:1145
+#: ccbot/watcher.py:1115
 #, python-brace-format
 msgid "❌ <b>{name}</b>: Claude did not accept the code."
 msgstr "❌ <b>{name}</b>: Claude не прийняв код."
 
-#: ccbot/watcher.py:1148
+#: ccbot/watcher.py:1118
 #, python-brace-format
 msgid "⚠️ <b>{name}</b>: the login worked, with a warning."
 msgstr "⚠️ <b>{name}</b>: вхід вдався, але з попередженням."
 
-#: ccbot/watcher.py:1160
+#: ccbot/watcher.py:1130
 msgid "▶️ Method chosen"
 msgstr "▶️ Спосіб вибрано"
 
-#: ccbot/watcher.py:1162
+#: ccbot/watcher.py:1132
 msgid "⏹ This link was replaced"
 msgstr "⏹ Це посилання замінено"
 
-#: ccbot/watcher.py:1164
+#: ccbot/watcher.py:1134
 msgid "🔑 Code entered"
 msgstr "🔑 Код введено"
 
-#: ccbot/watcher.py:1209
+#: ccbot/watcher.py:1179
 #, python-brace-format
 msgid "✅ <b>{name}</b>: logged in as <b>{email}</b>."
 msgstr "✅ <b>{name}</b>: вхід виконано як <b>{email}</b>."
 
-#: ccbot/watcher.py:1212
+#: ccbot/watcher.py:1182
 #, python-brace-format
 msgid "✅ <b>{name}</b>: logged in."
 msgstr "✅ <b>{name}</b>: вхід виконано."
 
-#: ccbot/watcher.py:1214
+#: ccbot/watcher.py:1184
 msgid ""
 "The other sessions switch to this account with their next request — none "
 "of them needs a restart."
@@ -2934,14 +2938,14 @@ msgstr ""
 "Інші сесії перейдуть на цей акаунт зі своїм наступним запитом — "
 "перезапускати жодну не треба."
 
-#: ccbot/watcher.py:1325
+#: ccbot/watcher.py:1307
 #, python-brace-format
 msgid ""
 "⚠️ {name} is waiting for an answer, but I did not recognise the question."
 " Here is the screen:"
 msgstr "⚠️ {name} чекає на відповідь, але я не розпізнав питання. Ось екран:"
 
-#: ccbot/watcher.py:1330
+#: ccbot/watcher.py:1312
 msgid ""
 "The buttons below work without understanding it: digits pick an option, "
 "the arrows walk the list, Esc backs out. 🖥 sends a fresh screen."
@@ -2949,12 +2953,12 @@ msgstr ""
 "Кнопки нижче працюють і без розбору: цифри обирають пункт, стрілки "
 "гортають, Esc скасовує. 🖥 надішле свіжий екран."
 
-#: ccbot/watcher.py:1404
+#: ccbot/watcher.py:1386
 msgid "⏱ Blocked by Claude Code: no answer in time"
 msgstr "⏱ Claude Code заблокував сам: відповіді не було"
 
 #. TRANSLATORS: the row of two buttons under a settings dialog.
-#: ccbot/watcher.py:1498 ccbot/watcher.py:1541
+#: ccbot/watcher.py:1480 ccbot/watcher.py:1523
 msgid ""
 "A button applies the choice. The switch under the list decides whether "
 "new sessions get it as their default too."
@@ -2963,7 +2967,7 @@ msgstr ""
 "він новим сесіям як типовий."
 
 #. TRANSLATORS: how a multi-select question is answered from a chat.
-#: ccbot/watcher.py:1503 ccbot/watcher.py:1547
+#: ccbot/watcher.py:1485 ccbot/watcher.py:1529
 msgid ""
 "The numbered buttons only tick boxes — nothing goes to Claude until the "
 "button under them."
@@ -2971,20 +2975,20 @@ msgstr ""
 "Кнопки з цифрами лише ставлять позначки — до Клода нічого не піде, поки "
 "не натиснеш кнопку під ними."
 
-#: ccbot/watcher.py:1508 ccbot/watcher.py:1551
+#: ccbot/watcher.py:1490 ccbot/watcher.py:1533
 #, python-brace-format
 msgid "🖼 Diagram for option {n}:"
 msgstr "🖼 Схема варіанта {n}:"
 
-#: ccbot/watcher.py:1509 ccbot/watcher.py:1552
+#: ccbot/watcher.py:1491 ccbot/watcher.py:1534
 msgid "🖼 Diagram:"
 msgstr "🖼 Схема:"
 
-#: ccbot/watcher.py:1556
+#: ccbot/watcher.py:1538
 msgid "🖼 The diagram is wider than the screen — sent as a picture"
 msgstr "🖼 Схема ширша за екран — надіслана картинкою"
 
-#: ccbot/watcher.py:1611
+#: ccbot/watcher.py:1593
 #, python-brace-format
 msgid "🖼 Diagram for option {n}"
 msgstr "🖼 Схема варіанта {n}"

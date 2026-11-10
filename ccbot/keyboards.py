@@ -94,7 +94,9 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
         mark = ACTIVE_ICON if v.session_id == active else icon
         kb.row(InlineKeyboardButton(
             text=_fit(f"{mark} {v.dir_name} · {label}", hint),
-            callback_data=f"s:{sid8(v.session_id)}",
+            # ":l" — picked from the list, which also reposts a standing
+            # question (`CCBot._show_question`); the Back buttons do not.
+            callback_data=f"s:{sid8(v.session_id)}:l",
         ))
     if foreign:
         kb.row(InlineKeyboardButton(
@@ -153,7 +155,7 @@ def session_kb(v: SessionView, asking: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if asking:
         # The session waits on a question whose card may be far up the chat
-        # by now; this sends it again at the bottom (`Watcher.repost_question`).
+        # by now; this sends it again at the bottom (`CCBot._show_question`).
         kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
                                     callback_data=f"k:{s}:ask"))
     kb.row(

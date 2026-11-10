@@ -3794,14 +3794,21 @@ class CCBot:
             return
 
         if data.startswith("s:"):
-            mgd = self._resolve(data[2:])
+            short, _sep, src = data[2:].partition(":")
+            mgd = self._resolve(short)
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
             await c.answer()
+            # A session picked from the list while it waits on a choice gets
+            # its question posted at the bottom too: that card is usually why
+            # the session was looked up, and it may be far up the chat.
+            text = await self._managed_details(mgd)
+            if src == "l" and self._show_question(mgd):
+                text += "\n\n" + _("🔔 It is waiting for your choice — the "
+                                    "question is posted below.")
             await self._safe_edit(
-                msg,
-                await self._managed_details(mgd), parse_mode="HTML",
+                msg, text, parse_mode="HTML",
                 reply_markup=confirm_kb(mgd.session_id, "managed"),
             )
             return
@@ -4590,6 +4597,19 @@ class CCBot:
             parse_mode="HTML", reply_markup=history_dirs_kb(dirs),
         )
 
+    def _show_question(self, mgd) -> bool:
+        """Have the card this session waits on posted again at the bottom.
+
+        False when no card stands, i.e. the session is not waiting on a
+        choice. The login card keeps its buttons (they are guarded by its
+        step); a question or a screen moves, see `Watcher.request_repost`.
+        """
+        rt = self.watcher.runtimes.get(mgd.session_id)
+        if rt is not None and rt.login_msg_id is not None:
+            self.watcher.repost_login(mgd.session_id)
+            return True
+        return self.watcher.request_repost(mgd.session_id)
+
     async def _managed_details(self, mgd) -> str:
         views = await sess.managed_views(self.store)
         view = next((v for v in views if v.session_id == mgd.session_id), None)
@@ -5232,12 +5252,7 @@ class CCBot:
             await tmux.send_keys(mgd.window_id, "Escape")
             await c.answer(_("Esc sent"))
         elif action == "ask":
-            # The login card keeps its buttons (they are guarded by its step);
-            # a question or a screen moves, see `Watcher.request_repost`.
-            rt = self.watcher.runtimes.get(mgd.session_id)
-            if rt is not None and rt.login_msg_id is not None:
-                self.watcher.repost_login(mgd.session_id)
-            elif not self.watcher.request_repost(mgd.session_id):
+            if not self._show_question(mgd):
                 await c.answer(_("It is not asking anything right now"),
                                show_alert=True)
                 return

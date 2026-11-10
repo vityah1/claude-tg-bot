@@ -324,7 +324,10 @@ is still alive, too. That is why rows are read tolerantly
   bottom and trades the old one's buttons for «⬇️ Shown again below». The tick
   is the one writer of the card ids: a send from the handler raced the tick's
   own and left two live cards for one question. A login card goes through
-  `repost_login` and keeps its buttons (guarded by its step).
+  `repost_login` and keeps its buttons (guarded by its step). Picking a
+  waiting session from `/sessions` does the same by itself
+  (`CCBot._show_question`): the list row sends `s:<sid8>:l`, while the
+  Back/Cancel buttons send a bare `s:<sid8>` and repost nothing.
 - 🔴 **A launch ends on the session's own card, never on a bare line.**
   Every way into a session — ➕ new, ▶️ resume from 🕘 history or a search,
   a restore — goes through `_create`, and `_create` answers with
