@@ -4722,7 +4722,12 @@ class CCBot:
         await account.fill([view])
         if view.account:
             text += "\n" + account_line(view.account)
-        return text, session_kb(view)
+        # Only when a card stands to be shown again (`_show_question`): the
+        # agent list's "waiting" also covers a /btw overlay and lags an answer.
+        rt = self.watcher.runtimes.get(mgd.session_id)
+        asking = rt is not None and any((
+            rt.dialog_msg_id, rt.blocked_msg_id, rt.login_msg_id))
+        return text, session_kb(view, asking)
 
     async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
         msg = _editable(c)
@@ -5226,6 +5231,17 @@ class CCBot:
             self._typed(mgd)
             await tmux.send_keys(mgd.window_id, "Escape")
             await c.answer(_("Esc sent"))
+        elif action == "ask":
+            # The login card keeps its buttons (they are guarded by its step);
+            # a question or a screen moves, see `Watcher.request_repost`.
+            rt = self.watcher.runtimes.get(mgd.session_id)
+            if rt is not None and rt.login_msg_id is not None:
+                self.watcher.repost_login(mgd.session_id)
+            elif not self.watcher.request_repost(mgd.session_id):
+                await c.answer(_("It is not asking anything right now"),
+                               show_alert=True)
+                return
+            await c.answer(_("The question is below"))
         elif action == "screen":
             await c.answer(_("Taking a snapshot…"))
             await self.watcher.send_screen(mgd.window_id, mgd.full_label, mgd.session_id)

@@ -266,6 +266,9 @@ class SessionRuntime:
         self.login_msg_id: int | None = None
         self.login_seen: str | None = None
         self.login_other_since = 0.0
+        # The chat asked for the standing card again (🔔 on the session
+        # card); the next tick posts it at the bottom.
+        self.repost = False
 
     def track_queue(self, op: str, kind: str) -> None:
         """Follow one queue-operation record of the transcript."""
@@ -419,6 +422,21 @@ class Watcher:
             rt.last_dialog_sig = None
             rt.last_dialog_state = None
             rt.dialog_msg_id = None
+
+    def request_repost(self, session_id: str) -> bool:
+        """Ask the next tick to post this session's open card again.
+
+        With many sessions talking at once a question card ends up far up the
+        history, and the session sits waiting on a button nobody can find.
+        The tick does the posting, not the caller: it is the one writer of
+        the card ids, and a send from the handler racing a tick's own send
+        left two live cards for one question. False: no card stands.
+        """
+        rt = self.runtimes.get(session_id)
+        if rt is None or (rt.dialog_msg_id is None and rt.blocked_msg_id is None):
+            return False
+        rt.repost = True
+        return True
 
     def release_dialog(self, session_id: str) -> None:
         """The chat has answered this card and marked it: hands off.
@@ -742,6 +760,7 @@ class Watcher:
             await self._drop_pulse(rt)
             await self._emit(session_id, name, body, usage, status)
 
+        repost, rt.repost = rt.repost, False
         blocked = dialog is not None or login is not None
         await self._pending_screen(session_id, window_id, name, busy, blocked)
         await self._pulse(session_id, name, raw, rt, blocked)
@@ -783,7 +802,7 @@ class Watcher:
                 return
             rt.side_question = None
             await self._report_blocked(session_id, name, raw, rt,
-                                       agent_status, busy)
+                                       agent_status, busy, repost)
             return
         rt.idle_since = 0.0
         rt.clear_blocked()
@@ -793,6 +812,17 @@ class Watcher:
         # one multi-select list with a chat full of copies of it.
         state = str([(o.number, o.selected, o.checked, o.current)
                      for o in dialog.options])
+        if repost and sig == rt.last_dialog_sig and rt.dialog_msg_id is not None:
+            # The card stands for this very question: post it again at the
+            # bottom, and the one above gives up its buttons — two live
+            # copies would both press into it, and only one is kept current.
+            # A question not carded yet needs nothing: its card is on the way.
+            old = rt.dialog_msg_id
+            rt.last_dialog_state = state
+            log.info("dialog reposted id=%s name=%s", session_id[:8], name)
+            await self._send_dialog_card(session_id, name, rt, dialog)
+            await self._mark_moved(old)
+            return
         if sig == rt.last_dialog_sig and state == rt.last_dialog_state:
             return
         same_question = sig == rt.last_dialog_sig
@@ -825,8 +855,8 @@ class Watcher:
         rt.last_dialog_sig = sig
         rt.last_dialog_state = state
 
-        blocks, kb = self._dialog_blocks(name, session_id, dialog)
         if same_question and rt.dialog_msg_id:
+            blocks, kb = self._dialog_blocks(name, session_id, dialog)
             if await rich.edit(self.bot, self.chat_id, rt.dialog_msg_id,
                                blocks=blocks, reply_markup=kb):
                 return
@@ -839,6 +869,12 @@ class Watcher:
                 return
             except Exception:
                 pass          # message too old or unchanged — fall through
+        await self._send_dialog_card(session_id, name, rt, dialog)
+
+    async def _send_dialog_card(self, session_id: str, name: str,
+                                rt: SessionRuntime, dialog) -> None:
+        """Post the question's card as a new message and hold on to it."""
+        blocks, kb = self._dialog_blocks(name, session_id, dialog)
         msg = await self._say_rich(session_id, blocks=blocks, reply_markup=kb)
         if msg is None:
             # No rich messages here: the old card, and a wide drawing goes
@@ -849,6 +885,17 @@ class Watcher:
                 await self.send_preview(session_id, dialog)
         rt.dialog_msg_id = getattr(msg, "message_id", None)
         rt.dialog_sent_at = time.monotonic()
+
+    async def _mark_moved(self, msg_id: int | None) -> None:
+        """Trade an old card's buttons for a note that it was posted again."""
+        if msg_id is None:
+            return
+        try:
+            await self.bot.edit_message_reply_markup(
+                chat_id=self.chat_id, message_id=msg_id,
+                reply_markup=done_kb(_("⬇️ Shown again below")))
+        except Exception:
+            log.debug("moved card mark skipped", exc_info=True)
 
     async def _emit(self, session_id: str, name: str, body: str,
                     usage, status) -> None:
@@ -1141,7 +1188,7 @@ class Watcher:
 
     async def _report_blocked(self, session_id: str, name: str, raw: str,
                               rt: SessionRuntime, agent_status: str,
-                              busy: bool) -> None:
+                              busy: bool, repost: bool = False) -> None:
         """Speak up when a session waits on a question we could not parse.
 
         `find_dialog` only knows the prompt shapes it has been taught, and a
@@ -1174,6 +1221,13 @@ class Watcher:
             rt.blocked_since = 0.0
             return
         signature = screenmod.quiet_signature(raw)
+        if repost and rt.blocked_msg_id is not None:
+            old = rt.blocked_msg_id
+            log.info("blocked screen reposted id=%s name=%s",
+                     session_id[:8], name)
+            await self._send_blocked(session_id, name, raw, rt, signature)
+            await self._mark_moved(old)
+            return
         if rt.blocked_sig is not None:
             await self._refresh_blocked(session_id, name, raw, rt, signature)
             return
@@ -1187,12 +1241,17 @@ class Watcher:
             # unavailable, this retries in _BLOCKED_SETTLE instead of every tick.
             rt.blocked_since = now
             return
+        log.info("blocked without a parsed dialog id=%s name=%s",
+                 session_id[:8], name)
+        await self._send_blocked(session_id, name, raw, rt, signature)
+
+    async def _send_blocked(self, session_id: str, name: str, raw: str,
+                            rt: SessionRuntime, signature: str) -> None:
+        """Post the screen of an unparsed wait, with the keys, as a new card."""
         # Set before sending: a send that fails must not become a retry every
         # 1.5 seconds. _say_html has already logged the failure.
         rt.blocked_sig = signature
         rt.blocked_edited = time.time()
-        log.info("blocked without a parsed dialog id=%s name=%s",
-                 session_id[:8], name)
         msg = await self._say_rich(
             session_id, blocks=self._blocked_blocks(name, raw),
             reply_markup=blocked_kb(session_id),

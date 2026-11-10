@@ -148,9 +148,14 @@ def confirm_kb(session_id: str, kind: str,
     return kb.as_markup()
 
 
-def session_kb(v: SessionView) -> InlineKeyboardMarkup:
+def session_kb(v: SessionView, asking: bool = False) -> InlineKeyboardMarkup:
     s = sid8(v.session_id)
     kb = InlineKeyboardBuilder()
+    if asking:
+        # The session waits on a question whose card may be far up the chat
+        # by now; this sends it again at the bottom (`Watcher.repost_question`).
+        kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
+                                    callback_data=f"k:{s}:ask"))
     kb.row(
         InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
         InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),

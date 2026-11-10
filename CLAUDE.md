@@ -316,6 +316,15 @@ is still alive, too. That is why rows are read tolerantly
   not overwrite it. A question closed any other way (terminal, Esc, the next
   section replacing it — whose digits would press into the new one) gets
   `Watcher._retire_dialog`'s «⏹ Question closed».
+- 🔴 **«🔔 Show the question» on the session card is posted by the tick, not
+  the handler.** With many sessions a question card ends up far up the chat;
+  the button (shown only while a card stands: `dialog_msg_id`,
+  `blocked_msg_id`, `login_msg_id`) sets `rt.repost` via
+  `Watcher.request_repost`, and the next `_tick_session` posts the card at the
+  bottom and trades the old one's buttons for «⬇️ Shown again below». The tick
+  is the one writer of the card ids: a send from the handler raced the tick's
+  own and left two live cards for one question. A login card goes through
+  `repost_login` and keeps its buttons (guarded by its step).
 - 🔴 **A launch ends on the session's own card, never on a bare line.**
   Every way into a session — ➕ new, ▶️ resume from 🕘 history or a search,
   a restore — goes through `_create`, and `_create` answers with
