@@ -3794,22 +3794,17 @@ class CCBot:
             return
 
         if data.startswith("s:"):
-            short, _sep, src = data[2:].partition(":")
-            mgd = self._resolve(short)
+            # A list card sent between 0f4fb67 and its revert says "s:<id>:l".
+            mgd = self._resolve(data[2:].partition(":")[0])
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
             await c.answer()
-            # A session picked from the list while it waits on a choice gets
-            # its question posted at the bottom too: that card is usually why
-            # the session was looked up, and it may be far up the chat.
-            text = await self._managed_details(mgd)
-            if src == "l" and self._show_question(mgd):
-                text += "\n\n" + _("🔔 It is waiting for your choice — the "
-                                    "question is posted below.")
             await self._safe_edit(
-                msg, text, parse_mode="HTML",
-                reply_markup=confirm_kb(mgd.session_id, "managed"),
+                msg,
+                await self._managed_details(mgd), parse_mode="HTML",
+                reply_markup=confirm_kb(mgd.session_id, "managed",
+                                        asking=self._asking(mgd)),
             )
             return
 
@@ -4597,6 +4592,16 @@ class CCBot:
             parse_mode="HTML", reply_markup=history_dirs_kb(dirs),
         )
 
+    def _asking(self, mgd) -> bool:
+        """Does a card stand that «🔔 Show the question» could post again?
+
+        Read off the watcher's cards, not the agent list: its "waiting" also
+        covers a /btw overlay and lags behind an answer.
+        """
+        rt = self.watcher.runtimes.get(mgd.session_id)
+        return rt is not None and any((
+            rt.dialog_msg_id, rt.blocked_msg_id, rt.login_msg_id))
+
     def _show_question(self, mgd) -> bool:
         """Have the card this session waits on posted again at the bottom.
 
@@ -4742,12 +4747,7 @@ class CCBot:
         await account.fill([view])
         if view.account:
             text += "\n" + account_line(view.account)
-        # Only when a card stands to be shown again (`_show_question`): the
-        # agent list's "waiting" also covers a /btw overlay and lags an answer.
-        rt = self.watcher.runtimes.get(mgd.session_id)
-        asking = rt is not None and any((
-            rt.dialog_msg_id, rt.blocked_msg_id, rt.login_msg_id))
-        return text, session_kb(view, asking)
+        return text, session_kb(view, self._asking(mgd))
 
     async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
         msg = _editable(c)

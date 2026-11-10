@@ -94,9 +94,7 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
         mark = ACTIVE_ICON if v.session_id == active else icon
         kb.row(InlineKeyboardButton(
             text=_fit(f"{mark} {v.dir_name} · {label}", hint),
-            # ":l" — picked from the list, which also reposts a standing
-            # question (`CCBot._show_question`); the Back buttons do not.
-            callback_data=f"s:{sid8(v.session_id)}:l",
+            callback_data=f"s:{sid8(v.session_id)}",
         ))
     if foreign:
         kb.row(InlineKeyboardButton(
@@ -123,11 +121,18 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
     return kb.as_markup()
 
 
-def confirm_kb(session_id: str, kind: str,
-               back: str = "hist") -> InlineKeyboardMarkup:
-    """Detail card actions: a button caption is one line, a card is not."""
+def confirm_kb(session_id: str, kind: str, back: str = "hist",
+               asking: bool = False) -> InlineKeyboardMarkup:
+    """Detail card actions: a button caption is one line, a card is not.
+
+    *asking*: the session waits on a choice, so its question can be posted
+    again at the bottom — on a tap, never by itself (`CCBot._show_question`).
+    """
     s = sid8(session_id)
     kb = InlineKeyboardBuilder()
+    if asking and kind == "managed":
+        kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
+                                    callback_data=f"k:{s}:ask"))
     if kind == "closed":
         kb.row(
             InlineKeyboardButton(text=_("▶️ Resume"), callback_data=f"dores:{s}"),
