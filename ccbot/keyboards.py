@@ -281,6 +281,19 @@ def drafts_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def trust_kb(session_id: str) -> InlineKeyboardMarkup:
+    """"Is this a project you trust?": its two rows, which carry no digits."""
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("✅ Yes, I trust this folder"),
+                                callback_data=f"tr:{s}:yes"))
+    kb.row(InlineKeyboardButton(text=_("🚪 No, exit"),
+                                callback_data=f"tr:{s}:no"))
+    kb.row(InlineKeyboardButton(text=_("🖥 Screen"),
+                                callback_data=f"k:{s}:screen"))
+    return kb.as_markup()
+
+
 def row_tag(label: str) -> str:
     """A short fingerprint of a row's label, for a button that names no digit.
 
@@ -306,6 +319,8 @@ def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
         return settings_kb(session_id, dialog)
     if dialog.kind == "drafts":
         return drafts_kb(session_id)
+    if dialog.kind == "trust":
+        return trust_kb(session_id)
     s = sid8(session_id)
     kb = InlineKeyboardBuilder()
     for opt in dialog.options:

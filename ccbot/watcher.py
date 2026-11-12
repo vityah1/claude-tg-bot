@@ -108,7 +108,8 @@ _LOGIN_OTHER_GRACE = 15.0
 _LOGIN_MENU_GRACE = 10.0
 # What heads a dialog card. The settings dialogs are not questions Claude is
 # asking — showing them under a "❓" read as one.
-_DIALOG_ICON = {"model": "🧠 ", "effort": "◉ ", "drafts": "📝 "}
+_DIALOG_ICON = {"model": "🧠 ", "effort": "◉ ", "drafts": "📝 ",
+                "trust": "📁 "}
 
 
 def _boot_id() -> str:
@@ -131,6 +132,8 @@ def _dialog_title(dialog) -> str:
         return _("Reasoning effort")
     if dialog.kind == "drafts":
         return _("Feedback drafts")
+    if dialog.kind == "trust":
+        return _("A new folder")
     return dialog.title or ""
 
 
@@ -152,6 +155,14 @@ def _dialog_question(dialog) -> str:
             "the session and kept in ~/.claude/feedback/drafts). It exits "
             "after the answer; in a restart the session then comes back by itself.",
             n).format(count=n)
+    if dialog.kind == "trust":
+        # The terminal's paragraph is a safety lecture in English; the card
+        # says what is asked and what each answer does.
+        return _("Claude Code is opening {folder} for the first time and asks "
+                 "whether you trust it: it will be able to read, edit and run "
+                 "files there. Until you answer, the session takes no text; "
+                 "«No, exit» closes it.").format(
+                     folder=dialog.question or _("this folder"))
     return dialog.question
 
 
@@ -1461,7 +1472,7 @@ class Watcher:
         # The slider's levels carry no description, so the buttons already
         # say everything a list of them would.
         for o in (dialog.options
-                  if dialog.kind not in ("effort", "drafts") else []):
+                  if dialog.kind not in ("effort", "drafts", "trust") else []):
             mark = "▸ " if o.selected else ""
             box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
             # A digit is a shortcut in an ordinary question and a lie in the
@@ -1507,7 +1518,7 @@ class Watcher:
         if expires is not None:
             parts += [html.escape(_expiry_line(expires)), ""]
         for o in (dialog.options
-                  if dialog.kind not in ("effort", "drafts") else []):
+                  if dialog.kind not in ("effort", "drafts", "trust") else []):
             mark = "▸ " if o.selected else ""
             box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
             head_text = (f"{o.number}. {o.label}" if dialog.kind == "choice"

@@ -168,8 +168,8 @@ is still alive, too. That is why rows are read tolerantly
   delivery path, not three. That path **waits for the TUI**
   (`screen.is_ready`): `paste-buffer` into the shell prompt a fresh window
   shows would *run* the prompt, and a directory Claude Code has not seen
-  before draws "Is this a project you trust?" — no digits, so `find_dialog`
-  does not see it, hence the screen is sent and the batch stays parked. And a
+  before draws "Is this a project you trust?" — the batch stays parked and
+  the question goes out as a card of its own (see the trust rule below). And a
   batch that names a session by replying to its message is **never** asked
   about. Own typing keeps going straight to the active session — **unless
   there is none**: then it is parked too (`CCBot._homeless`) and the card is
@@ -207,6 +207,23 @@ is still alive, too. That is why rows are read tolerantly
   `_resume_when_gone`, which resumes the session in its window once `claude`
   has left it: a window left at a shell looked as if the Esc had done nothing
   (2026-10-20, f384fe26).
+- 🔴 **"Is this a project you trust?" is a card with two buttons, not a
+  screen.** A directory Claude Code has not opened before — one with its own
+  `.claude/` or `CLAUDE.md`; a plain subfolder of a trusted one is not asked
+  (2.1.322) — draws a column-0 rule, "Accessing workspace:" and the path, the
+  question, two rows with **no digits** ("❯ No, exit" over "Yes, I trust
+  this folder") and "Enter to confirm · Esc to cancel" as the last line.
+  `screen._trust_dialog` reads it as `kind == "trust"` (anchored like the
+  drafts question: no status line, the rows right on the footer, the
+  heading under the rule), the watcher posts it like any question, and
+  `tr:` (`CCBot._trust_callback`) walks the cursor onto the row by its label
+  and presses Enter only while the cursor stands there, waiting after each
+  move for the cursor to show (a slow redraw read as "not yet" overshot the
+  row). A press that did not land keeps the buttons while the question
+  stands; «No» makes `claude` leave, and the session is then closed the way
+  🚪 closes one, or the window would sit at a shell. Until 2026-11-12 it
+  went out as a bare screen with nothing to press (worktime). Esc exits as
+  well, so a held message's card offers no «Close the question» for it.
 - 🔴 **An attachment is never filtered by format.** `_attachment()` takes every
   kind Telegram has (photo, document, video, audio, voice, video note,
   animation, sticker) and hands the path over whatever the MIME type says: a

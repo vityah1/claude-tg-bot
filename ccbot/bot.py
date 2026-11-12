@@ -637,6 +637,16 @@ def _drafts_on_screen(raw: str) -> bool:
     return dialog is not None and dialog.kind == "drafts"
 
 
+def _trust_on_screen(raw: str) -> bool:
+    dialog = screenmod.find_dialog(raw)
+    return dialog is not None and dialog.kind == "trust"
+
+
+# How long a move on the trust question may take to show on the screen
+# before the cursor is read again.
+_TRUST_MOVE_WAIT = 2.0
+
+
 def _question_or_unready(raw: str) -> bool:
     """A question stands, or at least the ordinary input line does not."""
     return screenmod.find_dialog(raw) is not None or not screenmod.is_ready(raw)
@@ -1667,6 +1677,82 @@ class CCBot:
         await c.answer()
         await self._mark(msg, _("📨 Review and send") if what == "send"
                          else _("🗑 Discard and exit"))
+
+    async def _trust_callback(self, c: CallbackQuery, msg: Message,
+                              chat_id: int, arg: str) -> None:
+        """✅ Yes / 🚪 No on "Is this a project you trust?".
+
+        The rows have no digits: the cursor is walked onto the chosen one and
+        Enter goes in only while it stands there, every key re-checked under
+        the input lock. A press that did not land keeps the card's buttons
+        unless the question is really gone. «No» makes `claude` leave the
+        window, so the session is then closed the way 🚪 closes one.
+        """
+        short, _sep, what = arg.partition(":")
+        mgd = self._resolve(short)
+        if not mgd:
+            await c.answer(_("That session is gone"), show_alert=True)
+            return
+        answer = "yes" if what == "yes" else "no"
+        try:
+            pressed = await self._press_trust(mgd, answer)
+        except tmux.TmuxError:
+            pressed = False
+        if not pressed:
+            dialog = await self._dialog_now(mgd)
+            if dialog is not None and dialog.kind == "trust":
+                await c.answer(_("Could not press it — try again or open "
+                                 "🖥 Screen"), show_alert=True)
+                return
+            await c.answer(_("That question is no longer open"),
+                           show_alert=True)
+            await self._mark(msg, _("⏹ Question closed"))
+            return
+        self.watcher.release_dialog(mgd.session_id)
+        await c.answer()
+        if answer == "yes":
+            await self._mark(msg, _("✅ Yes, I trust this folder"))
+            if self._focus(chat_id, mgd):
+                await self._say_focused(msg, mgd)
+            return
+        if await self._await_claude(mgd.window_id, False, _EXIT_TIMEOUT):
+            await self._close(mgd.session_id, graceful=False)
+            await self._mark(msg, _("🚪 No, exit — the session is closed"))
+        else:
+            await self._mark(msg, _("🚪 No, exit"))
+
+    async def _press_trust(self, mgd, answer: str) -> bool:
+        """Walk the trust question's cursor to *answer*'s row and press Enter.
+
+        After each move the screen is waited on until the cursor has moved:
+        a slow redraw read as "not there yet" would send a second press past
+        the row.
+        """
+        for _step in range(4):
+            dialog = await self._dialog_now(mgd)
+            if dialog is None or dialog.kind != "trust":
+                return False
+            target = screenmod.trust_row(dialog, answer)
+            cursor = dialog.cursor_index
+            if target is None or cursor is None:
+                return False
+            self._typed(mgd)
+            if cursor == target:
+                def on_target(raw: str, target=target) -> bool:
+                    d = screenmod.find_dialog(raw)
+                    return (d is not None and d.kind == "trust"
+                            and d.cursor_index == target)
+                return await tmux.press_if(mgd.window_id, "Enter", on_target)
+            key = "Down" if target > cursor else "Up"
+            if not await tmux.press_if(mgd.window_id, key, _trust_on_screen):
+                return False
+            deadline = time.monotonic() + _TRUST_MOVE_WAIT
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.2)
+                now = await self._dialog_now(mgd)
+                if now is None or now.cursor_index != cursor:
+                    break
+        return False
 
     async def _side_callback(self, c: CallbackQuery, msg: Message,
                              arg: str) -> None:
@@ -2734,8 +2820,10 @@ class CCBot:
                         and len(held.batches) == 1
                         and not _is_command(held.batches[0]))
                 # Esc on the feedback-drafts question throws the drafts away
-                # and exits: not something to do on the way to sending text.
-                closable = dialog is None or dialog.kind != "drafts"
+                # and exits, and on the trust question it exits too: not
+                # something to do on the way to sending text.
+                closable = dialog is None or dialog.kind not in ("drafts",
+                                                                 "trust")
                 text = ngettext(
                     "❓ <b>{name}</b> has an open question (it is above — you "
                     "may have missed it). Your message has not been sent yet, "
@@ -3207,19 +3295,36 @@ class CCBot:
             log.warning("launched session not ready for the parked batch: %s",
                         session_id[:8])
             parked.await_new = False
-            with contextlib.suppress(Exception):
-                await self.bot.send_message(chat_id, _(
-                    "⏳ <b>{name}</b> is not taking text yet — it has just "
-                    "started, or it is asking something first (a new "
-                    "directory is asked about). Here is its screen: deal with "
-                    "that, then press «{button}».").format(
-                        name=html.escape(mgd.full_label),
-                        button=_("▶️ Current: {name}").format(
-                            name=mgd.full_label)),
-                    parse_mode="HTML")
-            with contextlib.suppress(Exception):
-                await self.watcher.send_screen(
-                    mgd.window_id, mgd.full_label, mgd.session_id)
+            button = _("▶️ Current: {name}").format(name=mgd.full_label)
+            raw = ""
+            with contextlib.suppress(tmux.TmuxError):
+                raw = await tmux.capture(mgd.window_id)
+            if _trust_on_screen(raw):
+                # The watcher posts that question as a card with its own
+                # buttons; a bare screen of it here offered nothing to press
+                # (2026-11-12).
+                with contextlib.suppress(Exception):
+                    await self.bot.send_message(chat_id, _(
+                        "📁 <b>{name}</b> is in a folder Claude Code has not "
+                        "opened before, and it asks first whether you trust "
+                        "it — answer on its card with the buttons, then "
+                        "press «{button}».").format(
+                            name=html.escape(mgd.full_label),
+                            button=html.escape(button)),
+                        parse_mode="HTML")
+            else:
+                with contextlib.suppress(Exception):
+                    await self.bot.send_message(chat_id, _(
+                        "⏳ <b>{name}</b> is not taking text yet — it has "
+                        "just started, or it is asking something first. Here "
+                        "is its screen: deal with that, then press "
+                        "«{button}».").format(
+                            name=html.escape(mgd.full_label),
+                            button=html.escape(button)),
+                        parse_mode="HTML")
+                with contextlib.suppress(Exception):
+                    await self.watcher.send_screen(
+                        mgd.window_id, mgd.full_label, mgd.session_id)
             await self._ask_route(chat_id)
             return
         parked.await_new = False
@@ -4311,6 +4416,10 @@ class CCBot:
 
         if data.startswith("dr:"):
             await self._drafts_callback(c, msg, chat_id, data[3:])
+            return
+
+        if data.startswith("tr:"):
+            await self._trust_callback(c, msg, chat_id, data[3:])
             return
 
         if data.startswith("bw:"):

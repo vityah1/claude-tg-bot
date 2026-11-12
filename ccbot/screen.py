@@ -56,6 +56,17 @@ _AUTO_BLOCK_RE = re.compile(
 _DRAFTS_RE = re.compile(r"^\s*You have (?P<n>\d+) unsent feedback drafts?\s*$")
 _DRAFTS_FOOTER = ("enter to review", "esc to discard and exit")
 
+# What a directory Claude Code has not opened before is met with (2.1.322):
+# a column-0 rule, "Accessing workspace:" and the path, "Quick safety check:
+# Is this a project you created or one you trust? …", then two rows with no
+# digits — "❯ No, exit" over "Yes, I trust this folder" — and the footer
+# "Enter to confirm · Esc to cancel" as the last line, no status line. It
+# reached the chat as a bare screen with no buttons (2026-11-12, worktime).
+_TRUST_RE = re.compile(r"\btrust\?", re.IGNORECASE)
+_TRUST_FOOTER = ("enter to confirm", "esc to cancel")
+_TRUST_WORKSPACE = "accessing workspace:"
+_TRUST_ROW_RE = re.compile(r"^ {1,4}(?P<cursor>❯ )?\s*(?P<label>\S.*?)\s*$")
+
 # The answer to a `/btw` side question is an overlay, not a question: a rule
 # at column 0, the asked line echoed under it ("  /btw …", one per answer in
 # its history, the newest last), the answer, and "↑/↓ to scroll · c to copy ·
@@ -705,6 +716,68 @@ def _drafts_dialog(lines: list[str]) -> Dialog | None:
                   footer=lines[footer].strip(), kind="drafts")
 
 
+def _trust_dialog(lines: list[str]) -> Dialog | None:
+    """"Is this a project you trust?" — asked of a directory seen first.
+
+    Its rows carry no digits, so the ordinary parser does not find it and a
+    digit would press nothing; the card walks the cursor instead
+    (`CCBot._trust_callback`). Anchored like the drafts question: the footer
+    is the last thing on a pane with no status line, the rows sit right on
+    it, and the heading is under a column-0 rule — this file quotes all of
+    it, and a session working on it prints it above a status line.
+    """
+    if _ordinary_bottom(lines):
+        return None
+    filled = [i for i, ln in enumerate(lines) if ln.strip()]
+    if len(filled) < 3:
+        return None
+    footer = filled[-1]
+    if not all(m in lines[footer].lower() for m in _TRUST_FOOTER):
+        return None
+    # The rows: the run of lines right above the footer, blank lines
+    # between it and them allowed, none inside the run.
+    end = filled[-2]
+    start = end
+    while start - 1 >= 0 and lines[start - 1].strip():
+        start -= 1
+    rows = [_TRUST_ROW_RE.match(ln) for ln in lines[start:end + 1]]
+    if not 2 <= len(rows) <= 4 or not all(rows):
+        return None
+    if sum(1 for m in rows if m and m.group("cursor")) != 1:
+        return None
+    # Numbered rows are an ordinary question: its digits answer it, and the
+    # ordinary parser below offers them.
+    if any(m and _OPTION_RE.match(m.group(0)) for m in rows):
+        return None
+    top = next((i for i in range(start - 1, -1, -1) if _edge_rule(lines[i])),
+               None)
+    if top is None:
+        return None
+    head = lines[top + 1:start]
+    if not any(_TRUST_RE.search(ln) for ln in head):
+        return None
+    folder = ""
+    for i, ln in enumerate(head):
+        if ln.strip().lower() == _TRUST_WORKSPACE:
+            folder = next((x.strip() for x in head[i + 1:] if x.strip()), "")
+            break
+    options = [Option(number=n, label=m.group("label"),
+                      selected=bool(m.group("cursor")))
+               for n, m in enumerate(rows, 1) if m]
+    return Dialog(question=folder, options=options,
+                  footer=lines[footer].strip(), kind="trust",
+                  cursor_index=next(i for i, o in enumerate(options)
+                                    if o.selected))
+
+
+def trust_row(dialog: Dialog, answer: str) -> int | None:
+    """Where the row for *answer* ("yes" / "no") sits, 0-based, or None."""
+    for i, o in enumerate(dialog.options):
+        if o.label.lower().startswith(answer):
+            return i
+    return None
+
+
 def _edge_rule(line: str) -> bool:
     """A rule drawn from column 0 — the TUI's own, never output or prose.
 
@@ -886,9 +959,10 @@ def find_dialog(screen: str) -> Dialog | None:
 
     # The settings dialogs first: /model would parse as an ordinary question
     # with its descriptions glued to the labels, and /effort not at all. The
-    # drafts question has no digits, so nothing below would find it.
+    # drafts and the trust questions have no digits, so nothing below would
+    # find them.
     settings = (_model_dialog(lines) or _effort_dialog(lines)
-                or _drafts_dialog(lines))
+                or _drafts_dialog(lines) or _trust_dialog(lines))
     if settings is not None:
         return settings
 
@@ -1263,9 +1337,8 @@ def is_ready(screen: str) -> bool:
 
     An open dialog covers that line, so a session asking something is not
     "ready" either — and a brand new directory is asked about before
-    anything else ("Is this a project you trust?", footer "Enter to confirm ·
-    Esc to cancel", options with no digits, so `find_dialog` does not see
-    it). A prompt pasted into that would be read as the answer.
+    anything else ("Is this a project you trust?", `_trust_dialog`). A
+    prompt pasted into that would be read as the answer.
     """
     return _ordinary_bottom(screen.splitlines())
 

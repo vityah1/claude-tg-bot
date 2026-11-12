@@ -876,9 +876,11 @@ Three details make it usable rather than merely correct:
   not care whether Claude is running, and text pasted into the shell prompt a
   fresh window shows for a second would be *run*. A directory Claude Code has
   not seen before answers with "Is this a project you trust?" instead — that
-  is not readiness either, so the screen is sent, the batch stays parked and
-  the new session is now the active one, which makes «▶️ Current» the single
-  tap that finishes the job.
+  is not readiness either, so the batch stays parked, the question comes as a
+  card with «✅ Yes, I trust this folder» / «🚪 No, exit» (`screen._trust_dialog`:
+  its rows have no digits, so the button walks the cursor and presses Enter),
+  and the new session is now the active one, which makes «▶️ Current» the
+  single tap that finishes the job once it is answered.
 * **A forward sent as a reply to a session's message is not asked about** —
   the reply has already said where it goes — and the answer makes that session
   active, because what the user types next belongs to the thread they have just
