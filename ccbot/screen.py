@@ -106,6 +106,13 @@ _LOGIN_URL_RE = re.compile(r"^https://\S+$")
 # sections) has no footer at all: it lists the answers so far, this line, and
 # two choices. That line is the only anchor the screen offers.
 _SUBMIT_MARKER = "Ready to submit your answers?"
+# Since 2.1.327 the page is headed "Review your answers" instead, the answers
+# come *under* that heading, and the list ("1. Submit answers / 2. Cancel")
+# follows them; the old line is gone from the binary altogether.
+_REVIEW_HEADING = "Review your answers"
+# Drawn under the heading when a section was skipped: submitting from such a
+# page sends a partial answer, so the bot never does it on its own.
+_UNANSWERED = "Some questions are unanswered"
 # Its section tabs: "←  ☒ Language  ☐ Style  ☐ Length  ✔ Submit  →".
 _TABS_RE = re.compile(r"^\s*[←‹]\s+.*[☐☑☒✓✔].*[→›]\s*$")
 # The section names out of that row, so the chat can head the question with
@@ -302,6 +309,12 @@ class Dialog:
     cursor_index: int | None = None
     submit_index: int | None = None
     submit_label: str = ""     # what that row is captioned: Submit or Next
+    # The answer-review page of a multi-part question, and whether it warns
+    # that a section was skipped. Read off the raw lines by the parser, not
+    # out of `question`: that is cut to its tail, and since 2.1.327 the page's
+    # heading and warning stand at its head.
+    review: bool = False
+    partial: bool = False
 
     @property
     def allows_free_text(self) -> bool:
@@ -386,6 +399,23 @@ def _footer_index(lines: list[str]) -> int | None:
     return None
 
 
+def _review_marker(lines: list[str]) -> int | None:
+    """The lowest line that marks the answer-review page, old or new shape."""
+    return next((i for i in range(len(lines) - 1, -1, -1)
+                 if _SUBMIT_MARKER in lines[i] or _REVIEW_HEADING in lines[i]),
+                None)
+
+
+def _is_submit(label: str) -> bool:
+    """Whether an option row is the review page's "Submit answers"."""
+    return clean_label(label).lower().startswith("submit")
+
+
+def submit_option(dialog: Dialog) -> Option | None:
+    """The review page's Submit row, by the same test the parser uses."""
+    return next((o for o in dialog.options if _is_submit(o.label)), None)
+
+
 def _submit_footer_index(lines: list[str]) -> int | None:
     """Where the footer *would* be on the answer-review step.
 
@@ -405,14 +435,26 @@ def _submit_footer_index(lines: list[str]) -> int | None:
     low = "\n".join(lines).lower()
     if any(m in low for m in _UI_BOTTOM):
         return None
-    marker = next((i for i in range(len(lines) - 1, -1, -1)
-                   if _SUBMIT_MARKER in lines[i]), None)
+    marker = _review_marker(lines)
     if marker is None:
         return None
     if not any(_TABS_RE.match(ln) for ln in lines[max(0, marker - _WINDOW):marker]):
         return None
+    start = marker + 1
+    if _SUBMIT_MARKER not in lines[marker]:
+        # The 2.1.327 heading: the echoed answers sit between it and the
+        # list, so the list starts at the "1. Submit answers" row under it.
+        # An echoed question may itself open with a number, so numbered
+        # lines that are not that row are skipped rather than taken for it.
+        while start < len(lines):
+            m = _OPTION_RE.match(lines[start])
+            if m and int(m.group("num")) == 1 and _is_submit(m.group("label")):
+                break
+            start += 1
+        else:
+            return None
     last_option = None
-    for i in range(marker + 1, len(lines)):
+    for i in range(start, len(lines)):
         m = _OPTION_RE.match(lines[i])
         if m:
             # The list has to open at "1." and follow the marker directly:
@@ -1101,6 +1143,25 @@ def find_dialog(screen: str) -> Dialog | None:
     if len(question) > _MAX_QUESTION:
         question = question[-_MAX_QUESTION:].lstrip()
 
+    review = partial = False
+    if footerless:
+        marker = _review_marker(lines[:footer_idx])
+        if marker is not None:
+            review = True
+            # Joined on spaces, so a warning wrapped by a narrow pane still reads.
+            page = " ".join(" ".join(ln.split())
+                            for ln in lines[marker:footer_idx]).lower()
+            partial = _UNANSWERED.lower() in page
+            # An echoed question may open with "1." too; the page's own list
+            # is the one that starts at its Submit row.
+            first = next((k for k in range(len(options) - 1, -1, -1)
+                          if options[k].number == 1), 0)
+            if first:
+                options = options[first:]
+                if cursor_index is not None:
+                    cursor_index = (cursor_index - first
+                                    if cursor_index >= first else None)
+
     footer = lines[footer_idx].strip() if footer_idx < len(lines) else ""
     # The footer is cut at the pane's width, so the hint under the drawing
     # ("Notes: press n to add notes") counts as well.
@@ -1128,6 +1189,8 @@ def find_dialog(screen: str) -> Dialog | None:
         submit_index=submit_index,
         submit_label=submit_label,
         expires_in=expires_in,
+        review=review,
+        partial=partial,
     )
 
 
@@ -1153,14 +1216,16 @@ def _take_countdown(question: str) -> tuple[str, int | None]:
 
 
 def is_review(dialog: Dialog) -> bool:
-    """Whether *dialog* is the "Ready to submit your answers?" review step.
+    """Whether *dialog* is the review step the bot may confirm by itself.
 
     Pressing Submit on a multi-select list lands here, and the answers it
     echoes are the ones the user has already confirmed from the chat — so the
     bot answers it itself rather than sending a card that asks the same thing
-    twice.
+    twice. Not when a section was skipped, though: that page warns about it,
+    and submitting would send a partial answer nobody chose — it goes out as
+    an ordinary card instead.
     """
-    return _SUBMIT_MARKER.lower() in dialog.question.lower()
+    return dialog.review and not dialog.partial
 
 
 def unwrap(text: str) -> str:

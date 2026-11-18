@@ -770,8 +770,9 @@ So the chat gets a button of its own for that row ("✅ Send 2 choices" /
 instead of retiring it. Under the button the cursor is walked onto the row and
 the screen re-read after every move: Enter on the wrong row would answer with
 that single option instead of the set. Whatever follows — the
-"Ready to submit your answers?" review — is confirmed by the bot itself, since
-the chat has just confirmed the same thing.
+"Review your answers" page — is confirmed by the bot itself, since the chat
+has just confirmed the same thing; a page that warns "Some questions are
+unanswered" goes out as a card instead.
 
 Without that button the question dead-ended: the boxes could be ticked from the
 phone and there was no way to send them.

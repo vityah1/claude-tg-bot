@@ -536,17 +536,30 @@ is still alive, too. That is why rows are read tolerantly
   it used to be filed away as the description of the last one) and its position
   is kept in navigation order (`Dialog.submit_index` / `cursor_index`), which
   is what `CCBot._submit_dialog` walks the cursor along, re-reading the screen
-  after every move. And the review page it leads to ("Ready to submit your
-  answers?") is answered by the bot: the chat has just confirmed the same
-  thing, so a card repeating it would make one answer cost two taps.
+  after every move. And the review page it leads to ("Review your answers")
+  is answered by the bot: the chat has just confirmed the same thing, so a
+  card repeating it would make one answer cost two taps — unless it warns
+  "Some questions are unanswered": a skipped section would go out as a
+  partial answer, so that page is a card (`screen.is_review`).
 - **One dialog has no footer at all**: the review step of a multi-part
   `AskUserQuestion`, which draws its section tabs
   (`←  ☒ Language  ☐ Style  ✔ Submit  →`), echoes the answers, and ends with
-  `Ready to submit your answers?` and two options. `_submit_footer_index`
+  `Ready to submit your answers?` and two options. 🔴 **2.1.327 redrew it**:
+  the heading `Review your answers` comes first, the answers (and a
+  `⚠ Some questions are unanswered` when a section was skipped) under it,
+  then `1. Submit answers / 2. Cancel` — the old line is gone from the
+  binary, and the page reached the chat as "a screen I do not understand"
+  with digit buttons (2026-11-18). Both shapes are read; with the heading
+  the list starts at its "1. Submit answers" row. A digit commits there.
+  The page and its warning are `Dialog.review` / `Dialog.partial`, set from
+  the raw lines — never looked up in `Dialog.question`, which keeps only its
+  last 700 characters and so loses a heading that stands at the top.
+  `_submit_footer_index`
   synthesises the footer position, and it demands *all* of: no mode/status line
   anywhere on the pane (an open dialog covers them, so seeing one proves the
   bottom belongs to the ordinary UI), the tabs, the marker, and an option list
-  that opens at "1." and follows the marker directly, with nothing under it
+  that opens at "1." and follows the marker (or the echoed answers under the
+  heading), with nothing under it
   but blank lines — or, since 2.1.281, the one rule that closes the dialog
   and names the session (`──── pay4say-1a2b ─`, `_NAMED_RULE_RE`); without
   that allowance a multi-part question answered from the chat ended on "a

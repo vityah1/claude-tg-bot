@@ -5340,7 +5340,7 @@ class CCBot:
     async def _confirm_review(self, mgd) -> None:
         """Answer the review page that Submit leads to.
 
-        "Ready to submit your answers?" asks for exactly what the chat has
+        "Review your answers" asks for exactly what the chat has
         just confirmed, so leaving it to the user would make one answer cost
         two taps. Only that page is answered on its own — it is recognised by
         its marker (`screen.is_review`), never by an option merely captioned
@@ -5349,8 +5349,7 @@ class CCBot:
         dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
         if dialog is None or not screenmod.is_review(dialog):
             return
-        opt = next((o for o in dialog.options
-                    if o.label.strip().lower().startswith("submit")), None)
+        opt = screenmod.submit_option(dialog)
         if opt is None:
             return
         await self._answer_dialog(mgd, opt.number)
