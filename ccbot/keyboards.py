@@ -246,6 +246,14 @@ def settings_kb(session_id: str, dialog: Dialog,
                 row = []
         if row:
             kb.row(*row)
+        if dialog.toggle:
+            # Tab arms the switch and a level button commits it, so the
+            # button says where the switch stands, not what it will become.
+            text = (_("⚡ {name}: on").format(name=dialog.toggle)
+                    if dialog.toggle_on
+                    else _("⚡ {name}: off").format(name=dialog.toggle))
+            kb.row(InlineKeyboardButton(
+                text=text, callback_data=f"etg:{s}:{int(dialog.toggle_on)}"))
     else:
         for opt in dialog.options:
             # The label names the choice ("Fable"), the description names the
@@ -256,7 +264,16 @@ def settings_kb(session_id: str, dialog: Dialog,
             kb.row(InlineKeyboardButton(
                 text=_fit(f"{'✅ ' if opt.current else ''}{caption}"),
                 callback_data=f"mdl:{s}:{opt.number}:{scope}"))
-    kb.row(*_scope_row(s, scope))
+        # "▸ More models" folds the older models in and out (2.1.330); the
+        # list on the card follows the screen, so the button only presses
+        # the row and the watcher draws the new list as a card of its own.
+        for i, extra in enumerate(dialog.extras):
+            text = (_("▾ Hide the other models") if extra.startswith("▾")
+                    else _("▸ More models"))
+            kb.row(InlineKeyboardButton(
+                text=text, callback_data=f"dx:{s}:{i}:{row_tag(extra)}"))
+    if not dialog.session_only:
+        kb.row(*_scope_row(s, scope))
     kb.row(
         InlineKeyboardButton(text=_("✖️ Cancel"), callback_data=f"k:{s}:esc"),
         InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
@@ -304,7 +321,8 @@ def row_tag(label: str) -> str:
     return hashlib.sha1(label.encode()).hexdigest()[:6]
 
 
-def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
+def dialog_kb(session_id: str, dialog: Dialog,
+              scope: str = "s") -> InlineKeyboardMarkup:
     """One button per option; free-text options route to a reply prompt.
 
     A multi-select question works differently and the keyboard has to say so:
@@ -316,7 +334,7 @@ def dialog_kb(session_id: str, dialog: Dialog) -> InlineKeyboardMarkup:
     of them, and the button says which it is doing.
     """
     if dialog.kind in ("model", "effort"):
-        return settings_kb(session_id, dialog)
+        return settings_kb(session_id, dialog, scope)
     if dialog.kind == "drafts":
         return drafts_kb(session_id)
     if dialog.kind == "trust":

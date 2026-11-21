@@ -3975,6 +3975,15 @@ class CCBot:
             if screenmod.is_chat_label(label):
                 await self._question_dropped(c, msg, chat_id, mgd, label)
                 return
+            if label[:1] in ("▸", "▾"):
+                # The /model list folded in or out: nothing was picked, the
+                # same picker comes back below as a card with the new list.
+                await c.answer()
+                self.watcher.release_dialog(mgd.session_id)
+                await self._mark(msg, _("⬇️ The new list is below"))
+                if moved:
+                    await self._say_focused(msg, mgd)
+                return
             await c.answer(_("Picked"))
             if moved:
                 await self._say_focused(msg, mgd)
@@ -4073,7 +4082,9 @@ class CCBot:
             if dialog is not None:
                 try:
                     await msg.edit_reply_markup(
-                        reply_markup=dialog_kb(mgd.session_id, dialog))
+                        reply_markup=dialog_kb(
+                            mgd.session_id, dialog,
+                            self.watcher.settings_scope.get(mgd.session_id, "s")))
                 except Exception:
                     log.debug("tick redraw skipped", exc_info=True)
             return
@@ -4095,6 +4106,10 @@ class CCBot:
                 await c.answer(_("That option has left the screen"),
                                show_alert=True)
                 return
+            if dialog.session_only:
+                # With Ultracode armed Enter keeps the pick to this session,
+                # and there is no other way to commit it.
+                scope = "s"
             # Answering from a card is working inside that session, so what
             # the user types next belongs to it.
             self._focus(chat_id, mgd)
@@ -4146,6 +4161,60 @@ class CCBot:
                 await msg.answer(text, parse_mode="HTML")
             return
 
+        if data.startswith("etg:"):
+            # The switch beside the /effort scale (Ultracode, 2.1.330). Tab
+            # only arms it — a level button commits it — and the card follows
+            # the screen on the watcher's next tick. The button carries the
+            # state it was drawn with: a second tap, or a tap on a card the
+            # screen has moved past, must not flip it back.
+            _kind, short, drawn = data.split(":", 2)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            was_on = drawn == "1"
+
+            def armed_as_drawn(raw: str) -> bool:
+                d = screenmod.find_dialog(raw)
+                return (d is not None and d.kind == "effort"
+                        and bool(d.toggle) and d.toggle_on == was_on)
+
+            moved = self._focus(chat_id, mgd)
+            self._typed(mgd)
+            if not await tmux.press_if(mgd.window_id, "Tab", armed_as_drawn):
+                now = await self._dialog_now(mgd)
+                if now is not None and now.kind == "effort" and now.toggle:
+                    # A second tap, or a card the screen has moved past.
+                    await c.answer(
+                        (_("{name} is already on") if now.toggle_on
+                         else _("{name} is already off")).format(
+                             name=now.toggle))
+                    return
+                await c.answer(_("That dialog has left the screen"),
+                               show_alert=True)
+                return
+            after = None
+            deadline = time.monotonic() + _TRUST_MOVE_WAIT
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.2)
+                after = await self._dialog_now(mgd)
+                if (after is not None and after.kind == "effort"
+                        and after.toggle_on != was_on):
+                    break
+            else:
+                # The Tab went in under the check, so it did land: a slow
+                # redraw is not a failure, and a second Tab would undo it.
+                await c.answer(_("Pressed — the card follows once the "
+                                 "screen redraws"))
+                return
+            await c.answer(
+                (_("{name} on — now pick a level") if after.toggle_on
+                 else _("{name} off — now pick a level")).format(
+                     name=after.toggle))
+            if moved:
+                await self._say_focused(msg, mgd)
+            return
+
         if data.startswith("dsc:"):
             # The scope switch on a settings card. Nothing is typed into the
             # terminal here, so the dialog stays exactly as it was and only
@@ -4160,6 +4229,7 @@ class CCBot:
                 await c.answer(_("That dialog has left the screen"),
                                show_alert=True)
                 return
+            self.watcher.settings_scope[mgd.session_id] = scope
             await c.answer(_("Only this session") if scope == "s"
                            else _("This session and new ones"))
             with contextlib.suppress(Exception):
@@ -4971,42 +5041,30 @@ class CCBot:
     async def _pick_model(self, mgd, number: int, scope: str) -> bool:
         """Commit option *number* of the /model picker.
 
-        Enter (and every digit, which presses it) saves the pick as the
-        default for new sessions; "s" keeps it to this session. Only the digit
-        is position-independent, so the session-only route has to walk the
-        cursor onto the row first, re-reading the screen after each move —
-        "s" on the wrong row switches the wrong model.
+        Enter saves the pick as the default for new sessions; "s" keeps it to
+        this session. Both act on the row under the cursor, so the cursor is
+        walked there first, re-reading the screen after each move — a key on
+        the wrong row switches the wrong model. A digit is no shortcut: the
+        expanded list ("More models", 2.1.330) runs to 14, and "1" of "14"
+        would commit the first row.
         """
+        def position(d: screenmod.Dialog) -> int | None:
+            if d.kind != "model":
+                return None
+            return screenmod.model_nav_index(d, number)
+
+        if await self._walk_to(mgd, position) is None:
+            log.warning("could not reach model option %d id=%s",
+                        number, mgd.session_id[:8])
+            return False
+        self._typed(mgd)
         if scope == "d":
-            await self._answer_dialog(mgd, number, confirm=False)
-            return True
-        for _attempt in range(5):
-            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            if dialog is None or dialog.kind != "model":
-                return False
-            target = next((i for i, o in enumerate(dialog.options)
-                           if o.number == number), None)
-            if target is None:
-                return False
-            if dialog.cursor_index is None:
-                self._typed(mgd)
-                await tmux.send_keys(mgd.window_id, "Down")
-                await asyncio.sleep(_NAV_SETTLE)
-                continue
-            delta = target - dialog.cursor_index
-            self._typed(mgd)
-            if delta == 0:
-                await tmux.send_literal(mgd.window_id, "s")
-                log.info("model set for this session only id=%s option=%d",
-                         mgd.session_id[:8], number)
-                return True
-            key = "Down" if delta > 0 else "Up"
-            for _step in range(abs(delta)):
-                await tmux.send_keys(mgd.window_id, key)
-            await asyncio.sleep(_NAV_SETTLE)
-        log.warning("could not reach model option %d id=%s",
-                    number, mgd.session_id[:8])
-        return False
+            await tmux.send_keys(mgd.window_id, "Enter")
+        else:
+            await tmux.send_literal(mgd.window_id, "s")
+        log.info("model set id=%s option=%d scope=%s",
+                 mgd.session_id[:8], number, scope)
+        return True
 
     async def _pick_effort(self, mgd, number: int, scope: str) -> bool:
         """Walk the /effort slider to level *number* and commit it.
@@ -5030,7 +5088,7 @@ class CCBot:
             delta = target - at
             self._typed(mgd)
             if delta == 0:
-                if scope == "d":
+                if scope == "d" or dialog.session_only:
                     await tmux.send_keys(mgd.window_id, "Enter")
                 else:
                     await tmux.send_literal(mgd.window_id, "s")
@@ -5164,14 +5222,21 @@ class CCBot:
         # moves the cursor onto it, and what follows is typed into the row,
         # so Enter answers the question itself. If the dialog has gone the
         # row was not an input line and the text travels as a prompt.
-        in_dialog = screenmod.find_dialog(
-            await tmux.capture(mgd.window_id)) is not None
+        before = screenmod.find_dialog(await tmux.capture(mgd.window_id))
         await self._send_prompt(mgd, text)
-        if in_dialog:
+        if before is not None and before.multi_select:
             # A multi-select list keeps standing: the typed row is filled
-            # in, and Submit is still what sends the set.
+            # in, and Submit is still what sends the set. Only that list —
+            # an ordinary question answered by the Enter draws its next
+            # section at once, and a Submit pressed there would send that
+            # section's set unchosen (2026-11-21, d2032fff: "could not reach
+            # Submit" right after a typed answer).
             await asyncio.sleep(_NAV_SETTLE)
-            await self._submit_dialog(mgd)
+            after = await self._dialog_now(mgd)
+            if (after is not None and after.multi_select
+                    and after.question == before.question):
+                await self._tick_typed_row(mgd, before.question, number)
+                await self._submit_dialog(mgd)
         self.watcher.release_dialog(mgd.session_id)
         if card_id is not None:
             with contextlib.suppress(Exception):
@@ -5182,6 +5247,49 @@ class CCBot:
         await self._ack(reply_to, _("✏️ Answer sent to <b>{name}</b> · it is "
                                     "the active session now").format(
             name=html.escape(mgd.full_label)), mgd)
+
+    async def _tick_typed_row(self, mgd, question: str, number: int) -> None:
+        """Tick the free-text row of a multi-select list once text is in it.
+
+        The digit ticks the row, and the Enter that follows the typed text
+        unticks it again: the text stays, the box is empty, and Submit sent
+        the set without it — the review page then said "Some questions are
+        unanswered" (2.1.330, measured 2026-11-21). Enter on the row ticks
+        it, and is pressed only while that very row stands unticked under
+        the cursor.
+        """
+        def unticked(raw: str) -> bool:
+            d = screenmod.find_dialog(raw)
+            if d is None or d.question != question:
+                return False
+            row = next((o for o in d.options if o.number == number), None)
+            return row is not None and row.checked is False and row.selected
+
+        def row_of(d: screenmod.Dialog) -> int | None:
+            # Options come first in navigation order, so the index is the
+            # position; a changed question has no such row.
+            if d.question != question:
+                return None
+            return next((i for i, o in enumerate(d.options)
+                         if o.number == number), None)
+
+        now = await self._dialog_now(mgd)
+        row = next((o for o in (now.options if now else [])
+                    if o.number == number), None)
+        if row is None or row.checked is not False:
+            return
+        if not row.selected and await self._walk_to(mgd, row_of) is None:
+            log.warning("typed row left unticked id=%s option=%d",
+                        mgd.session_id[:8], number)
+            return
+        self._typed(mgd)
+        if await tmux.press_if(mgd.window_id, "Enter", unticked):
+            log.info("ticked the typed row id=%s option=%d",
+                     mgd.session_id[:8], number)
+            await asyncio.sleep(_NAV_SETTLE)
+        else:
+            log.warning("typed row left unticked id=%s option=%d",
+                        mgd.session_id[:8], number)
 
     async def _submit_dialog(self, mgd) -> bool:
         """Press the unnumbered Submit (or Next) row of a multi-select question.
@@ -5258,8 +5366,15 @@ class CCBot:
             return None
         self._typed(mgd)
         await tmux.send_keys(mgd.window_id, "Enter")
-        await asyncio.sleep(_NAV_SETTLE)
-        ok, after = await self._read_dialog(mgd)
+        # A row that redraws the list ("More models") can take longer than
+        # one settle, so the change is waited for, not judged once.
+        deadline = time.monotonic() + _TRUST_MOVE_WAIT
+        while True:
+            await asyncio.sleep(_NAV_SETTLE)
+            ok, after = await self._read_dialog(mgd)
+            if (not ok or after is None or time.monotonic() >= deadline
+                    or self._dialog_sig(after) != self._dialog_sig(before)):
+                break
         if not ok or (after is not None
                       and self._dialog_sig(after) == self._dialog_sig(before)):
             log.warning("row %r would not commit id=%s", label,

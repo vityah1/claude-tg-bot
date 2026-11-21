@@ -137,6 +137,19 @@ def _dialog_title(dialog) -> str:
     return dialog.title or ""
 
 
+def _settings_hint(dialog) -> str:
+    """How the buttons under a settings dialog commit, as the screen has it."""
+    if dialog.session_only:
+        # TRANSLATORS: the /effort card while Ultracode is on — Claude Code
+        # then offers no "save as default".
+        return _("A button applies the choice, for this session only: with "
+                 "{name} on there is no saving it as the default.").format(
+                     name=dialog.toggle or "Ultracode")
+    # TRANSLATORS: the row of two buttons under a settings dialog.
+    return _("A button applies the choice. The switch under the list "
+             "decides whether new sessions get it as their default too.")
+
+
 def _dialog_question(dialog) -> str:
     """The question as the card states it.
 
@@ -200,6 +213,9 @@ _EXPIRY_SLACK = 3.0
 _HOLD_MAX = 300.0
 # How long a session has to look idle before its queue count is dropped.
 _QUEUE_IDLE = 5.0
+# How long a settings picker has to stay off the screen before the scope
+# armed on its card (`settings_scope`) is forgotten.
+_SCOPE_FORGET = 3.0
 
 # How much scrollback to read for the reasoning above a dialog: a long answer
 # has usually pushed its own beginning off the top of the pane by then.
@@ -264,6 +280,9 @@ class SessionRuntime:
         # "other"), as its queue-operation records tell it.
         self.queue: list[str] = []
         self.idle_since = 0.0
+        # Since when no dialog has been on the screen (monotonic); one empty
+        # frame mid-redraw is no proof the picker has closed.
+        self.no_dialog_since = 0.0
         self.work_since = 0.0
         self.pulse_msg_id: int | None = None
         self.pulse_edited = 0.0
@@ -355,6 +374,9 @@ class Watcher:
         # Sessions owed a screen once they go quiet, and the earliest moment
         # each is worth looking at.
         self.pending_screen: dict[str, float] = {}
+        # The scope armed on a settings card (`dsc:`), so a redraw of the
+        # card — the cursor moved, Ultracode armed — keeps it.
+        self.settings_scope: dict[str, str] = {}
         self._task: asyncio.Task | None = None
         # Last failure announced in the chat, so a fault that repeats every
         # 1.5 seconds does not become 2400 messages an hour.
@@ -462,6 +484,7 @@ class Watcher:
     def forget(self, session_id: str) -> None:
         self.runtimes.pop(session_id, None)
         self.pending_screen.pop(session_id, None)
+        self.settings_scope.pop(session_id, None)
         updates.forget(session_id)
 
     def adopt(self, session_id: str, skip_existing: bool = True) -> None:
@@ -791,6 +814,13 @@ class Watcher:
             rt.last_dialog_sig = None
             rt.last_dialog_state = None
             rt.seen_dialog_sig = None
+            # The next settings card starts on "this session" again — once
+            # the picker has stayed gone a while: a dialog redraws in stages,
+            # and an empty frame while /model folds its list is not a close.
+            if not rt.no_dialog_since:
+                rt.no_dialog_since = time.monotonic()
+            elif time.monotonic() - rt.no_dialog_since >= _SCOPE_FORGET:
+                self.settings_scope.pop(session_id, None)
             rt.flushed_sig = None
             rt.flushed_words = set()
             await self._retire_dialog(rt)
@@ -816,13 +846,15 @@ class Watcher:
                                        agent_status, busy, repost)
             return
         rt.idle_since = 0.0
+        rt.no_dialog_since = 0.0
         rt.clear_blocked()
 
         # Ticks belong to the state, not to the question: a checkbox changes
         # with every press, and reading that as a new question would answer
         # one multi-select list with a chat full of copies of it.
         state = str([(o.number, o.selected, o.checked, o.current)
-                     for o in dialog.options])
+                     for o in dialog.options]) + str(
+                         (dialog.toggle_on, dialog.session_only))
         if repost and sig == rt.last_dialog_sig and rt.dialog_msg_id is not None:
             # The card stands for this very question: post it again at the
             # bottom, and the one above gives up its buttons — two live
@@ -1486,10 +1518,7 @@ class Watcher:
             if o.description and o.description != o.label:
                 blocks.append(rich.para(f"    {o.description}"))
         if dialog.kind in ("model", "effort"):
-            # TRANSLATORS: the row of two buttons under a settings dialog.
-            blocks.append(rich.para(
-                _("A button applies the choice. The switch under the list "
-                  "decides whether new sessions get it as their default too.")))
+            blocks.append(rich.para(_settings_hint(dialog)))
         if dialog.multi_select:
             # TRANSLATORS: how a multi-select question is answered from a chat.
             blocks.append(rich.para(
@@ -1501,7 +1530,8 @@ class Watcher:
                 _("🖼 Diagram for option {n}:").format(n=sel) if sel
                 else _("🖼 Diagram:")))
             blocks.append(rich.pre(rich.ascii_frame(dialog.preview)))
-        return blocks, dialog_kb(session_id, dialog)
+        return blocks, dialog_kb(session_id, dialog,
+                                 self.settings_scope.get(session_id, "s"))
 
     def _render_dialog(self, name: str, session_id: str, dialog):
         head = f"{_DIALOG_ICON.get(dialog.kind, '❓ ')}<b>{html.escape(name)}</b>"
@@ -1530,10 +1560,7 @@ class Watcher:
                 parts.append(f"    {html.escape(o.description)}")
         if dialog.kind in ("model", "effort"):
             parts.append("")
-            # TRANSLATORS: the row of two buttons under a settings dialog.
-            parts.append(_("A button applies the choice. The switch under the "
-                           "list decides whether new sessions get it as their "
-                           "default too."))
+            parts.append(html.escape(_settings_hint(dialog)))
         if dialog.multi_select:
             parts.append("")
             # TRANSLATORS: how a multi-select question is answered from a chat.
@@ -1551,7 +1578,8 @@ class Watcher:
         text = "\n".join(parts)
         if len(text) > 3900:
             text = text[:3900] + "\n…"
-        return text, dialog_kb(session_id, dialog)
+        return text, dialog_kb(session_id, dialog,
+                                 self.settings_scope.get(session_id, "s"))
 
     async def _say(self, text: str, session_id: str | None = None, **kw) -> None:
         try:

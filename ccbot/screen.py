@@ -125,10 +125,28 @@ _TAB_CHIP_RE = re.compile(r"[☐☑☒]\s*([^☐☑☒✔→›]+)")
 # do nothing there, ←/→ move a marker along a scale. Both used to reach the
 # chat as "a screen I do not understand", which is why the model list in the
 # session menu was a hard-coded guess instead of what Claude Code offers.
-_MODEL_FOOTER = ("set as default", "session only")
 _EFFORT_FOOTER = ("to adjust", "session only")
+# The picker's footer follows the cursor (2.1.330): on a model row it is
+# "s to use this session only · Enter to save · Esc to cancel" (before that,
+# "Enter to set as default · s to use this session only"), and on the
+# unnumbered "▸ More models" row "Enter to expand" / "Enter to collapse".
+_MODEL_FOOTER_ROW = "session only"
+_MODEL_FOOTER_COMMIT = ("enter to save", "set as default")
+_MODEL_FOOTER_MORE = ("enter to expand", "enter to collapse")
+# "▸   More models" (collapsed) / "▾   More models" (expanded, the extra
+# models numbered on under it, 6. to 14. on 2.1.330). No digit reaches it.
+_MODEL_MORE_RE = re.compile(r"^\s*(?P<cursor>[❯›>])?\s*(?P<arrow>[\u25b8\u25be])"
+                            r"\s+(?P<label>\S.*?)\s*$")
 # Where the slider stands: "──────▲──────┆────" over the row of level names.
 _SLIDER_MARK = "\u25b2"
+# Since 2.1.330 Ultracode is a switch of its own at the right end of the
+# scale ("────▲────      Ultracode  off", "Tab to toggle" under it) rather
+# than a level on it. Tab only arms it; Enter commits it with the level, and
+# while it is on Enter is the only commit and keeps it to this session
+# ("←/→ to adjust · Enter to use this session only · Esc to cancel").
+_SLIDER_RULE = "\u2500\u2501\u2506\u250a\u25b2"
+_SLIDER_TOGGLE_RE = re.compile(r"(?P<name>\w+)\s+(?P<state>on|off)\b", re.I)
+_SESSION_ONLY_ENTER = "enter to use this session only"
 # The picker also carries the effort level, adjusted with ←/→ right there:
 # "● High effort (default) ←/→ to adjust".
 _MODEL_EFFORT_RE = re.compile(r"^\s*(?P<text>[\u25cb\u25d0\u25cf\u25c9\u2726]"
@@ -315,6 +333,13 @@ class Dialog:
     # heading and warning stand at its head.
     review: bool = False
     partial: bool = False
+    # A switch the /effort slider carries beside its scale (Ultracode,
+    # 2.1.330): its name, and whether it is armed. Tab flips it.
+    toggle: str = ""
+    toggle_on: bool = False
+    # Enter commits for this session only and there is no "save as default"
+    # (the slider while Ultracode is on): the scope switch has nothing to do.
+    session_only: bool = False
 
     @property
     def allows_free_text(self) -> bool:
@@ -614,12 +639,16 @@ def _model_dialog(lines: list[str]) -> Dialog | None:
     is not an option — the generic parse would file it away as an unnumbered
     choice and offer to press it.
     """
-    footer = _settings_footer(lines, _MODEL_FOOTER)
+    footer = _model_footer(lines)
     if footer is None or _ordinary_bottom(lines):
         return None
     top = max(0, footer - _WINDOW)
 
-    rows: list[tuple[int, object]] = []
+    # Bottom-up to "1.", like every list here; the "More models" row sits
+    # among the numbered ones once it is expanded, so it does not end the
+    # walk. Each row is kept with its kind so the navigation order — which
+    # is what the cursor walks — survives.
+    rows: list[tuple[int, re.Match[str], bool]] = []
     note = ""
     for i in range(footer - 1, top - 1, -1):
         ln = lines[i]
@@ -627,31 +656,48 @@ def _model_dialog(lines: list[str]) -> Dialog | None:
             continue
         m = _OPTION_RE.match(ln)
         if m:
-            rows.append((i, m))
+            rows.append((i, m, False))
             if int(m.group("num")) == 1:
                 break
+            continue
+        mm = _MODEL_MORE_RE.match(ln)
+        if mm:
+            rows.append((i, mm, True))
             continue
         em = _MODEL_EFFORT_RE.match(ln)
         if em and not note:
             note = em.group("text").strip()
-    if not rows or int(rows[-1][1].group("num")) != 1:   # type: ignore[union-attr]
+    if not rows or rows[-1][2] or int(rows[-1][1].group("num")) != 1:
+        return None
+    if (not any(more for _i, _m, more in rows)
+            and _MODEL_FOOTER_ROW not in lines[footer].lower()):
+        # "Enter to expand" with no row to expand is somebody else's dialog.
         return None
 
     options: list[Option] = []
+    extras: list[str] = []
+    extra_indexes: list[int] = []
     cursor_index: int | None = None
-    for _pos, m in reversed(rows):
-        label = clean_label(m.group("label"))            # type: ignore[union-attr]
+    for nav, (_pos, m, more) in enumerate(reversed(rows)):
+        if m.group("cursor"):
+            cursor_index = nav
+        if more:
+            # The arrow stays in the label: it says which way the row will
+            # go, and a card drawn for the collapsed list must not press the
+            # row once it has been expanded (`row_tag`).
+            extras.append(f"{m.group('arrow')} {m.group('label')}")
+            extra_indexes.append(nav)
+            continue
+        label = clean_label(m.group("label"))
         parts = _LABEL_SPLIT_RE.split(label, maxsplit=1)
         name, desc = parts[0], parts[1] if len(parts) > 1 else ""
         current = any(t in name for t in _TICK_CHARS)
         name = name.strip(_TICK_CHARS + " ")
-        if m.group("cursor"):                            # type: ignore[union-attr]
-            cursor_index = len(options)
         options.append(Option(
-            number=int(m.group("num")),                  # type: ignore[union-attr]
+            number=int(m.group("num")),
             label=name,
             description=desc.strip(),
-            selected=bool(m.group("cursor")),            # type: ignore[union-attr]
+            selected=bool(m.group("cursor")),
             current=current,
         ))
 
@@ -676,8 +722,46 @@ def _model_dialog(lines: list[str]) -> Dialog | None:
         footer=lines[footer].strip(),
         kind="model",
         note=note,
+        extras=extras,
+        extra_indexes=extra_indexes,
         cursor_index=cursor_index,
     )
+
+
+def _model_footer(lines: list[str]) -> int | None:
+    """The lowest line that is the /model picker's footer, in either form.
+
+    It changes with the cursor: a model row offers "session only", the
+    "More models" row "Enter to expand" / "to collapse". The slider's footer
+    says "session only" too, so "to adjust" rules a line out.
+    """
+    for i in range(len(lines) - 1, -1, -1):
+        low = lines[i].lower()
+        if _ESC_MARKER.lower() not in low:
+            continue
+        if (_MODEL_FOOTER_ROW in low and any(m in low for m in _MODEL_FOOTER_COMMIT)
+                and not all(m in low for m in _EFFORT_FOOTER)):
+            return i
+        if any(m in low for m in _MODEL_FOOTER_MORE):
+            return i
+    return None
+
+
+def model_nav_index(dialog: Dialog, number: int) -> int | None:
+    """Where option *number* of the /model picker sits in navigation order.
+
+    The "More models" row stands between the fifth model and the sixth, so
+    the position in `options` is one short for every row after it.
+    """
+    at = next((i for i, o in enumerate(dialog.options) if o.number == number),
+              None)
+    if at is None:
+        return None
+    nav = at
+    for extra in sorted(dialog.extra_indexes):
+        if extra <= nav:
+            nav += 1
+    return nav
 
 
 def _effort_dialog(lines: list[str]) -> Dialog | None:
@@ -699,10 +783,17 @@ def _effort_dialog(lines: list[str]) -> Dialog | None:
     values = next((i for i in range(scale + 1, footer) if lines[i].strip()), None)
     if values is None:
         return None
+    # The level names stand under the scale; what is right of its end
+    # belongs to the switch beside it ("Tab to toggle").
+    bar = lines[scale]
+    end = max(bar.rfind(ch) for ch in _SLIDER_RULE)
     words = [(m.group(), m.start(), m.end())
-             for m in re.finditer(r"\S+", lines[values])]
+             for m in re.finditer(r"\S+", lines[values]) if m.start() <= end + 1]
     if len(words) < 2:
         return None
+    tm = _SLIDER_TOGGLE_RE.search(bar[end + 1:])
+    toggle = tm.group("name") if tm else ""
+    toggle_on = bool(tm) and tm.group("state").lower() == "on"
 
     # The marker sits over the middle of the level it has reached.
     col = lines[scale].index(_SLIDER_MARK)
@@ -714,8 +805,11 @@ def _effort_dialog(lines: list[str]) -> Dialog | None:
     # ("xhigh + workflows" under ultracode), sometimes it warns about the
     # level the marker is on ("May use excessive tokens…" on max). So it goes
     # under the list as it is, attributed to nothing.
-    gloss = next((i for i in range(values + 1, footer) if lines[i].strip()), None)
-    note = lines[gloss].strip() if gloss is not None else ""
+    # With the switch on there are two such lines (what Ultracode does,
+    # then the cost), so all of them are kept.
+    # A key hint wrapped onto a line of its own ("Tab to toggle") is not.
+    note = "\n".join(lines[i].strip() for i in range(values + 1, footer)
+                     if lines[i].strip() and "to toggle" not in lines[i].lower())
 
     options = [
         Option(number=i + 1, label=word, current=(i == at))
@@ -732,7 +826,9 @@ def _effort_dialog(lines: list[str]) -> Dialog | None:
         title = ln
         break
     return Dialog(question="", options=options, title=title,
-                  footer=lines[footer].strip(), kind="effort", note=note)
+                  footer=lines[footer].strip(), kind="effort", note=note,
+                  toggle=toggle, toggle_on=toggle_on,
+                  session_only=_SESSION_ONLY_ENTER in lines[footer].lower())
 
 
 def _drafts_dialog(lines: list[str]) -> Dialog | None:

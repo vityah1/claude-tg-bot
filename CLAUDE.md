@@ -452,20 +452,33 @@ is still alive, too. That is why rows are read tolerantly
   shape (`screen._model_dialog` / `_effort_dialog`, measured on 2.1.258) and
   used to reach the chat as "a screen I do not understand". Both are worth
   knowing exactly:
-  * The picker's footer is `Enter to set as default · s to use this session
-    only · Esc to cancel`, and its rows carry a label and a description on one
-    line, held apart by padding, with a `✔` on the one in force. **A digit
-    commits *and* saves the pick as the default for new sessions** — the same
-    thing `/model <alias>` does, which is what the old hard-coded buttons sent.
-    "This session only" is `s`, and `s` acts on **wherever the cursor stands**,
-    so that route has to walk the cursor there first (`CCBot._pick_model`).
+  * The picker's footer **follows the cursor** (2.1.330): `s to use this
+    session only · Enter to save · Esc to cancel` on a model row (it was
+    `Enter to set as default · …` before — matching that wording is how the
+    picker became "a screen I do not understand" on 2026-11-21), and `Enter to
+    expand` / `Enter to collapse` on the unnumbered `▸ More models` row, which
+    unfolds models 6–14 under itself. `screen._model_footer` takes either; the
+    row is a `Dialog.extras` entry (arrow kept in the label, so a card drawn
+    collapsed cannot press it expanded) with a button of its own, and
+    `cursor_index` / `model_nav_index` count it in navigation order. Rows
+    carry a label and a description on one line, held apart by padding, with
+    a `✔` on the one in force. Enter saves the pick as the default for new
+    sessions, `s` keeps it to this one, and **both act on the row under the
+    cursor** — so `CCBot._pick_model` always walks the cursor there
+    (`_walk_to`) and never types a digit: "1" of "14" commits row 1.
   * The slider's footer is `←/→ to adjust · Enter to confirm · s for this
     session only`, it has **no digits at all**, and the level in force is the
     one the `▲` sits over — matched by *column* against the centres of the
     names under it. It does not wrap at the ends. **The set of levels is not
     fixed**: `ultracode` was on it in one session and absent in another
     (2026-09-02, the same build), which is the whole reason the list is read
-    rather than declared.
+    rather than declared. Since 2.1.330 Ultracode is a **switch** right of the
+    scale (`Ultracode  off`, `Tab to toggle` under it): level names are taken
+    only up to the scale's end column, the switch is `Dialog.toggle` /
+    `toggle_on` with a button (`etg:` presses Tab), and Tab only *arms* it — a
+    level button commits it. While it is on the footer reads `Enter to use
+    this session only` and there is no `s` and no saving as default
+    (`Dialog.session_only`): the scope row leaves the card and Enter commits.
   * The line under the names is a gloss that belongs to nothing in particular
     — sometimes a zone of the scale ("xhigh + workflows" under `ultracode`),
     sometimes a warning about the level the marker is on ("May use excessive
@@ -541,6 +554,14 @@ is still alive, too. That is why rows are read tolerantly
   card repeating it would make one answer cost two taps — unless it warns
   "Some questions are unanswered": a skipped section would go out as a
   partial answer, so that page is a card (`screen.is_review`).
+  🔴 **A typed answer is followed by Submit only in a multi-select list,
+  and only one still standing** (`_answer_free_text`, the same question
+  re-read after the paste): an ordinary question is answered by the Enter
+  and draws its next section at once, where a Submit would send that
+  section unchosen. And the paste's Enter **unticks** the row the digit had
+  ticked — the text stays, the box is empty, the set went out without it
+  (2.1.330) — so `_tick_typed_row` presses Enter on it, only while that row
+  stands unticked under the cursor (2026-11-21, d2032fff).
 - **One dialog has no footer at all**: the review step of a multi-part
   `AskUserQuestion`, which draws its section tabs
   (`←  ☒ Language  ☐ Style  ✔ Submit  →`), echoes the answers, and ends with
