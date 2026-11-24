@@ -33,6 +33,9 @@ VENV_PY = VENV / "bin" / "python"
 MIN_PY = (3, 12)
 UNIT = "claude-tg-bot"
 UNIT_FILE = Path.home() / ".config" / "systemd" / "user" / f"{UNIT}.service"
+# The session host: holds the Agent SDK sessions and outlives bot restarts.
+HOST_UNIT = "claude-tg-host"
+HOST_UNIT_FILE = UNIT_FILE.parent / f"{HOST_UNIT}.service"
 CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 TEE = ROOT / "bin" / "statusline-tee.sh"
 
@@ -683,11 +686,20 @@ def install_autostart() -> str:
         return "none"
     if not confirm("Install the systemd user unit and start the bot?", True):
         return "none"
-    template = (ROOT / "contrib" / f"{UNIT}.service").read_text()
     UNIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # The host first: the bot's unit wants it, and SDK sessions need it.
+    host = (ROOT / "contrib" / f"{HOST_UNIT}.service").read_text()
+    HOST_UNIT_FILE.write_text(host.replace("%INSTALL_DIR%", str(ROOT)))
+    ok(f"wrote {HOST_UNIT_FILE}")
+    template = (ROOT / "contrib" / f"{UNIT}.service").read_text()
     UNIT_FILE.write_text(template.replace("%INSTALL_DIR%", str(ROOT)))
     ok(f"wrote {UNIT_FILE}")
     run(["systemctl", "--user", "daemon-reload"], timeout=30)
+    rc, out = run(["systemctl", "--user", "enable", "--now", HOST_UNIT], timeout=60)
+    if rc != 0:
+        warn(f"{HOST_UNIT} did not start — SDK sessions will be unavailable")
+        for line in out.splitlines()[-3:]:
+            info(line)
     rc, out = run(["systemctl", "--user", "enable", "--now", UNIT], timeout=60)
     if rc != 0:
         die("systemctl enable --now failed", out)
@@ -923,6 +935,13 @@ def doctor() -> int:
         bad(f"{UNIT} is not active")
         info(f"systemctl --user status {UNIT} --no-pager")
         problems += 1
+    if systemd_available():
+        _rc, out = run(["systemctl", "--user", "is-active", HOST_UNIT], timeout=20)
+        if out.strip() == "active":
+            ok(f"{HOST_UNIT} is active (SDK sessions)")
+        else:
+            warn(f"{HOST_UNIT} is not active — tmux sessions work, SDK sessions do not")
+            info(f"systemctl --user enable --now {HOST_UNIT}")
     stray = stray_instance()[1]
     if stray and not unit_active():
         warn(f"an unmanaged instance is running: {stray}")

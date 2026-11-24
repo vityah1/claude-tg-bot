@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,13 @@ _DEFAULTS: dict[str, Any] = {
     # Newest Claude Code build the chat has already been told about, so the
     # same release is not announced on every poll — or again after a restart.
     "notified_version": None,
+    # Which backend new sessions get: "off" — tmux, as always; "preview" —
+    # tmux, plus a 🧪 button that starts one through the Agent SDK; "default"
+    # — the SDK. CCBOT_SDK in .env wins over this.
+    "sdk": "off",
 }
+
+SDK_MODES = ("off", "preview", "default")
 
 
 class Settings:
@@ -110,6 +117,25 @@ class Settings:
         if not code or code == self.telegram_language:
             return
         self.data["telegram_language"] = code
+        self.save()
+
+    # -- the SDK switch ------------------------------------------------
+    @property
+    def sdk_locked(self) -> bool:
+        """True when .env decides, and the chat may not change it."""
+        return (os.getenv("CCBOT_SDK") or "").strip().lower() in SDK_MODES
+
+    @property
+    def sdk(self) -> str:
+        env = (os.getenv("CCBOT_SDK") or "").strip().lower()
+        if env in SDK_MODES:
+            return env
+        v = self.data.get("sdk")
+        return v if v in SDK_MODES else "off"
+
+    @sdk.setter
+    def sdk(self, value: str) -> None:
+        self.data["sdk"] = value if value in SDK_MODES else "off"
         self.save()
 
     # -- Claude Code version -------------------------------------------

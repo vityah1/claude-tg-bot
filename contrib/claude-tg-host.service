@@ -1,0 +1,35 @@
+# systemd user unit of the session host — the process that holds the Claude
+# Agent SDK sessions (see ccbot/host/). Install next to claude-tg-bot:
+#
+#   sed "s|%INSTALL_DIR%|$PWD|g" contrib/claude-tg-host.service \
+#       > ~/.config/systemd/user/claude-tg-host.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-tg-host
+#
+# The bot can be restarted at will; this unit is restarted only when its own
+# code changes, because a restart ends the turns its sessions are in (they
+# come back with their context, by resume, on the next message).
+
+[Unit]
+Description=Claude Code session host (Agent SDK) for the Telegram dispatcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%INSTALL_DIR%
+EnvironmentFile=%INSTALL_DIR%/.env
+Environment=PATH=%h/.nvm/versions/node/current/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%INSTALL_DIR%/.venv/bin/python host_main.py
+Restart=always
+RestartSec=3
+# The Claude processes are children of this one and must end with it: a
+# `claude` left behind by a host that died would hold a session nobody can
+# reach any more (seen on 2026-11-24 after a kill -9).
+KillMode=control-group
+TimeoutStopSec=40
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -55,6 +55,38 @@ Answer text comes from the transcript rather than the screen: it is clean, free
 of ANSI, unwrapped and not limited by the scrollback. The screen is needed only
 for dialogs.
 
+## Sessions through the Agent SDK (being introduced)
+
+Since 2026-11 the bot is moving from driving the TUI to the official
+[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/python): questions,
+permission requests and plans arrive as data (`can_use_tool`), so the cards are
+built from data and a new Claude Code release can no longer break them. Both
+paths run side by side while the new one is proven.
+
+| Part | Where |
+|---|---|
+| The session host — a process of its own that holds one `ClaudeSDKClient` per session | `host_main.py`, `ccbot/host/`, unit `claude-tg-host` |
+| The socket between them (NDJSON, event journal with replay) | `ccbot/host/protocol.py`, `ccbot/hostlink.py` |
+| Host events → chat messages and cards | `ccbot/bridge.py` |
+
+Why a separate process: a `claude` child dies with the process that started it,
+so sessions held inside the bot would die on every bot restart. The host is
+restarted only when its own code changes; the bot restarts freely, and a turn in
+progress or an open question survive it (the host journals its events, and the
+bot replays what it had not delivered). A host restart ends the turns in
+progress: the chat gets a 🔌 card naming the prompts that were cut off, and each
+session wakes up by `resume` with your next message.
+
+**The switch** — `/service` → «🧪 New sessions», or `CCBOT_SDK` in `.env`
+(which then wins): `off` — tmux, as before; `preview` — tmux, plus a «🧪 SDK»
+button next to every folder in the new-session picker; `default` — new sessions
+start through the SDK. Existing sessions keep the backend they started with.
+Rolling back is `off` plus a restart.
+
+Not yet available for an SDK session (later stages): the model, effort and mode
+pickers, `/login`, a restart onto a new Claude Code build, `/btw`, «🔔 Show the
+question», the usage gauges. Such a button answers that it is not available yet.
+
 ## Three kinds of session
 
 * **Managed** — created by the bot inside tmux. Full control.
@@ -98,8 +130,10 @@ status line, keep it by naming it in `CCBOT_REAL_STATUSLINE`. Skipping this
 costs precision, not function — the bot falls back to reading the screen. See
 [Exact metrics](#exact-metrics).
 
-**5. Run it.** `.venv/bin/python main.py`, or install the systemd user unit —
-see [Autostart](#autostart).
+**5. Run it.** `.venv/bin/python host_main.py` (the session host) and
+`.venv/bin/python main.py`, or install both systemd user units — see
+[Autostart](#autostart). Without the host, tmux sessions work as before and SDK
+sessions are unavailable.
 
 **6. Check.** `./install.sh --doctor` verifies all of the above and tails the
 log, whichever way you installed.
@@ -1056,11 +1090,18 @@ substituted at install time:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-sed "s|%INSTALL_DIR%|$PWD|g" contrib/claude-tg-bot.service \
-    > ~/.config/systemd/user/claude-tg-bot.service
+for u in claude-tg-host claude-tg-bot; do
+  sed "s|%INSTALL_DIR%|$PWD|g" contrib/$u.service > ~/.config/systemd/user/$u.service
+done
 systemctl --user daemon-reload
-systemctl --user enable --now claude-tg-bot
+systemctl --user enable --now claude-tg-host claude-tg-bot
 ```
+
+`claude-tg-host` is the session host (see
+[Sessions through the Agent SDK](#sessions-through-the-agent-sdk-being-introduced)).
+Its unit uses `KillMode=control-group` on purpose: the `claude` processes are its
+children and must end with it — one left behind by a host that died would hold
+a session nobody can reach. Its log is `~/.cache/ccbot/host.log`.
 
 The unit lives as long as you have at least one session on the machine. To keep
 it running with none: `sudo loginctl enable-linger $USER`.

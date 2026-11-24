@@ -592,10 +592,16 @@ def login_warning_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
+def service_kb(can_restart: bool, sdk: str = "off",
+               sdk_locked: bool = False) -> InlineKeyboardMarkup:
     """Bot-process actions. Restart is offered only when something can bring
     the bot back — otherwise the button would end the conversation."""
     kb = InlineKeyboardBuilder()
+    if not sdk_locked:
+        nxt = {"off": "preview", "preview": "default"}.get(sdk, "off")
+        kb.row(InlineKeyboardButton(
+            text=_("🧪 New sessions: switch to «{mode}»").format(mode=sdk_label(nxt)),
+            callback_data=f"svc:sdk:{nxt}"))
     if can_restart:
         kb.row(InlineKeyboardButton(text=_("🔄 Restart the bot"),
                                     callback_data="svc:ask"))
@@ -604,6 +610,12 @@ def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
     )
     return kb.as_markup()
+
+
+def sdk_label(mode: str) -> str:
+    """How the SDK switch's value is called in the chat."""
+    return {"off": _("tmux"), "preview": _("tmux + 🧪 SDK button"),
+            "default": _("Agent SDK")}.get(mode, mode)
 
 
 def held_kb(session_id: str, free_text: bool,
@@ -770,12 +782,20 @@ def project_dirs_kb(dirs: list[str], discovered: bool) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def dirs_kb(dirs: list[str]) -> InlineKeyboardMarkup:
+def dirs_kb(dirs: list[str], sdk_preview: bool = False) -> InlineKeyboardMarkup:
+    """The folders a new session can start in.
+
+    With the SDK switch on "preview" every folder also gets a 🧪 button that
+    starts the session through the Agent SDK instead of tmux.
+    """
     kb = InlineKeyboardBuilder()
     home = str(__import__("pathlib").Path.home())
     for i, d in enumerate(dirs):
         label = ("~" + d[len(home):]) if d.startswith(home) else d
-        kb.row(InlineKeyboardButton(text=f"📁 {label}", callback_data=f"nd:{i}"))
+        row = [InlineKeyboardButton(text=f"📁 {label}", callback_data=f"nd:{i}")]
+        if sdk_preview:
+            row.append(InlineKeyboardButton(text=_("🧪 SDK"), callback_data=f"nds:{i}"))
+        kb.row(*row)
     kb.row(InlineKeyboardButton(text=_("✏️ Another path"), callback_data="nd:manual"))
     kb.row(InlineKeyboardButton(text=_("⬅️ Cancel"), callback_data="ls"))
     return kb.as_markup()

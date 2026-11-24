@@ -19,13 +19,14 @@ import os
 import re
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from . import status_feed, tmux, transcript
 from .i18n import N_, _, ngettext
-from .state import Orphan, Store
+from .state import Managed, Orphan, Store
 
 log = logging.getLogger("ccbot.sessions")
 
@@ -371,11 +372,24 @@ def live_age() -> float:
     return time.time() - ts if ts else float("inf")
 
 
+# The state of an SDK session as the bridge knows it ("idle", "busy",
+# "waiting", "dormant", "offline"); set by the bot at start-up.
+sdk_state: Callable[[Managed], str] | None = None
+
+
 async def managed_views(store: Store) -> list[SessionView]:
     live = {a.get("sessionId"): a for a in await live_agents()}
     windows = {w.id: w for w in await tmux.list_windows()}
     views = []
     for m in store.all_managed():
+        if m.is_sdk:
+            state = sdk_state(m) if sdk_state else "idle"
+            views.append(SessionView(
+                session_id=m.session_id, name=m.label, cwd=m.cwd, kind="managed",
+                status=state if state in ("busy", "waiting") else "idle",
+                waiting_for="", window_id="", title=m.title, mtime=m.created_at,
+                started_at=m.created_at))
+            continue
         w = windows.get(m.window_id)
         agent = live.get(m.session_id)
         if w is None:

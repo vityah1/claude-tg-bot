@@ -38,6 +38,11 @@ class Window:
 
 
 async def _run(*args: str, stdin: bytes | None = None) -> str:
+    # tmux reads `-t ""` as the current pane: an SDK session (no window) or any
+    # other missing id would act on whatever pane happens to be current.
+    for i, arg in enumerate(args[:-1]):
+        if arg == "-t" and not args[i + 1]:
+            raise TmuxError(f"tmux {args[0]}: empty target refused")
     proc = await asyncio.create_subprocess_exec(
         "tmux", *args,
         stdin=asyncio.subprocess.PIPE if stdin is not None else None,

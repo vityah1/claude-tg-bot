@@ -35,7 +35,9 @@ from . import account, logsetup, media, rich, service, status_feed, tmux, update
 from . import login as loginmod
 from . import screen as screenmod
 from . import sessions as sess
+from .bridge import SdkBridge
 from .config import Config
+from .hostlink import HostError
 from .i18n import (
     DEFAULT_LOCALE,
     N_,
@@ -72,6 +74,7 @@ from .keyboards import (
     route_kb,
     route_pick_kb,
     row_tag,
+    sdk_label,
     search_kb,
     service_kb,
     session_kb,
@@ -81,7 +84,7 @@ from .keyboards import (
     update_kb,
 )
 from .settings import Settings
-from .state import Orphan, Store
+from .state import Managed, Orphan, Store
 from .transport import TolerantSession
 from .util import account_line, as_pre, split_text, usage_report
 from .watcher import Watcher
@@ -392,6 +395,37 @@ def _sessions_text(managed: list[sess.SessionView],
     return "\n\n".join(parts)
 
 
+# What an SDK session's card answers today. The rest — model and effort
+# pickers, /login, a restart, the screen — arrive with the later stages.
+_SDK_ACTIONS = {"esc", "clear", "compact", "ctx", "close"}
+
+
+def _sdk_not_yet() -> str:
+    return _("Not available for SDK sessions yet — it comes with a later stage "
+             "of the move to the Agent SDK.")
+
+
+def _sdk_no_screen() -> str:
+    return _("An SDK session has no terminal screen: everything it shows comes "
+             "to the chat as messages and cards.")
+
+
+def _host_refusal(exc: HostError) -> str:
+    """Why the session host would not start a session, for the chat."""
+    if exc.code == "offline":
+        return _("❌ The session host is not answering, so an SDK session cannot "
+                 "start. tmux sessions work as before.")
+    detail = html.escape((exc.message or exc.code)[:500])
+    return _("❌ The session host could not start the session:\n<code>{detail}</code>"
+             ).format(detail=detail)
+
+
+def _close_failed(name: str) -> str:
+    return _("❌ <b>{name}</b> was not ended: the session host is not answering. "
+             "The session may still be running — try again in a minute.").format(
+                 name=html.escape(name))
+
+
 def _stale_card(command: str) -> str:
     """Telegram forgets a card after 48 hours; say so instead of failing."""
     return _("This card is too old — send {command} again").format(command=command)
@@ -689,6 +723,9 @@ class CCBot:
         install()
         self.watcher = Watcher(self.bot, self.store, self.settings,
                                cfg.owner, cfg.poll_interval)
+        # SDK sessions: held by the session host, followed through its events.
+        self.bridge = SdkBridge(self.bot, self.store, self.watcher, cfg.owner)
+        sess.sdk_state = self.bridge.state
         # chat_id -> ("dir",) | ("dialog", session_id, option_number, card)
         #          | ("note", session_id, card, question_sig)
         #          | ("rename", session_id) | ("adddir",)
@@ -768,7 +805,9 @@ class CCBot:
             if not self._ok(m):
                 return
             mgd, _note = await self._target(m)
-            if mgd:
+            if mgd and mgd.is_sdk:
+                await m.answer(_sdk_no_screen())
+            elif mgd:
                 await self.watcher.send_screen(mgd.window_id, mgd.full_label,
                                                mgd.session_id)
 
@@ -777,7 +816,9 @@ class CCBot:
             if not self._ok(m):
                 return
             mgd, note = await self._target(m)
-            if mgd:
+            if mgd and mgd.is_sdk:
+                await self._interrupt_sdk(m, mgd, note)
+            elif mgd:
                 self._typed(mgd)
                 await tmux.send_keys(mgd.window_id, "Escape")
                 await self._ack(m, _("⏸ Esc sent to <b>{name}</b>{note}").format(
@@ -819,7 +860,7 @@ class CCBot:
             if not self._ok(m):
                 return
             await m.answer(await self._service_text(), parse_mode="HTML",
-                           reply_markup=service_kb(service.under_systemd()))
+                           reply_markup=self._service_kb())
 
         @dp.message(Command("restart"))
         async def _restart(m: Message):
@@ -880,7 +921,9 @@ class CCBot:
             if mgd:
                 note = await m.answer(
                     _("⏳ Ending {name} — sending /exit…").format(name=mgd.full_label))
-                await self._close(mgd.session_id)
+                if not await self._close(mgd.session_id):
+                    await note.edit_text(_close_failed(mgd.full_label), parse_mode="HTML")
+                    return
                 await note.edit_text(
                     _("❌ Session <b>{name}</b> has ended.\n"
                       "The transcript stays — it can be brought back from 🕘 in "
@@ -1086,6 +1129,10 @@ class CCBot:
         if msg:
             self.store.remember_message(msg.message_id, mgd.session_id)
 
+    def _service_kb(self) -> InlineKeyboardMarkup:
+        return service_kb(service.under_systemd(), self.settings.sdk,
+                          self.settings.sdk_locked)
+
     async def _service_text(self) -> str:
         """State of the bot's own process — the one thing /sessions cannot show."""
         started = datetime.fromtimestamp(service.STARTED)
@@ -1129,6 +1176,27 @@ class CCBot:
                      .format(seconds=self.cfg.poll_interval, count=len(managed)))
         lines.append(_("📓 Journal: <code>{path}</code> — /log").format(
             path=logsetup.LOG_PATH))
+        lines += ["", await self._host_lines()]
+        return "\n".join(lines)
+
+    async def _host_lines(self) -> str:
+        """The SDK switch and the session host, for /service."""
+        mode = sdk_label(self.settings.sdk)
+        lines = [_("🧪 New sessions start in: <b>{mode}</b>{locked}").format(
+            mode=html.escape(mode),
+            locked=_(" (set in .env)") if self.settings.sdk_locked else "")]
+        try:
+            st = await self.bridge.link.call("status", timeout=5, wait_online=0.5)
+        except HostError:
+            sdk_rows = len(self.store.all_managed(backend="sdk"))
+            lines.append(_("🛰 Session host: not answering · SDK sessions: {count}")
+                         .format(count=sdk_rows))
+            return "\n".join(lines)
+        up = service.human_delta(time.time() - float(st.get("started") or time.time()))
+        lines.append(_("🛰 Session host: PID {pid}, up for {duration} · SDK {sdk} · "
+                       "live sessions: {live}").format(
+                           pid=st.get("pid"), duration=up,
+                           sdk=html.escape(str(st.get("sdk"))), live=st.get("live")))
         return "\n".join(lines)
 
     async def _do_restart(self, chat_id: int) -> None:
@@ -1334,7 +1402,7 @@ class CCBot:
     async def _ask_dir(self, target: Message | CallbackQuery) -> None:
         self.dir_choices = await sess.recent_dirs(self.store, _DIR_CHOICES, roots=self.roots)
         text = _("📁 Which directory should the session start in?")
-        kb = dirs_kb(self.dir_choices)
+        kb = dirs_kb(self.dir_choices, sdk_preview=self.settings.sdk == "preview")
         here = _editable(target)
         if here is None:
             await target.answer(_stale_card("/new"), show_alert=True)
@@ -1346,7 +1414,8 @@ class CCBot:
     # ---------------------------------------------------------- session ops
     async def _create(self, chat_id: int, cwd: str,
                       resume: str | None = None,
-                      title: str | None = None) -> str | None:
+                      title: str | None = None,
+                      backend: str | None = None) -> str | None:
         """Start (or resume) a session in *cwd*; the new id, or None.
 
         The id is returned because a forwarded batch may be waiting for
@@ -1370,6 +1439,10 @@ class CCBot:
             return None
         session_id = resume or str(uuid.uuid4())
         name = util.default_name(cwd, session_id)
+        backend = backend or ("sdk" if self.settings.sdk == "default" else "tmux")
+        if backend == "sdk":
+            return await self._create_sdk(chat_id, cwd, session_id, name,
+                                          resume, title)
         wid = await tmux.create_window(name, cwd)
         flag = f"--resume {session_id}" if resume else f"--session-id {session_id}"
         await tmux.run_in_window(wid, f"claude {flag} -n {name}")
@@ -1394,6 +1467,46 @@ class CCBot:
         # "Send the forwarded messages to a new session" ends here: the
         # session exists now, so the batch that was waiting for one goes in as
         # soon as its TUI is up.
+        await self._deliver_after_launch(chat_id, session_id)
+        return session_id
+
+    async def _create_sdk(self, chat_id: int, cwd: str, session_id: str,
+                          name: str, resume: str | None,
+                          title: str | None) -> str | None:
+        """`_create` for a session held by the session host.
+
+        The row is written only once the host has the session up: a launch
+        that fails leaves nothing behind that looks like a session.
+        """
+        previous = self.store.get_active(chat_id)
+        # The launch name is the host's key for the session, and it can repeat:
+        # a transcript resumed after /clear computes the name its row still
+        # carries under the new id. Another session's name gets a suffix.
+        base, n = name, 1
+        while True:
+            taken = self.store.by_name(name)
+            if taken is None or taken.session_id == session_id:
+                probe = Managed(session_id=session_id, window_id="", cwd=cwd,
+                                name=name, created_at=time.time(), offset=0,
+                                title=None, backend="sdk")
+                try:
+                    await self.bridge.create(probe, resume=bool(resume))
+                    break
+                except HostError as exc:
+                    if exc.code != "exists" or n >= 9:
+                        log.warning("sdk create failed name=%s: %s", name, exc)
+                        await self.bot.send_message(chat_id, _host_refusal(exc),
+                                                    parse_mode="HTML")
+                        return None
+            n += 1
+            name = f"{base}-{n}"
+        log.info("session created id=%s name=%s cwd=%s backend=sdk resume=%s",
+                 session_id[:8], name, cwd, bool(resume))
+        self.store.add(session_id, "", cwd, name, backend="sdk")
+        if title:
+            self.store.set_title(session_id, title)
+        self.store.set_active(chat_id, session_id)
+        await self._launch_card(chat_id, session_id, previous, resumed=bool(resume))
         await self._deliver_after_launch(chat_id, session_id)
         return session_id
 
@@ -1425,8 +1538,11 @@ class CCBot:
                       "reply to one of its messages.").format(
                           name=html.escape(mgd.full_label),
                           previous=html.escape(prev.full_label))]
-        tail.append(_("Locally: <code>{command}</code>").format(
-            command=tmux.attach_hint(wid)))
+        if mgd.is_sdk:
+            tail.append(_("🧪 Runs through the Agent SDK (session host)."))
+        else:
+            tail.append(_("Locally: <code>{command}</code>").format(
+                command=tmux.attach_hint(wid)))
         note = " · " + (_("resumed") if resumed else _("new"))
         card = await self._session_card(mgd, note)
         if card is None:
@@ -1532,7 +1648,7 @@ class CCBot:
             return
         await c.answer()
 
-    async def _close(self, session_id: str, graceful: bool = True) -> None:
+    async def _close(self, session_id: str, graceful: bool = True) -> bool:
         """End a session and drop its window.
 
         `/exit` lets Claude shut down on its own terms (Ctrl+D is ignored by the
@@ -1541,9 +1657,19 @@ class CCBot:
         """
         mgd = self.store.get(session_id)
         if not mgd:
-            return
+            return True
         log.info("session closing id=%s name=%s graceful=%s",
                  session_id[:8], mgd.full_label, graceful)
+        if mgd.is_sdk:
+            try:
+                await self.bridge.close(mgd)
+            except HostError as exc:
+                # The row stays: the process may well still be running, and a
+                # session the chat no longer knows would ask into the void.
+                log.warning("sdk close failed id=%s: %s", session_id[:8], exc)
+                return False
+            self.store.remove(session_id)
+            return True
         if graceful and await tmux.window_exists(mgd.window_id):
             try:
                 await tmux.send_keys(mgd.window_id, "Escape")
@@ -1558,6 +1684,7 @@ class CCBot:
         await tmux.kill_window(mgd.window_id)
         self.store.remove(session_id)
         self.watcher.forget(session_id)
+        return True
 
     # --------------------------------------------------- claude code updates
     async def _await_claude(self, window_id: str, want: bool,
@@ -1813,6 +1940,9 @@ class CCBot:
         panel off the screen and sends its card (`Watcher._tick_login`).
         """
         name = html.escape(mgd.full_label)
+        if mgd.is_sdk:
+            await self._ack(m, _sdk_not_yet(), mgd)
+            return
         try:
             raw = await tmux.capture(mgd.window_id)
         except tmux.TmuxError:
@@ -1844,6 +1974,8 @@ class CCBot:
                                        mgd.session_id)
 
     async def _signing_in(self, mgd) -> bool:
+        if mgd.is_sdk:
+            return False
         try:
             return screenmod.login_open(await tmux.capture(mgd.window_id))
         except tmux.TmuxError:
@@ -1862,7 +1994,7 @@ class CCBot:
         until it is used, and the reply says what became of it.
         """
         waiting = []
-        for mgd in self.store.all_managed():
+        for mgd in self.store.all_managed(backend="tmux"):
             try:
                 ls = screenmod.login_screen(await tmux.capture(mgd.window_id))
             except tmux.TmuxError:
@@ -2019,6 +2151,8 @@ class CCBot:
     async def _restart_session(self, mgd, force: bool = False) -> _Restart:
         """`_restart_in_place`, once at a time per session."""
         sid = mgd.session_id
+        if mgd.is_sdk:
+            return _Restart(False, _sdk_not_yet())
         if sid in self.restarting:
             return _Restart(False, _("a restart of it is already under way"))
         self.restarting.add(sid)
@@ -2433,6 +2567,22 @@ class CCBot:
         with contextlib.suppress(Exception):
             await note.edit_text(text, parse_mode="HTML")
 
+    async def _interrupt_sdk(self, m: Message | None, mgd, note: str) -> None:
+        """Esc for an SDK session: interrupt the turn, keep the session."""
+        try:
+            await self.bridge.interrupt(mgd)
+            text = _("⏸ Interrupted <b>{name}</b>{note}").format(
+                name=html.escape(mgd.full_label), note=note)
+        except HostError as exc:
+            log.info("interrupt refused id=%s: %s", mgd.session_id[:8], exc)
+            if exc.code in ("dormant", "no_session"):
+                text = _("💤 <b>{name}</b> is resting — there is nothing to "
+                         "interrupt.").format(name=html.escape(mgd.full_label))
+            else:
+                text = _host_refusal(exc)
+        if isinstance(m, Message):
+            await self._ack(m, text, mgd)
+
     def _typed(self, mgd) -> None:
         """Tell the watcher the bot has just typed into this session.
 
@@ -2478,6 +2628,14 @@ class CCBot:
         """
         self._typed(mgd)
         log.info("prompt -> %s (%s): %r", mgd.full_label, mgd.session_id[:8], text[:120])
+        if mgd.is_sdk:
+            try:
+                await self.bridge.send(mgd, text, guard=guard)
+            except HostError as exc:
+                if exc.code == "request_open":
+                    raise tmux.Refused(text) from exc
+                raise
+            return
         await tmux.submit_text(
             mgd.window_id, text,
             refuse_if=_question_or_unready if guard else None,
@@ -2611,7 +2769,7 @@ class CCBot:
         paths = [p for i in items for p in i.paths]
         prompt = _batch_text(items)
         await self._send_prompt(mgd, prompt, guard=guard)
-        if prompt.split(maxsplit=1)[:1] in (["/context"], ["/compact"]):
+        if not mgd.is_sdk and prompt.split(maxsplit=1)[:1] in (["/context"], ["/compact"]):
             # Typed rather than pressed: these print on the terminal only,
             # so the result comes back as a screen, as from the card.
             self.watcher.screen_when_idle(mgd.session_id)
@@ -2662,6 +2820,8 @@ class CCBot:
         command; its old status line is still on the pane, so the screen
         alone reads it as ready.
         """
+        if mgd.is_sdk:
+            return self.bridge.question_open(mgd), None
         try:
             raw = await tmux.capture(mgd.window_id)
             running = await tmux.claude_running(mgd.window_id)
@@ -2958,7 +3118,11 @@ class CCBot:
                 return
             await c.answer(_("Closing the question…"))
             self._typed(mgd)
-            await tmux.press_if(mgd.window_id, "Escape", _question_or_unready)
+            if mgd.is_sdk:
+                await self.bridge.dismiss(mgd, "The user closed this question "
+                                               "to send a message instead.")
+            else:
+                await tmux.press_if(mgd.window_id, "Escape", _question_or_unready)
             if not await self._wait_clear(mgd, _ESC_CLEAR):
                 log.warning("held: Esc did not close the question id=%s",
                             held.session_id[:8])
@@ -3033,6 +3197,8 @@ class CCBot:
 
     async def _wait_clear(self, mgd, timeout: float) -> bool:
         """Wait for the pane to stand without a question, two reads running."""
+        if mgd.is_sdk:
+            return not self.bridge.question_open(mgd)
         deadline = time.monotonic() + timeout
         clear = 0
         while time.monotonic() < deadline:
@@ -3357,6 +3523,8 @@ class CCBot:
         open — which is right: a session with a question on the screen would
         read a pasted prompt as the answer to it.
         """
+        if mgd.is_sdk:
+            return True         # the host answers a create once it is up
         deadline = time.monotonic() + timeout
         while True:
             if screenmod.is_ready(await tmux.capture(mgd.window_id)):
@@ -3911,6 +4079,9 @@ class CCBot:
                 reply_markup=confirm_kb(mgd.session_id, "managed",
                                         asking=self._asking(mgd)),
             )
+            # The list became this session's card: a reply to it now means
+            # this session, not whichever one happens to be active.
+            self.store.remember_message(msg.message_id, mgd.session_id)
             return
 
         if data.startswith("open:"):
@@ -4453,7 +4624,7 @@ class CCBot:
                 await c.answer()
                 await self._safe_edit(
                     msg, await self._service_text(), parse_mode="HTML",
-                    reply_markup=service_kb(service.under_systemd()),
+                    reply_markup=self._service_kb(),
                 )
             elif action == "ask":
                 if not service.under_systemd():
@@ -4466,6 +4637,13 @@ class CCBot:
             elif action == "go":
                 await c.answer(_("Restarting…"))
                 await self._do_restart(chat_id)
+            elif action.startswith("sdk:") and not self.settings.sdk_locked:
+                self.settings.sdk = action[4:]
+                log.info("sdk switch -> %s", self.settings.sdk)
+                await c.answer(_("New sessions: {mode}").format(
+                    mode=sdk_label(self.settings.sdk)))
+                await self._safe_edit(msg, await self._service_text(),
+                                      parse_mode="HTML", reply_markup=self._service_kb())
             return
 
         if data.startswith("ren:"):
@@ -4498,6 +4676,22 @@ class CCBot:
 
         if data.startswith("lg:"):
             await self._login_callback(c, msg, chat_id, data[3:])
+            return
+
+        if data.startswith("rq:"):
+            answered = await self.bridge.callback(c, data[3:])
+            if answered is not None and self._focus(chat_id, answered):
+                await self._say_focused(msg, answered)
+            return
+
+        if data.startswith("nds:"):
+            await c.answer(_("Starting…"))
+            idx = int(data[4:]) if data[4:].isdigit() else -1
+            if 0 <= idx < len(self.dir_choices):
+                sid = await self._create(chat_id, self.dir_choices[idx], backend="sdk")
+                if sid:
+                    await self._settle(
+                        msg, self._dir_picked(self.dir_choices[idx]), sid)
             return
 
         if data.startswith("k:"):
@@ -4839,7 +5033,10 @@ class CCBot:
         started = datetime.fromtimestamp(mgd.created_at)
         lines.append(_("🕘 Created: {when}").format(
             when=started.strftime(_("%d.%m %H:%M"))))
-        lines.append(f"🖥 tmux: <code>{mgd.window_id}</code>")
+        if mgd.is_sdk:
+            lines.append(_("🧪 Runs through the Agent SDK (session host)."))
+        else:
+            lines.append(f"🖥 tmux: <code>{mgd.window_id}</code>")
         lines.append(f"🔑 <code>{mgd.session_id}</code>")
         return "\n".join(lines)
 
@@ -4879,6 +5076,8 @@ class CCBot:
 
     async def _status(self, mgd):
         """Model / effort / permission mode as shown in the status line."""
+        if mgd.is_sdk:
+            return screenmod.Status()
         try:
             return screenmod.read_status(await tmux.capture(mgd.window_id))
         except tmux.TmuxError:
@@ -4967,6 +5166,9 @@ class CCBot:
         it. That is also what makes a `/model` the user types by hand come out
         as a card rather than as "a screen I do not understand".
         """
+        if mgd.is_sdk:
+            await c.answer(_sdk_not_yet(), show_alert=True)
+            return False
         raw = await tmux.capture(mgd.window_id)
         open_now = screenmod.find_dialog(raw)
         if open_now is not None and open_now.kind == kind:
@@ -5157,6 +5359,8 @@ class CCBot:
 
     async def _dialog_now(self, mgd):
         """The dialog on the screen right now, or None if the read failed."""
+        if mgd.is_sdk:
+            return None
         try:
             return screenmod.find_dialog(await tmux.capture(mgd.window_id))
         except tmux.TmuxError:
@@ -5470,6 +5674,13 @@ class CCBot:
         await self._answer_dialog(mgd, opt.number)
 
     async def _session_action(self, c: CallbackQuery, mgd, action: str) -> None:
+        if mgd.is_sdk and action not in _SDK_ACTIONS:
+            await c.answer(_sdk_not_yet(), show_alert=True)
+            return
+        if mgd.is_sdk and action == "esc":
+            await c.answer(_("Interrupting…"))
+            await self._interrupt_sdk(_editable(c), mgd, "")
+            return
         if action == "esc":
             self._typed(mgd)
             await tmux.send_keys(mgd.window_id, "Escape")
@@ -5535,7 +5746,11 @@ class CCBot:
             # that does nothing for eight seconds gets pressed again.
             await c.answer(_("Ending it…"))
             name = mgd.full_label
-            await self._close(mgd.session_id)
+            if not await self._close(mgd.session_id):
+                await self.bot.send_message(
+                    c.message.chat.id if c.message else self.cfg.owner,
+                    _close_failed(name), parse_mode="HTML")
+                return
             await self._show_sessions(c)
             await self.bot.send_message(
                 c.message.chat.id if c.message else self.cfg.owner,
@@ -5664,9 +5879,11 @@ class CCBot:
         if stale:
             log.info("removed %d stale status payloads", stale)
         self.watcher.start()
+        self.bridge.start()
         log.info("polling started")
         try:
             await self.dp.start_polling(self.bot, handle_signals=False)
         finally:
+            await self.bridge.stop()
             await self.watcher.stop()
             await self.bot.session.close()

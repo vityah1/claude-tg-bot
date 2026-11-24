@@ -103,6 +103,15 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- The card each question of an SDK session was posted as (`bridge.py`). The
+-- session host replays its journal after a bot restart, and a request that
+-- already has a card must not get a second one.
+CREATE TABLE IF NOT EXISTS request_cards (
+    rid        TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -168,6 +177,14 @@ class Managed(_Named):
     offset: int
     title: str | None
     custom_name: str | None = None
+    # "tmux" (a window driven through the terminal) or "sdk" (a client held
+    # by the session host). A tmux-only path must never act on an sdk row:
+    # its window id is empty, and "no such window" reads as a closed session.
+    backend: str = "tmux"
+
+    @property
+    def is_sdk(self) -> bool:
+        return self.backend == "sdk"
 
 
 @dataclass
@@ -194,7 +211,15 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
         self._add_custom_name()
+        self._add_backend()
         self.conn.commit()
+
+    def _add_backend(self) -> None:
+        """Every row written before the SDK path existed is a tmux session."""
+        columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(managed)")}
+        if "backend" not in columns:
+            self.conn.execute(
+                "ALTER TABLE managed ADD COLUMN backend TEXT NOT NULL DEFAULT 'tmux'")
 
     def _add_custom_name(self) -> None:
         """Split a hand-picked name out of `name`, which must stay the launch one.
@@ -218,16 +243,17 @@ class Store:
                 )
 
     # -- managed sessions -------------------------------------------------
-    def add(self, session_id: str, window_id: str, cwd: str, name: str) -> None:
+    def add(self, session_id: str, window_id: str, cwd: str, name: str,
+            backend: str = "tmux") -> None:
         # A resumed session brings its name back with it: the row in `managed`
         # is new, but the one in `session_names` was never deleted.
         self.conn.execute(
             "INSERT OR REPLACE INTO managed"
             " (session_id, window_id, cwd, name, created_at, offset, title,"
-            "  custom_name)"
-            " VALUES (?,?,?,?,?,0,NULL,?)",
+            "  custom_name, backend)"
+            " VALUES (?,?,?,?,?,0,NULL,?,?)",
             (session_id, window_id, cwd, name, time.time(),
-             self.saved_name(session_id)),
+             self.saved_name(session_id), backend),
         )
         # However it came back — the restore card, a resume from history — a
         # session that is running again has nothing left to restore.
@@ -246,11 +272,35 @@ class Store:
         known = {f.name for f in fields(Managed)}
         return Managed(**{k: v for k, v in dict(row).items() if k in known})
 
-    def all_managed(self) -> list[Managed]:
+    def all_managed(self, backend: str | None = None) -> list[Managed]:
+        """Every managed session, or only those of one *backend*."""
         rows = self.conn.execute(
             "SELECT * FROM managed ORDER BY created_at DESC"
         ).fetchall()
-        return [self._row_to_managed(r) for r in rows]
+        out = [self._row_to_managed(r) for r in rows]
+        return out if backend is None else [m for m in out if m.backend == backend]
+
+    def by_name(self, name: str) -> Managed | None:
+        """An SDK session by its launch name — the key the host knows it by."""
+        r = self.conn.execute(
+            "SELECT * FROM managed WHERE name=? AND backend='sdk'", (name,)
+        ).fetchone()
+        return self._row_to_managed(r) if r else None
+
+    # -- cards of SDK questions -----------------------------------------
+    def card_of(self, rid: str) -> int | None:
+        r = self.conn.execute(
+            "SELECT message_id FROM request_cards WHERE rid=?", (rid,)).fetchone()
+        return int(r["message_id"]) if r else None
+
+    def remember_card(self, rid: str, session_id: str, message_id: int) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO request_cards (rid, session_id, message_id,"
+                " created_at) VALUES (?,?,?,?)",
+                (rid, session_id, message_id, time.time()))
+            self.conn.execute("DELETE FROM request_cards WHERE created_at < ?",
+                              (time.time() - _ALIAS_TTL,))
 
     def get(self, session_id: str) -> Managed | None:
         r = self.conn.execute(

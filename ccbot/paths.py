@@ -43,5 +43,6 @@ def ensure(path: Path) -> Path:
 CONFIG_FILE = config_dir() / "config.json"
 STATE_DB = data_dir() / "state.db"
 LOG_FILE = cache_dir() / "bot.log"
+HOST_LOG_FILE = cache_dir() / "host.log"
 MEDIA_DIR = cache_dir() / "media"
 STATUS_DIR = cache_dir() / "status"

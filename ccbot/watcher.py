@@ -566,7 +566,7 @@ class Watcher:
         reading. The launch name (`claude -n`) is the thread back: it survives
         the clear, and `claude agents --json` reports it next to the new id.
         """
-        managed = self.store.all_managed()
+        managed = self.store.all_managed(backend="tmux")
         if not managed:
             return
         agents = await sess.live_agents()
@@ -611,7 +611,7 @@ class Watcher:
         disk = await updates.installed()
         if not disk or self.settings.notified_version == disk:
             return
-        behind = [m for m in self.store.all_managed()
+        behind = [m for m in self.store.all_managed(backend="tmux")
                   if updates.stale(m.session_id, disk)]
         if not behind:
             return
@@ -648,7 +648,7 @@ class Watcher:
         if boot and boot != seen:
             self.store.meta_set("boot_id", boot)
         rebooted = bool(boot) and bool(seen) and boot != seen
-        managed = self.store.all_managed()
+        managed = self.store.all_managed(backend="tmux")
         if not managed:
             return
         if not rebooted and await tmux.server_pid():
@@ -679,7 +679,8 @@ class Watcher:
         await self._check_version()
         await self._rebind_cleared()
         live = {a.get("sessionId"): a for a in await sess.live_agents()}
-        for m in self.store.all_managed():
+        # SDK sessions have no window and no screen: `bridge.py` follows them.
+        for m in self.store.all_managed(backend="tmux"):
             rt = self.runtimes.get(m.session_id)
             if rt is None:
                 rt = SessionRuntime(m.session_id, m.offset)

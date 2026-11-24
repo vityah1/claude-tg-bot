@@ -13,6 +13,12 @@ need to duplicate it here).
   (`Restart=always`). **Do not start a second `main.py`** — Telegram gives
   `getUpdates` to one poller only, and both sides start failing with
   `TelegramConflictError`. Check with `systemctl --user is-active claude-tg-bot`.
+- 🔴 **The session host is a second unit, `claude-tg-host`** (`host_main.py`,
+  `ccbot/host/`): it holds the Agent SDK sessions. Restart it only when its own
+  code (`ccbot/host/*`, the SDK pin) changed — a host restart ends every SDK
+  turn in progress. Before one, ask it what is busy (`status` over the socket,
+  or `/service`). Code in `bridge.py` / `hostlink.py` / `bot.py` needs only the
+  bot restart. Its log: `~/.cache/ccbot/host.log`.
 - There is no hot reload. After changing code:
   `systemctl --user restart claude-tg-bot`. Claude's sessions survive it
   (`KillMode=process` — only the bot dies, the tmux server stays). `/restart` in
@@ -77,6 +83,7 @@ asymmetric:
 | The list of live sessions | `claude agents --json` | `sessions.py` |
 | Which Claude Code a session runs, and which is on disk | the payload's `version` / `claude --version` | `updates.py` |
 | Interface language (gettext, `locales/`) | a middleware on each update + a context in the watcher tick | `i18n.py` |
+| SDK sessions (being introduced, behind the `sdk` switch) | a session host process holding `ClaudeSDKClient`s; NDJSON socket with a replayed event journal; events → cards | `host/`, `hostlink.py`, `bridge.py` |
 
 The `Watcher._tick()` loop (`watcher.py`, every `CCBOT_POLL_INTERVAL` seconds,
 1.5 by default): rebind after `/clear` → read the transcript into the buffer →
@@ -112,6 +119,21 @@ is still alive, too. That is why rows are read tolerantly
 (`_row_to_managed`), and why the bot has to be restarted after a schema change.
 
 ## Invariants that are easy to break
+
+- 🔴 **A tmux-only path never acts on an SDK row.** `Managed.backend` is
+  "tmux" or "sdk"; an SDK row has an empty `window_id`, and "no such window"
+  reads as a closed session — `_tick_session` would delete the row. The
+  watcher's loops take `all_managed(backend="tmux")`; everything in `bot.py`
+  that touches tmux or the screen branches on `mgd.is_sdk` first (or refuses
+  with `_sdk_not_yet()`). The host knows a session by its launch name
+  (`Store.by_name`), never by an id — `/clear` changes the id
+  (`session_reset` → `Store.rebind`, aliases as for tmux).
+- 🔴 **An SDK event is acknowledged only once it has reached the chat.** Text
+  waits in the bridge's buffer with its `seq`; the ack is the lowest buffered
+  seq minus one, so a bot restart replays exactly what had not gone out. A card
+  already sent for a request is found in `request_cards` and not sent again.
+  The host takes one client: a second connection replaces the first, so never
+  point a test client at the live socket.
 
 - **`Managed.name` is the launch name (`claude -n`) and it is untouchable.**
   `/clear` does not restart Claude, but it does hand out a **new session_id**,
