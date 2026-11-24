@@ -160,9 +160,14 @@ def session_kb(v: SessionView, asking: bool = False,
     s = sid8(v.session_id)
     kb = InlineKeyboardBuilder()
     if sdk:
-        # An SDK session gets only what works for it today; the screen, the
-        # pickers, /login and a restart come with the later stages, and a
-        # button that answers "not yet" is a button that should not be there.
+        # An SDK session gets only what works for it; a button that answers
+        # "not yet" is a button that should not be there. It has no screen:
+        # «📜 Where it stopped» is the recap read from its transcript.
+        if asking:
+            kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
+                                        callback_data=f"k:{s}:ask"))
+        kb.row(InlineKeyboardButton(text=_("📜 Where it stopped"),
+                                    callback_data=f"k:{s}:recap"))
         kb.row(InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
                InlineKeyboardButton(text=_("📊 Limits"), callback_data=f"k:{s}:usage"))
         kb.row(InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
@@ -656,6 +661,14 @@ def sdk_effort_kb(session_id: str, levels: list[str], now: str) -> InlineKeyboar
         kb.row(InlineKeyboardButton(text=("✅ " if lv == now else "") + lv,
                                     callback_data=f"sef:{s}:{lv}"))
     kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
+    return kb.as_markup()
+
+
+def ask_kb(session_id: str) -> InlineKeyboardMarkup:
+    """«🔔 Show the question» on its own, under a recap of a waiting session."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
+                                callback_data=f"k:{sid8(session_id)}:ask"))
     return kb.as_markup()
 
 

@@ -19,11 +19,12 @@ need to duplicate it here).
   turn in progress. Before one, ask it what is busy (`status` over the socket,
   or `/service`). Code in `bridge.py` / `hostlink.py` / `bot.py` needs only the
   bot restart. Its log: `~/.cache/ccbot/host.log`.
-- 🔴 **The bot's chat is the user's live workplace.** No live test through it
-  (Telegram Web) without asking him first: a test reply makes the test session
-  active, and his next message lands there (2026-11-24, twice). Never write the
-  `active` table by hand — it overrode his own choice. Test sessions are closed
-  as soon as the check is done. (2026-11-24, SDK migration)
+- 🔴 **The bot's chat is the user's live workplace.** Live tests through it
+  (Telegram Web) are allowed since 2026-11-24: he addresses his sessions by
+  reply while they run. But a test reply makes the test session active (his
+  plain message landed there that day), so: never write the `active` table by
+  hand — it overrode his own choice — and close a test session as soon as the
+  check is done. (2026-11-24, SDK migration)
 - There is no hot reload. After changing code:
   `systemctl --user restart claude-tg-bot`. Claude's sessions survive it
   (`KillMode=process` — only the bot dies, the tmux server stays). `/restart` in

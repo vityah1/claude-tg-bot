@@ -103,6 +103,8 @@ class _Req:
     at: float = field(default_factory=time.monotonic)
     # When a card was last attempted: one that did not go out is tried again.
     tried: float = 0.0
+    # «🔔 Show the question» asked for it at the bottom; the tick posts it.
+    repost: bool = False
     # AskUserQuestion: the part on show, what has been answered, the ticks.
     index: int = 0
     answers: dict[str, Any] = field(default_factory=dict)
@@ -234,6 +236,16 @@ class SdkBridge:
         for rid in [r for r, q in self.requests.items() if q.name == name]:
             self.requests.pop(rid, None)
 
+    def request_repost(self, mgd: Managed) -> bool:
+        """Have the session's open cards posted again at the bottom; False: none."""
+        reqs = [q for q in self.requests.values() if q.name == mgd.name]
+        for q in reqs:
+            if q.msg_id is None:
+                q.tried = 0.0       # its card never went out: the next tick sends it
+            else:
+                q.repost = True
+        return bool(reqs)
+
     def question_open(self, mgd: Managed) -> bool:
         return any(q.name == mgd.name for q in self.requests.values())
 
@@ -333,7 +345,24 @@ class SdkBridge:
                 rt.usage_due = False
                 await self._check_usage(name, rt)
         for req in list(self.requests.values()):
-            if req.msg_id is None and time.monotonic() - req.tried > 15:
+            if req.rid not in self.requests:
+                continue            # answered by an earlier await of this tick
+            if req.repost and req.msg_id is not None:
+                req.repost = False
+                old, req.msg_id = req.msg_id, None
+                await self._card(req, fresh=True)
+                new = req.msg_id
+                if new is None:
+                    req.msg_id = old        # not sent: the old card stays in charge
+                elif req.rid not in self.requests:
+                    # Answered on the old card while the new one was going out.
+                    await self._retire(req, _("⏹ Question closed"))
+                else:
+                    with contextlib.suppress(Exception):
+                        await self.bot.edit_message_reply_markup(
+                            chat_id=self.chat_id, message_id=old,
+                            reply_markup=done_kb(_("⬇️ Shown again below")))
+            elif req.msg_id is None and time.monotonic() - req.tried > 15:
                 await self._card(req)
         for name, rt in list(self.rt.items()):
             if rt.buffer and not self._holding(name):
@@ -695,13 +724,13 @@ class SdkBridge:
         await self._drop_pulse(rt)
         await self._card(req)
 
-    async def _card(self, req: _Req) -> None:
+    async def _card(self, req: _Req, fresh: bool = False) -> None:
         req.tried = time.monotonic()
         mgd = self.store.by_name(req.name)
         if mgd is None:
             log.warning("request %s for an unknown sdk session %s", req.rid[:8], req.name)
             return
-        known = self.store.card_of(req.rid)
+        known = None if fresh else self.store.card_of(req.rid)
         if known is not None:
             req.msg_id = known
             if req.kind == "question":

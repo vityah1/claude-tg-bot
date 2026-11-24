@@ -31,11 +31,12 @@ from aiogram.types import (
     Update,
 )
 
-from . import account, logsetup, media, rich, service, status_feed, tmux, updates, util
+from . import account, logsetup, media, rich, service, status_feed, tmux, transcript, updates, util
 from . import login as loginmod
 from . import screen as screenmod
 from . import sessions as sess
 from .bridge import SdkBridge
+from .bridge import _plain as plain_text
 from .config import Config
 from .hostlink import HostError
 from .i18n import (
@@ -56,6 +57,7 @@ from .keyboards import (
     HISTORY_PAGE,
     STATUS_ICON,
     anyway_kb,
+    ask_kb,
     cancel_rename_kb,
     choice_kb,
     confirm_kb,
@@ -240,7 +242,7 @@ follow the same rule.
    «🔁 Restart» next to it relaunches the session with its
    context (<code>/exit</code>, then resume). If background tasks
    are running in it, it says which and asks before stopping them.
-/screen — a text snapshot of the terminal
+/screen — a text snapshot of the terminal (an SDK session: where it stopped)
 /esc — <b>interrupt what Claude is doing</b> (the Esc key).
    The session stays alive and its context is untouched.
 /clear — clear the session's context. The session lives on,
@@ -399,17 +401,13 @@ def _sessions_text(managed: list[sess.SessionView],
 
 # What an SDK session's card answers today. The rest — model and effort
 # pickers, /login, a restart, the screen — arrive with the later stages.
-_SDK_ACTIONS = {"esc", "clear", "compact", "ctx", "close", "restart", "usage"}
+_SDK_ACTIONS = {"esc", "clear", "compact", "ctx", "close", "restart", "usage", "recap",
+                "ask"}
 
 
 def _sdk_not_yet() -> str:
     return _("Not available for SDK sessions yet — it comes with a later stage "
              "of the move to the Agent SDK.")
-
-
-def _sdk_no_screen() -> str:
-    return _("An SDK session has no terminal screen: everything it shows comes "
-             "to the chat as messages and cards.")
 
 
 def _host_refusal(exc: HostError) -> str:
@@ -813,7 +811,7 @@ class CCBot:
                 return
             mgd, _note = await self._target(m)
             if mgd and mgd.is_sdk:
-                await m.answer(_sdk_no_screen())
+                await self._send_recap(m.chat.id, mgd)
             elif mgd:
                 await self.watcher.send_screen(mgd.window_id, mgd.full_label,
                                                mgd.session_id)
@@ -2707,6 +2705,49 @@ class CCBot:
             name=html.escape(mgd.full_label)), mgd)
         if self._focus(chat_id, mgd):
             await self._say_focused(msg, mgd)
+
+    async def _send_recap(self, chat_id: int, mgd) -> None:
+        """«📜 Where it stopped»: the SDK session's stand-in for a screen.
+
+        Its state, the last task, the steps since and the last answer, read
+        from the transcript — no tokens spent, and true after any restart.
+        """
+        rc = await asyncio.to_thread(transcript.recap, mgd.session_id)
+        state = self.bridge.state(mgd)
+        rt = self.bridge.info(mgd)
+        if state == "busy" and rt is not None and rt.work_since:
+            minutes = max(1, int((time.time() - rt.work_since) // 60))
+            said = _("working for {minutes} min").format(minutes=minutes)
+        else:
+            said = {"busy": _("working"), "waiting": _("waiting for your answer"),
+                    "idle": _("free"), "dormant": _("resting — your next message wakes it"),
+                    "offline": _("the session host is not answering")}.get(state, state)
+        parts = [_("**📜 {name}: where it stopped**").format(name=rich.md_escape(mgd.full_label)),
+                 _("📊 State: {state}").format(state=rich.md_escape(said))]
+        if rc.prompt:
+            short = rc.prompt if len(rc.prompt) <= 600 else rc.prompt[:600] + "…"
+            parts.append(_("**✍️ Your last task:**") + "\n\n" + rich.md_escape(short))
+        if rc.steps:
+            # A Markdown list: single line breaks are folded into one line.
+            parts.append(_("**🔧 Last steps:**") + "\n\n" + "\n".join(
+                f"- {rich.md_escape(x)}" for x in rc.steps))
+        if rc.answer:
+            parts.append(_("**💬 Last answer:**") + "\n\n" + rc.answer)
+        if not (rc.prompt or rc.steps or rc.answer):
+            parts.append(_("The transcript has nothing yet."))
+        doc = "\n\n".join(parts)
+        if len(doc) > rich.DOC_LIMIT:
+            doc = doc[:rich.DOC_LIMIT - 1] + "…"
+        kb = ask_kb(mgd.session_id) if self.bridge.question_open(mgd) else None
+        msg = await rich.send(self.bot, chat_id, markdown=doc, reply_markup=kb)
+        if msg is None:
+            chunks = util.split_text(plain_text(doc))
+            for i, chunk in enumerate(chunks):
+                msg = await self.bot.send_message(
+                    chat_id, chunk, reply_markup=kb if i == len(chunks) - 1 else None)
+                self.store.remember_message(msg.message_id, mgd.session_id)
+            return
+        self.store.remember_message(msg.message_id, mgd.session_id)
 
     async def _interrupt_sdk(self, m: Message | None, mgd, note: str) -> None:
         """Esc for an SDK session: interrupt the turn, keep the session."""
@@ -5209,6 +5250,8 @@ class CCBot:
         Read off the watcher's cards, not the agent list: its "waiting" also
         covers a /btw overlay and lags behind an answer.
         """
+        if mgd.is_sdk:
+            return self.bridge.question_open(mgd)
         rt = self.watcher.runtimes.get(mgd.session_id)
         return rt is not None and any((
             rt.dialog_msg_id, rt.blocked_msg_id, rt.login_msg_id))
@@ -5216,10 +5259,14 @@ class CCBot:
     def _show_question(self, mgd) -> bool:
         """Have the card this session waits on posted again at the bottom.
 
+        An SDK session's cards are the bridge's, posted again by its tick.
+
         False when no card stands, i.e. the session is not waiting on a
         choice. The login card keeps its buttons (they are guarded by its
         step); a question or a screen moves, see `Watcher.request_repost`.
         """
+        if mgd.is_sdk:
+            return self.bridge.request_repost(mgd)
         rt = self.watcher.runtimes.get(mgd.session_id)
         if rt is not None and rt.login_msg_id is not None:
             self.watcher.repost_login(mgd.session_id)
@@ -5928,6 +5975,10 @@ class CCBot:
         if mgd.is_sdk and action not in _SDK_ACTIONS:
             await c.answer(_sdk_not_yet(), show_alert=True)
             return
+        if mgd.is_sdk and action == "recap":
+            await c.answer()
+            await self._send_recap(c.message.chat.id if c.message else self.cfg.owner, mgd)
+            return
         if mgd.is_sdk and action == "esc":
             await c.answer(_("Interrupting…"))
             await self._interrupt_sdk(_editable(c), mgd, "")
@@ -6025,7 +6076,7 @@ class CCBot:
         ("menu", N_("Controls of the session you are talking to")),
         ("new", N_("New session in a chosen directory")),
         ("usage", N_("Quota and context, without asking Claude")),
-        ("screen", N_("Snapshot of the active session's terminal")),
+        ("screen", N_("Terminal snapshot, or where an SDK session stopped")),
         ("esc", N_("Interrupt what Claude is doing")),
         ("clear", N_("Clear the active session's context")),
         ("rename", N_("Give a session your own name")),

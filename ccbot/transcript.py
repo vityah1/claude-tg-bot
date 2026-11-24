@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -19,7 +19,7 @@ _TOOL_HINT_KEYS = ("command", "file_path", "pattern", "path", "url", "prompt", "
 # Wrappers Claude injects as "user" messages; none of them is what a person
 # would recognise as what the session is about.
 _INJECTED_PREFIXES = ("<local-command", "<command-", "<system-", "<user-prompt",
-                      "<session-", "Caveat:")
+                      "<session-", "Caveat:", "<task-notification")
 # How far into a transcript to look for the opening prompt before giving up.
 # A session opens with a file-history snapshot that routinely runs past 250 KB,
 # so a smaller budget finds the preamble and nothing else.
@@ -59,6 +59,10 @@ def prompt_text(line: str) -> str | None:
     except ValueError:
         return None
     if rec.get("type") != "user" or rec.get("isSidechain") or rec.get("toolUseResult"):
+        return None
+    # A skill's text loaded into the turn, a background task's notice: written
+    # as user records, typed by nobody.
+    if rec.get("isMeta") or rec.get("origin"):
         return None
     content = (rec.get("message") or {}).get("content")
     if isinstance(content, list):
@@ -180,6 +184,51 @@ def parse_line(raw: str) -> list[Event]:
         elif btype == "tool_use":
             events.append(Event("tool", _summarise_tool(block)))
     return events
+
+
+@dataclass
+class Recap:
+    """Where a session stopped, read off the tail of its transcript."""
+
+    prompt: str = ""                 # the last thing the user asked
+    steps: list[str] = field(default_factory=list)   # tool lines since, newest last
+    answer: str = ""                 # Claude's last words since that prompt
+
+
+def recap(session_id: str, steps: int = 8, span: int = 800 * 1024) -> Recap:
+    """The last prompt, the tool calls and the last answer after it.
+
+    Read from the transcript, so it costs no tokens and is the same whether
+    the session is running, resting or the bot has just restarted.
+    """
+    path = find_transcript(session_id)
+    out = Recap()
+    if path is None:
+        return out
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - span))
+            data = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return out
+    lines = data.splitlines()
+    if size > span:
+        lines = lines[1:]            # the first one is cut in half
+    tools: list[str] = []
+    for raw in lines:
+        typed = prompt_text(raw)
+        if typed:
+            out.prompt, tools, out.answer = typed, [], ""
+            continue
+        for ev in parse_line(raw):
+            if ev.kind == "tool":
+                tools.append(ev.text)
+            elif ev.kind == "text":
+                out.answer = ev.text
+    out.steps = tools[-steps:]
+    return out
 
 
 class TranscriptReader:
