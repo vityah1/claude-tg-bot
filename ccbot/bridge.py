@@ -105,6 +105,9 @@ class _Req:
     tried: float = 0.0
     # «🔔 Show the question» asked for it at the bottom; the tick posts it.
     repost: bool = False
+    # A send of its card is under way: no second path may start another
+    # (the tick's retry raced the event's own send — two cards, 2026-11-24).
+    sending: bool = False
     # AskUserQuestion: the part on show, what has been answered, the ticks.
     index: int = 0
     answers: dict[str, Any] = field(default_factory=dict)
@@ -718,13 +721,22 @@ class SdkBridge:
     async def _request_open(self, name: str, rt: _Rt, d: dict[str, Any]) -> None:
         rid = d.get("rid") or ""
         req = _Req(rid=rid, name=name, tool=d.get("tool") or "?",
-                   input=d.get("input") or {}, data=d)
+                   input=d.get("input") or {}, data=d, tried=time.monotonic())
         self.requests[rid] = req
         await self._flush(name)
         await self._drop_pulse(rt)
         await self._card(req)
 
     async def _card(self, req: _Req, fresh: bool = False) -> None:
+        if req.sending:
+            return
+        req.sending = True
+        try:
+            await self._send_card(req, fresh)
+        finally:
+            req.sending = False
+
+    async def _send_card(self, req: _Req, fresh: bool) -> None:
         req.tried = time.monotonic()
         mgd = self.store.by_name(req.name)
         if mgd is None:
