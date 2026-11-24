@@ -722,6 +722,12 @@ class Watcher:
                             name: str, rt: SessionRuntime,
                             agent_status: str = "") -> None:
         if not await tmux.window_exists(window_id):
+            row = self.store.get(session_id)
+            if row is None or row.is_sdk:
+                # Moved to the session host while this tick was under way
+                # (or already removed): not a closed window.
+                self.forget(session_id)
+                return
             if not rt.reported_gone:
                 rt.reported_gone = True
                 log.info("session gone id=%s name=%s window=%s",

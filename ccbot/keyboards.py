@@ -156,7 +156,7 @@ def confirm_kb(session_id: str, kind: str, back: str = "hist",
 
 
 def session_kb(v: SessionView, asking: bool = False,
-               sdk: bool = False) -> InlineKeyboardMarkup:
+               sdk: bool = False, movable: bool = False) -> InlineKeyboardMarkup:
     s = sid8(v.session_id)
     kb = InlineKeyboardBuilder()
     if sdk:
@@ -177,6 +177,7 @@ def session_kb(v: SessionView, asking: bool = False,
                InlineKeyboardButton(text=_("◉ Effort"), callback_data=f"cfg:{s}:effort"),
                InlineKeyboardButton(text=_("🔐 Mode"), callback_data=f"cfg:{s}:mode"))
         kb.row(InlineKeyboardButton(text=_("✏️ Rename"), callback_data=f"ren:{s}"),
+               InlineKeyboardButton(text=_("🔑 Other account"), callback_data=f"k:{s}:login"),
                InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"))
         kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
         return kb.as_markup()
@@ -209,6 +210,9 @@ def session_kb(v: SessionView, asking: bool = False,
         InlineKeyboardButton(text=_("🔑 Other account"), callback_data=f"k:{s}:login"),
         InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
     )
+    if movable:
+        # The way across: the same session, carried on by the session host.
+        kb.row(InlineKeyboardButton(text=_("↗️ Move to SDK"), callback_data=f"k:{s}:tosdk"))
     kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
     return kb.as_markup()
 
@@ -661,6 +665,29 @@ def sdk_effort_kb(session_id: str, levels: list[str], now: str) -> InlineKeyboar
         kb.row(InlineKeyboardButton(text=("✅ " if lv == now else "") + lv,
                                     callback_data=f"sef:{s}:{lv}"))
     kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
+    return kb.as_markup()
+
+
+def auth_link_kb(url: str, serial: int) -> InlineKeyboardMarkup:
+    """The sign-in page of `claude auth login`, and a way out of that one login."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("🔑 Open the sign-in page"), url=url))
+    kb.row(InlineKeyboardButton(text=_("✖️ Cancel"), callback_data=f"alg:cancel:{serial}"))
+    return kb.as_markup()
+
+
+def move_anyway_kb(session_id: str) -> InlineKeyboardMarkup:
+    """Past a refusal that only background work stood behind."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("↗️ Move anyway — the background work stops"),
+                                callback_data=f"k:{sid8(session_id)}:tosdkf"))
+    return kb.as_markup()
+
+
+def auth_retry_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("🔁 Try again with a new link"),
+                                callback_data="alg:retry"))
     return kb.as_markup()
 
 

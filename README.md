@@ -83,9 +83,26 @@ button next to every folder in the new-session picker; `default` — new session
 start through the SDK. Existing sessions keep the backend they started with.
 Rolling back is `off` plus a restart.
 
-Not yet available for an SDK session (later stages): the model, effort and mode
-pickers, `/login`, a restart onto a new Claude Code build, `/btw`, «🔔 Show the
-question», the usage gauges. Such a button answers that it is not available yet.
+What an SDK session's card offers, and how it differs from a tmux one:
+
+* **Cards from data.** Questions (one card paged part by part, «✏️ Own answer»,
+  «💬 Discuss»), permission requests (Allow / Always / Deny / «✏️ Deny with a
+  reason») and plans (Approve / Approve and accept edits / «✏️ Revise» / Keep
+  planning) come from `can_use_tool`, never from a screen.
+* **No screen.** `/screen` and «📜 Where it stopped» send a recap read from the
+  transcript: the state, your last task, Claude's last steps and last answer.
+* **Model, effort, mode** come from Claude Code's own `get_server_info()` and
+  apply to this session only; the host remembers them across a wake-up.
+* **Restart** resumes the same id on the CLI on disk; **/btw** asks a fork of
+  the session that keeps its model, mode and tools (so it reads the cached
+  context) and is barred from running tools by a hook.
+* **/login** runs `claude auth login` under a pty: the link comes to the chat,
+  the code goes back the same way. The login is the machine's, for every session.
+
+**Moving a session across.** A tmux session's card (with the switch on
+`preview` or `default`) has «↗️ Move to SDK»: `/exit` in tmux, then the host
+resumes the same id — same transcript, same name, same buttons in the chat. If
+the host will not take it, the session is resumed in its window again.
 
 ## Three kinds of session
 

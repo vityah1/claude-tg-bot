@@ -283,6 +283,12 @@ class Store:
         out = [self._row_to_managed(r) for r in rows]
         return out if backend is None else [m for m in out if m.backend == backend]
 
+    def set_backend(self, session_id: str, backend: str, window_id: str) -> None:
+        """A session carried on by another backend: same id, name and history."""
+        self.conn.execute("UPDATE managed SET backend=?, window_id=? WHERE session_id=?",
+                          (backend, window_id, session_id))
+        self.conn.commit()
+
     def by_name(self, name: str) -> Managed | None:
         """An SDK session by its launch name — the key the host knows it by."""
         r = self.conn.execute(
@@ -561,6 +567,11 @@ class Store:
         # to the active session instead of the one that sent it.
         self.conn.execute("DELETE FROM msg_routes WHERE created_at < ?",
                           (time.time() - _ROUTE_TTL,))
+        self.conn.commit()
+
+    def forget_message(self, message_id: int) -> None:
+        """A message that no longer belongs to a session (redrawn as the list)."""
+        self.conn.execute("DELETE FROM msg_routes WHERE message_id=?", (message_id,))
         self.conn.commit()
 
     def session_of_message(self, message_id: int) -> str | None:

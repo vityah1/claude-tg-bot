@@ -35,6 +35,8 @@ from . import account, logsetup, media, rich, service, status_feed, tmux, transc
 from . import login as loginmod
 from . import screen as screenmod
 from . import sessions as sess
+from .authlogin import AuthLogin, LoginError
+from .authlogin import status as auth_status
 from .bridge import SdkBridge
 from .bridge import _plain as plain_text
 from .config import Config
@@ -58,6 +60,8 @@ from .keyboards import (
     STATUS_ICON,
     anyway_kb,
     ask_kb,
+    auth_link_kb,
+    auth_retry_kb,
     cancel_rename_kb,
     choice_kb,
     confirm_kb,
@@ -69,6 +73,7 @@ from .keyboards import (
     history_dirs_kb,
     history_kb,
     lang_kb,
+    move_anyway_kb,
     project_dirs_kb,
     restart_anyway_kb,
     restart_confirm_kb,
@@ -402,7 +407,7 @@ def _sessions_text(managed: list[sess.SessionView],
 # What an SDK session's card answers today. The rest — model and effort
 # pickers, /login, a restart, the screen — arrive with the later stages.
 _SDK_ACTIONS = {"esc", "clear", "compact", "ctx", "close", "restart", "usage", "recap",
-                "ask"}
+                "ask", "login"}
 
 
 def _sdk_not_yet() -> str:
@@ -729,6 +734,8 @@ class CCBot:
                                cfg.owner, cfg.poll_interval)
         # SDK sessions: held by the session host, followed through its events.
         self.bridge = SdkBridge(self.bot, self.store, self.watcher, cfg.owner)
+        # /login for SDK sessions: `claude auth login` under a pty.
+        self.auth = AuthLogin()
         sess.sdk_state = self.bridge.state
         status_feed.sdk_usage = self.bridge.usage_for
         # chat_id -> ("dir",) | ("dialog", session_id, option_number, card)
@@ -754,6 +761,8 @@ class CCBot:
         # Sessions a restart is under way in: a second press would type a
         # second `claude --resume` into the shell or the new TUI.
         self.restarting: set[str] = set()
+        # Sessions on their way to the session host, waiting for a drafts answer.
+        self.moving: set[str] = set()
         # Notices sent from outside a handler (an expired batch, the question
         # re-asked after a launch): kept only so the task is not
         # garbage-collected while it is still speaking.
@@ -1369,6 +1378,9 @@ class CCBot:
                          stopped=len(self.store.orphans()))
         if isinstance(target, CallbackQuery):
             await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
+            # It may have been a session's card a moment ago; as the list it
+            # belongs to none, and a reply follows the active session.
+            self.store.forget_message(here.message_id)
         else:
             await here.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -1771,7 +1783,11 @@ class CCBot:
                 log.info("drafts resume gave up: %s still running", sid[:8])
                 return
             log.info("drafts answered, resuming %s", sid[:8])
-            res = await self._relaunch(mgd)
+            if sid in self.moving:
+                self.moving.discard(sid)
+                res = await self._relaunch_sdk(mgd)
+            else:
+                res = await self._relaunch(mgd)
             msg = await self.bot.send_message(
                 chat_id, self._restart_text(mgd, res), parse_mode="HTML")
             if msg:
@@ -1946,7 +1962,7 @@ class CCBot:
         """
         name = html.escape(mgd.full_label)
         if mgd.is_sdk:
-            await self._ack(m, _sdk_not_yet(), mgd)
+            await self._start_auth_login(m, mgd)
             return
         try:
             raw = await tmux.capture(mgd.window_id)
@@ -1998,6 +2014,15 @@ class CCBot:
         handled message is deleted on every path: the code is a credential
         until it is used, and the reply says what became of it.
         """
+        replied_to = getattr(m, "reply_to_message", None)
+        replied_sid = (self.store.session_of_message(replied_to.message_id)
+                       if replied_to else None)
+        replied_mgd = self.store.get(replied_sid) if replied_sid else None
+        if self.auth.waiting and (replied_mgd is None or replied_mgd.is_sdk):
+            # A login the bot runs itself (`claude auth login`, for SDK
+            # sessions) takes the code — unless it answers a tmux panel's link.
+            await self._enter_auth_code(m, code, replied_mgd)
+            return True
         waiting = []
         for mgd in self.store.all_managed(backend="tmux"):
             try:
@@ -2153,7 +2178,8 @@ class CCBot:
         return _Restart(False, self._behind_reason(behind, ", ".join(what)),
                         forceable=behind)
 
-    async def _restart_session(self, mgd, force: bool = False) -> _Restart:
+    async def _restart_session(self, mgd, force: bool = False,
+                               to_sdk: bool = False) -> _Restart:
         """`_restart_in_place`, once at a time per session."""
         sid = mgd.session_id
         if sid in self.restarting:
@@ -2162,7 +2188,7 @@ class CCBot:
         try:
             if mgd.is_sdk:
                 return await self._restart_sdk(mgd, force)
-            return await self._restart_in_place(mgd, force)
+            return await self._restart_in_place(mgd, force, to_sdk)
         finally:
             self.restarting.discard(sid)
 
@@ -2181,7 +2207,7 @@ class CCBot:
             return _Restart(False, html.escape((exc.message or exc.code)[:300]))
         return _Restart(True, version=str((data.get("info") or {}).get("version") or ""))
 
-    async def _restart_in_place(self, mgd, force: bool) -> _Restart:
+    async def _restart_in_place(self, mgd, force: bool, to_sdk: bool = False) -> _Restart:
         """Relaunch a session's `claude` in place, context and all.
 
         `/exit`, then `claude --resume <id> -n <name>` in the same window. The
@@ -2247,6 +2273,8 @@ class CCBot:
                                      "second — it is updating itself; try "
                                      "again in a minute"))
 
+        if to_sdk and not self.bridge.link.online:
+            return _Restart(False, _("the session host is not answering"))
         log.info("restarting session id=%s name=%s window=%s status=%s",
                  mgd.session_id[:8], mgd.name, mgd.window_id, status or "-")
         updates.note_restarted(mgd.session_id)
@@ -2261,13 +2289,56 @@ class CCBot:
                 if isinstance(gone, _Restart):
                     return gone
             if gone == "drafts":
+                if to_sdk:
+                    self.moving.add(mgd.session_id)
                 return self._wait_drafts(mgd)
             if gone != "gone":
                 updates.forget(mgd.session_id)
                 log.warning("restart aborted: %s did not exit", mgd.session_id[:8])
                 return _Restart(False, _("it did not shut down within {n} s")
                                 .format(n=int(_RESTART_EXIT_TIMEOUT)))
+        if to_sdk:
+            return await self._relaunch_sdk(mgd)
         return await self._relaunch(mgd)
+
+    async def _relaunch_sdk(self, mgd) -> _Restart:
+        """Carry on a tmux session in the session host: same id, same name.
+
+        `claude` has left the window by now. The host resumes the transcript;
+        only then does the row change backend and the window go. If the host
+        will not take it, the session is resumed in its window again — it is
+        never left with nothing running.
+        """
+        probe = Managed(session_id=mgd.session_id, window_id="", cwd=mgd.cwd,
+                        name=mgd.name, created_at=mgd.created_at, offset=0,
+                        title=mgd.title, custom_name=mgd.custom_name, backend="sdk")
+        try:
+            data = await self.bridge.create(probe, resume=True)
+        except HostError as exc:
+            log.warning("move to sdk failed id=%s: %s", mgd.session_id[:8], exc)
+            if exc.code in ("timeout", "disconnected", "offline"):
+                # The host may still be resuming it: its copy goes first, or
+                # two `claude` processes would write one transcript.
+                try:
+                    await self.bridge.link.call("close", timeout=60, name=mgd.name)
+                except HostError as again:
+                    log.warning("move to sdk: host copy not closed: %s", again)
+                    return _Restart(False, _("the session host did not answer, and its "
+                                             "copy could not be stopped — open the "
+                                             "session's card in a minute"))
+            back = await self._relaunch(mgd)
+            detail = html.escape((exc.message or exc.code)[:200])
+            if back.ok:
+                return _Restart(False, _("the session host did not take it ({detail}); "
+                                         "it carries on in tmux as before").format(detail=detail))
+            return _Restart(False, _("the session host did not take it ({detail}), and "
+                                     "resuming it in tmux failed too — {reason}").format(
+                                         detail=detail, reason=back.reason))
+        self.store.set_backend(mgd.session_id, "sdk", "")
+        self.watcher.forget(mgd.session_id)
+        await tmux.kill_window(mgd.window_id)
+        log.info("session moved to sdk id=%s name=%s", mgd.session_id[:8], mgd.name)
+        return _Restart(True, version=str((data.get("info") or {}).get("version") or ""))
 
     async def _exit_tasks(self, mgd, force: bool) -> str | _Restart:
         """Answer `/exit`'s "the following will stop" question.
@@ -2441,6 +2512,24 @@ class CCBot:
             await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
         else:
             await here.answer(text, reply_markup=kb, parse_mode="HTML")
+
+    async def _move_to_sdk(self, chat_id: int, mgd, force: bool = False) -> None:
+        """«↗️ Move to SDK»: the same session, carried on by the session host."""
+        note = await self.bot.send_message(
+            chat_id, _("⏳ Moving <b>{name}</b> to the Agent SDK — /exit in tmux, then "
+                       "the session host resumes it…").format(
+                           name=html.escape(mgd.full_label)), parse_mode="HTML")
+        self.store.remember_message(note.message_id, mgd.session_id)
+        res = await self._restart_session(mgd, force=force, to_sdk=True)
+        kb = move_anyway_kb(mgd.session_id) if res.forceable and not res.ok else None
+        if res.ok:
+            text = _("✅ <b>{name}</b> now runs through the Agent SDK — the same session, "
+                     "context and all.").format(name=html.escape(mgd.full_label))
+        else:
+            text = _("⚠️ <b>{name}</b> was not moved — {reason}.").format(
+                name=html.escape(mgd.full_label), reason=res.reason)
+        with contextlib.suppress(Exception):
+            await note.edit_text(text, parse_mode="HTML", reply_markup=kb)
 
     async def _restart_one(self, chat_id: int, mgd, force: bool = False) -> None:
         """Restart a single session, saying so before, during and after."""
@@ -2705,6 +2794,72 @@ class CCBot:
             name=html.escape(mgd.full_label)), mgd)
         if self._focus(chat_id, mgd):
             await self._say_focused(msg, mgd)
+
+    async def _start_auth_login(self, m: Message, mgd=None) -> None:
+        """/login with no terminal: the sign-in link from `claude auth login`.
+
+        The login is the machine's, not one session's: every session reads the
+        same credentials.
+        """
+        try:
+            url = await self.auth.start()
+        except (LoginError, OSError) as exc:
+            log.warning("auth login did not start: %s", exc)
+            err = await m.answer(_("❌ Could not start the login: <code>{detail}</code>").format(
+                detail=html.escape(str(exc)[:300])), parse_mode="HTML")
+            if mgd is not None:
+                self.store.remember_message(err.message_id, mgd.session_id)
+            return
+        msg = await m.answer(
+            _("🔑 <b>Sign in to Claude</b> — for every session of this machine.\n\n"
+              "1. Open the page with the button below and sign in with the account "
+              "you want this machine to use.\n"
+              "2. The page shows a code: copy all of it, the part after # included.\n"
+              "3. Send it here as a message, and I will enter it."),
+            parse_mode="HTML", reply_markup=auth_link_kb(url, self.auth.serial))
+        if mgd is not None:
+            self.store.remember_message(msg.message_id, mgd.session_id)
+
+    async def _enter_auth_code(self, m: Message, code: str, mgd=None) -> None:
+        """The code for a login the bot runs: typed in, the message deleted."""
+        with contextlib.suppress(Exception):
+            await m.delete()        # a credential until it is used
+        note = await m.answer(_("⏳ Entering the code…"))
+        if mgd is not None:
+            self.store.remember_message(note.message_id, mgd.session_id)
+        ok, said = await self.auth.enter(code)
+        if ok:
+            st = {}
+            with contextlib.suppress(Exception):
+                st = await auth_status()
+            email = str(st.get("email") or "")
+            text = (_("✅ Logged in as <b>{email}</b>.").format(email=html.escape(email))
+                    if email else _("✅ Logged in."))
+            await note.edit_text(text, parse_mode="HTML")
+            return
+        await note.edit_text(
+            _("❌ Claude did not accept the code.") + f"\n\n<i>{html.escape(said)}</i>",
+            parse_mode="HTML", reply_markup=auth_retry_kb())
+
+    async def _auth_callback(self, c: CallbackQuery, msg: Message, arg: str) -> None:
+        """«🔁 New link» and «✖️ Cancel» of the bot's own login."""
+        if arg.startswith("cancel"):
+            serial = arg.partition(":")[2]
+            if serial and serial != str(self.auth.serial):
+                # A card of an earlier login: the one in progress is not its.
+                await c.answer(_("Login cancelled"))
+                with contextlib.suppress(Exception):
+                    await msg.edit_reply_markup(reply_markup=done_kb(_("✖️ Login cancelled")))
+                return
+            await self.auth.cancel()
+            await c.answer(_("Login cancelled"))
+            with contextlib.suppress(Exception):
+                await msg.edit_reply_markup(reply_markup=done_kb(_("✖️ Login cancelled")))
+            return
+        await c.answer()
+        with contextlib.suppress(Exception):
+            await msg.edit_reply_markup(reply_markup=None)
+        await self._start_auth_login(msg)
 
     async def _send_recap(self, chat_id: int, mgd) -> None:
         """«📜 Where it stopped»: the SDK session's stand-in for a screen.
@@ -4353,7 +4508,7 @@ class CCBot:
             if previous and previous != mgd.session_id:
                 prev = self.store.get(previous)
                 if prev:
-                    await msg.answer(
+                    note = await msg.answer(
                         _("🟢 Text now goes to <b>{name}</b>.\n"
                           "<b>{previous}</b> keeps working — to write to it, "
                           "reply to one of its messages.").format(
@@ -4361,6 +4516,7 @@ class CCBot:
                               previous=html.escape(prev.full_label)),
                         parse_mode="HTML",
                     )
+                    self.store.remember_message(note.message_id, mgd.session_id)
             await c.answer(_("Active: {name}").format(name=mgd.full_label))
             await self._show_session_card(c, mgd)
             return
@@ -4959,6 +5115,10 @@ class CCBot:
                 await self._say_focused(msg, answered)
             return
 
+        if data.startswith("alg:"):
+            await self._auth_callback(c, msg, data[4:])
+            return
+
         if data.startswith("again:"):
             await self._send_again(c, msg, chat_id, data[6:])
             return
@@ -5411,7 +5571,8 @@ class CCBot:
         await account.fill([view])
         if view.account:
             text += "\n" + account_line(view.account)
-        return text, session_kb(view, self._asking(mgd), sdk=mgd.is_sdk)
+        return text, session_kb(view, self._asking(mgd), sdk=mgd.is_sdk,
+                                movable=not mgd.is_sdk and self.settings.sdk != "off")
 
     async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
         msg = _editable(c)
@@ -5424,8 +5585,12 @@ class CCBot:
         text, kb = card
         try:
             await self._safe_edit(msg, text, reply_markup=kb, parse_mode="HTML")
+            shown = msg
         except Exception:
-            await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+            shown = await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+        # The message is this session's card now: a reply to it means this
+        # session. Unregistered, it went to the active one (2026-11-24 19:17).
+        self.store.remember_message(shown.message_id, mgd.session_id)
 
     async def _send_session_card(self, m: Message, mgd, note: str = "") -> None:
         """The same card as a new message — the way /menu opens the controls.
@@ -6013,6 +6178,11 @@ class CCBot:
             self.watcher.screen_when_idle(mgd.session_id)
             await c.answer(_("/context sent — the breakdown comes back as a "
                              "screen"))
+        elif action in ("tosdk", "tosdkf"):
+            await c.answer(_("Moving it…"))
+            here = _editable(c)
+            await self._move_to_sdk(here.chat.id if here else self.cfg.owner, mgd,
+                                    force=action == "tosdkf")
         elif action == "restart":
             # Answered first: /exit and the resume take seconds, and a button
             # that seems to do nothing gets pressed again.

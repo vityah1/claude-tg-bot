@@ -24,7 +24,9 @@ need to duplicate it here).
   reply while they run. But a test reply makes the test session active (his
   plain message landed there that day), so: never write the `active` table by
   hand — it overrode his own choice — and close a test session as soon as the
-  check is done. (2026-11-24, SDK migration)
+  check is done. 🔴 Never create a test session from his chat: a launch makes
+  it the active one, and his next plain message (he had just opened another
+  session) went into it, twice on 2026-11-24. (2026-11-24, SDK migration)
 - There is no hot reload. After changing code:
   `systemctl --user restart claude-tg-bot`. Claude's sessions survive it
   (`KillMode=process` — only the bot dies, the tmux server stays). `/restart` in
