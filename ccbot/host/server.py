@@ -30,7 +30,7 @@ from claude_agent_sdk import (
 )
 
 from . import protocol
-from .actor import SessionActor, StartError, claude_bin
+from .actor import CLAUDE_CODE_PROMPT, SessionActor, StartError, claude_bin
 from .store import HostStore
 
 log = logging.getLogger("ccbot.host")
@@ -303,6 +303,7 @@ class Host:
             "default", "acceptEdits", "plan", "auto", "bypassPermissions", "dontAsk") else None
         opts = ClaudeAgentOptions(
             cwd=row.cwd, cli_path=claude_bin(), resume=sid, fork_session=True,
+            system_prompt=CLAUDE_CODE_PROMPT,
             model=model, permission_mode=mode,  # pyright: ignore[reportArgumentType]
             hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[deny_hook])]},  # pyright: ignore[reportArgumentType]
             can_use_tool=no_tools)

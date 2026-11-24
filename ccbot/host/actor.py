@@ -39,6 +39,7 @@ from claude_agent_sdk import (
     ToolPermissionContext,
     ToolUseBlock,
 )
+from claude_agent_sdk.types import SystemPromptPreset
 
 if TYPE_CHECKING:
     from .server import Host
@@ -94,6 +95,9 @@ def _suggestion(s: PermissionUpdate) -> dict[str, Any]:
         return s.to_dict()
     except Exception:            # an update the SDK cannot serialise: show its type
         return {"type": getattr(s, "type", "?")}
+
+
+CLAUDE_CODE_PROMPT: SystemPromptPreset = {"type": "preset", "preset": "claude_code"}
 
 
 class StartError(Exception):
@@ -152,6 +156,10 @@ class SessionActor:
             # The launch name, exactly as `claude -n` gives it: history shows
             # it, and it is the key the bot finds a session by.
             extra_args={"name": self.name},
+            # Claude Code's own system prompt, as the terminal has it. Left
+            # unset, the SDK passes `--system-prompt ""`: every SDK session ran
+            # without it from the move on 2026-11-24 (found the same evening).
+            system_prompt=CLAUDE_CODE_PROMPT,
             model=model,
             effort=self.effort,  # pyright: ignore[reportArgumentType]
             # A mode picked from the chat outlives a wake-up; None leaves the
