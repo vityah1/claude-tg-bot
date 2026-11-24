@@ -17,6 +17,8 @@ _LABEL_LIMIT = 48
 # enough that a card scrolled far up the chat keeps working, short enough
 # that the table does not grow for years.
 _ALIAS_TTL = 30 * 24 * 3600.0
+# How long a message stays addressable by reply.
+_ROUTE_TTL = 30 * 24 * 3600.0
 # How long a session the machine took down stays on offer. A restore is worth
 # doing the same day and rarely the next week; after that the transcript is
 # still in 🕘 history, which is where an old one belongs.
@@ -56,6 +58,7 @@ CREATE TABLE IF NOT EXISTS msg_routes (
     session_id TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE INDEX IF NOT EXISTS msg_routes_at ON msg_routes (created_at);
 CREATE TABLE IF NOT EXISTS history_cache4 (
     path       TEXT PRIMARY KEY,
     mtime      REAL NOT NULL,
@@ -516,6 +519,17 @@ class Store:
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)", (key, value))
         self.conn.commit()
 
+    def hide_session(self, session_id: str) -> None:
+        """Keep a transcript out of 🕘 history (the fork behind a /btw answer)."""
+        ids = [x for x in (self.meta_get("hidden_sessions") or "").split(",") if x]
+        if session_id not in ids:
+            ids.append(session_id)
+        self.meta_set("hidden_sessions", ",".join(ids[-500:]))     # oldest go first
+
+    def hidden_ids(self) -> set[str]:
+        raw = self.meta_get("hidden_sessions") or ""
+        return {x for x in raw.split(",") if x}
+
     # -- per-chat active session ------------------------------------------
     def set_active(self, chat_id: int, session_id: str) -> None:
         self.conn.execute(
@@ -541,10 +555,12 @@ class Store:
             " VALUES (?,?,?)",
             (message_id, session_id, time.time()),
         )
-        self.conn.execute(
-            "DELETE FROM msg_routes WHERE message_id NOT IN"
-            " (SELECT message_id FROM msg_routes ORDER BY created_at DESC LIMIT 500)"
-        )
+        # Kept for a month, not for the last N messages: with several busy
+        # sessions 500 rows lasted a few hours (2026-11-24: the oldest routed
+        # id was ~600 behind the newest), and a reply to any older card went
+        # to the active session instead of the one that sent it.
+        self.conn.execute("DELETE FROM msg_routes WHERE created_at < ?",
+                          (time.time() - _ROUTE_TTL,))
         self.conn.commit()
 
     def session_of_message(self, message_id: int) -> str | None:

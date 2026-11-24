@@ -565,6 +565,9 @@ async def closed_all(store: Store, roots: tuple[str, ...] = (),
     # old transcript to look closed. Resuming that one would take over the
     # database row of a session that is still in a tmux window.
     live_ids |= {m.session_id for m in store.all_managed()}
+    # Throwaway forks the bot made for a side question (/btw) are no
+    # sessions of the user's: they never show up in history.
+    live_ids |= store.hidden_ids()
     saved_names = store.saved_names()
     want = cwd.rstrip("/") if cwd else None
     needle = query.strip().casefold()

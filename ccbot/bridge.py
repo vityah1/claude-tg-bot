@@ -145,6 +145,7 @@ class SdkBridge:
         # The ids of SDK rows, refreshed each tick: `usage_for` sits on the hot
         # path of every `status_feed.read` and must not query for tmux ones.
         self.sdk_ids: set[str] = set()
+        self.tasks: set[asyncio.Task] = set()
         self._fail_sig: str | None = None
         self._fail_told = 0.0
         self._down_told = False
@@ -190,6 +191,36 @@ class SdkBridge:
         """A prompt; HostError("request_open") when a question is open and *guard*."""
         self._rt(mgd.name).work_since = self._rt(mgd.name).work_since or time.time()
         await self.link.call("send", timeout=150, name=mgd.name, text=text, guard=guard)
+
+    def side(self, mgd: Managed, question: str) -> None:
+        """A /btw for an SDK session: answered off the turn, in the background."""
+        task = asyncio.create_task(self._side(mgd, question))
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def _side(self, mgd: Managed, question: str) -> None:
+        with use_locale(self.watcher._locale()):
+            try:
+                data = await self.link.call("side", timeout=600, name=mgd.name, text=question)
+            except HostError as exc:
+                log.warning("side question failed id=%s: %s", mgd.session_id[:8], exc)
+                await self._say(_("⚠️ The side question to <b>{name}</b> got no answer: "
+                                  "<code>{error}</code>").format(
+                                      name=html.escape(mgd.full_label),
+                                      error=html.escape(str(exc)[:300])),
+                                mgd.session_id, parse_mode="HTML")
+                return
+            except Exception as exc:
+                log.exception("side question crashed")
+                await self._report_failure(exc)
+                return
+            if data.get("fork"):
+                self.store.hide_session(str(data["fork"]))
+            title = _("🗨 Side question (/btw): {question}").format(
+                question=rich.md_escape(question[:300]))
+            body = str(data.get("text") or _("(no answer)"))
+            await self.watcher._emit(mgd.session_id, mgd.full_label, f"_{title}_\n\n{body}",
+                                     self.usage_for(mgd.session_id), None)
 
     async def interrupt(self, mgd: Managed) -> None:
         await self.link.call("interrupt", name=mgd.name)
@@ -267,9 +298,8 @@ class SdkBridge:
         return Usage(
             session_id=session_id, session_name=mgd.name, model=_model_name(model),
             model_id=model,
-            # No version: "an older build — /update restarts it" is a promise
-            # an SDK session cannot keep until restarts reach it (stage d).
-            version="", cwd=mgd.cwd,
+            version=str(rt.info.get("version") or ""), cwd=mgd.cwd,
+            effort=str(rt.info.get("effort") or ""),
             ctx_pct=round(float(pct)) if pct is not None else None,
             ctx_window=int(ctx.get("maxTokens") or 0),
             input_tokens=int(ctx.get("totalTokens") or 0),
@@ -517,6 +547,8 @@ class SdkBridge:
             rt.info["background"] = d.get("tasks") or []
         elif ev == "mode":
             rt.info["mode"] = d.get("mode") or rt.info.get("mode")
+        elif ev == "effort":
+            rt.info["effort"] = d.get("effort") or rt.info.get("effort")
 
     def _buffer(self, rt: _Rt, text: str, seq: int | None) -> None:
         if not text.strip():

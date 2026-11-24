@@ -19,6 +19,15 @@ import uuid
 from importlib import metadata
 from typing import Any
 
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    PermissionResultDeny,
+    ResultMessage,
+    TextBlock,
+)
+
 from . import protocol
 from .actor import SessionActor, StartError, claude_bin
 from .store import HostStore
@@ -31,6 +40,8 @@ _DEDUP_KEEP = 500
 # A bot that does not read: past this many unsent frames it is dropped and
 # replays from its last ack when it comes back.
 _OUT_MAX = 20_000
+# A side question (/btw) gives up before the bot stops waiting for it.
+_SIDE_TIMEOUT = 540.0
 
 
 def _sdk_version() -> str:
@@ -168,7 +179,10 @@ class Host:
         self.actors[name] = actor
         self.store.upsert_session(name, sid, cwd, "live")
         try:
-            await actor.start(resume, model or chosen.get("model"), chosen.get("mode"))
+            await actor.start(resume, model or chosen.get("model"), chosen.get("mode"),
+                              chosen.get("effort"))
+            if chosen.get("effort"):
+                actor.info["effort"] = chosen["effort"]
         except StartError as exc:
             if self.actors.get(name) is actor:
                 del self.actors[name]
@@ -236,9 +250,64 @@ class Host:
         self.store.set_session(actor.name, info=actor.info)
         return {}
 
+    async def cmd_set_effort(self, c: dict[str, Any]) -> dict[str, Any]:
+        """/effort through the CLI, remembered so a wake-up or restart keeps it."""
+        actor = await self._actor(c["name"])
+        if actor.asking:
+            raise CommandError("request_open")
+        level = str(c["effort"])
+        await actor.send(f"/effort {level}")
+        actor.info.setdefault("chosen", {})["effort"] = level
+        actor.info["effort"] = level
+        self.store.set_session(actor.name, info=actor.info)
+        self.emit(actor.name, "effort", {"effort": level})
+        return {}
+
     async def cmd_info(self, c: dict[str, Any]) -> dict[str, Any]:
         actor = await self._actor(c["name"])
         return {"server": await actor.call(lambda cl: cl.get_server_info(), timeout=20)}
+
+    async def cmd_side(self, c: dict[str, Any]) -> dict[str, Any]:
+        """A side question (/btw): asked of a fork, so the session is untouched.
+
+        The fork resumes the session's transcript under a new id, answers, and
+        is left. It may not run tools — a side question is a question — and
+        its id is returned so the bot can keep it out of history.
+        """
+        row = self.store.session(c["name"])
+        if row is None or row.state == "closed":
+            raise CommandError("no_session", c["name"])
+        actor = self.actors.get(c["name"])
+        sid = actor.sid if actor else row.sid
+
+        async def no_tools(tool, input_, ctx):
+            return PermissionResultDeny(message="This is a side question: answer from "
+                                                "what you already know, without tools.")
+
+        # No tools at all, by the options themselves: a callback is asked only
+        # after the user's allow rules and default mode have had their say.
+        opts = ClaudeAgentOptions(cwd=row.cwd, cli_path=claude_bin(), resume=sid,
+                                  fork_session=True, tools=[], permission_mode="default",
+                                  can_use_tool=no_tools)
+        texts: list[str] = []
+        fork = ""
+
+        async def ask() -> None:
+            nonlocal fork
+            async with ClaudeSDKClient(opts) as client:
+                await client.query(c["text"])
+                async for msg in client.receive_response():
+                    if isinstance(msg, AssistantMessage) and not msg.parent_tool_use_id:
+                        texts.extend(b.text for b in msg.content
+                                     if isinstance(b, TextBlock) and b.text.strip())
+                    if isinstance(msg, ResultMessage):
+                        fork = msg.session_id
+
+        try:
+            await asyncio.wait_for(ask(), _SIDE_TIMEOUT)
+        except TimeoutError:
+            raise CommandError("timeout", "the side question took too long") from None
+        return {"text": "\n\n".join(texts).strip(), "fork": fork}
 
     async def cmd_close(self, c: dict[str, Any]) -> dict[str, Any]:
         name = c["name"]

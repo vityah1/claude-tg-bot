@@ -164,8 +164,13 @@ def session_kb(v: SessionView, asking: bool = False,
         # pickers, /login and a restart come with the later stages, and a
         # button that answers "not yet" is a button that should not be there.
         kb.row(InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
-               InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
-               InlineKeyboardButton(text="🗜 /compact", callback_data=f"k:{s}:compact"))
+               InlineKeyboardButton(text=_("📊 Limits"), callback_data=f"k:{s}:usage"))
+        kb.row(InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
+               InlineKeyboardButton(text="🗜 /compact", callback_data=f"k:{s}:compact"),
+               InlineKeyboardButton(text=_("🔁 Restart"), callback_data=f"k:{s}:restart"))
+        kb.row(InlineKeyboardButton(text=_("🧠 Model"), callback_data=f"cfg:{s}:model"),
+               InlineKeyboardButton(text=_("◉ Effort"), callback_data=f"cfg:{s}:effort"),
+               InlineKeyboardButton(text=_("🔐 Mode"), callback_data=f"cfg:{s}:mode"))
         kb.row(InlineKeyboardButton(text=_("✏️ Rename"), callback_data=f"ren:{s}"),
                InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"))
         kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
@@ -621,6 +626,36 @@ def service_kb(can_restart: bool, sdk: str = "off",
         InlineKeyboardButton(text=_("♻️ Refresh"), callback_data="svc:show"),
         InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"),
     )
+    return kb.as_markup()
+
+
+def sdk_models_kb(session_id: str, models: list[dict],
+                  current: str) -> InlineKeyboardMarkup:
+    """The models an SDK session can switch to, as Claude Code lists them."""
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    # One mark: "Default" resolves to a model listed in its own right, and
+    # two ticks read as two choices in force.
+    hits = [m for m in models if m.get("resolvedModel") == current]
+    chosen = next((m for m in hits if m.get("value") != "default"), hits[0] if hits else None)
+    for m in models:
+        value = str(m.get("value") or "")
+        mark = "✅ " if m is chosen else ""
+        if value and len(f"smd:{s}:{value}".encode()) <= 64:
+            kb.row(InlineKeyboardButton(text=f"{mark}{m.get('displayName') or value}"[:60],
+                                        callback_data=f"smd:{s}:{value}"))
+    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
+    return kb.as_markup()
+
+
+def sdk_effort_kb(session_id: str, levels: list[str], now: str) -> InlineKeyboardMarkup:
+    """The effort levels the session's model takes."""
+    s = sid8(session_id)
+    kb = InlineKeyboardBuilder()
+    for lv in levels:
+        kb.row(InlineKeyboardButton(text=("✅ " if lv == now else "") + lv,
+                                    callback_data=f"sef:{s}:{lv}"))
+    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
     return kb.as_markup()
 
 

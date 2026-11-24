@@ -126,10 +126,12 @@ class SessionActor:
         self.limits: dict[str, Any] = {}
         self.last_event = time.monotonic()
         self._end_reason = ""
+        self.effort: str | None = None
 
     # -- lifecycle -----------------------------------------------------
     async def start(self, resume: bool, model: str | None = None,
-                    mode: str | None = None) -> None:
+                    mode: str | None = None, effort: str | None = None) -> None:
+        self.effort = effort
         self.task = asyncio.create_task(self._run(resume, model, mode),
                                         name=f"actor:{self.name}")
         try:
@@ -151,6 +153,7 @@ class SessionActor:
             # it, and it is the key the bot finds a session by.
             extra_args={"name": self.name},
             model=model,
+            effort=self.effort,  # pyright: ignore[reportArgumentType]
             # A mode picked from the chat outlives a wake-up; None leaves the
             # one from the user's settings.
             permission_mode=mode,  # pyright: ignore[reportArgumentType]
@@ -326,7 +329,7 @@ class SessionActor:
             self._follow_sid(data.get("session_id"), strong=msg.subtype == "init")
             if msg.subtype == "init":
                 self.info.update({k: data.get(k) for k in
-                                  ("model", "permissionMode", "claude_code_version") if k in data})
+                                  ("model", "claude_code_version") if k in data})
                 if "permissionMode" in data:
                     self.info["mode"] = data["permissionMode"]
                 if "claude_code_version" in data:

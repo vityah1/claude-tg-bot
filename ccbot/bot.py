@@ -74,7 +74,9 @@ from .keyboards import (
     route_kb,
     route_pick_kb,
     row_tag,
+    sdk_effort_kb,
     sdk_label,
+    sdk_models_kb,
     search_kb,
     service_kb,
     session_kb,
@@ -397,7 +399,7 @@ def _sessions_text(managed: list[sess.SessionView],
 
 # What an SDK session's card answers today. The rest — model and effort
 # pickers, /login, a restart, the screen — arrive with the later stages.
-_SDK_ACTIONS = {"esc", "clear", "compact", "ctx", "close"}
+_SDK_ACTIONS = {"esc", "clear", "compact", "ctx", "close", "restart", "usage"}
 
 
 def _sdk_not_yet() -> str:
@@ -418,6 +420,10 @@ def _host_refusal(exc: HostError) -> str:
     detail = html.escape((exc.message or exc.code)[:500])
     return _("❌ The session host could not start the session:\n<code>{detail}</code>"
              ).format(detail=detail)
+
+
+def _picker_failed() -> str:
+    return _("The session host did not answer — try again in a moment.")
 
 
 def _close_failed(name: str) -> str:
@@ -2152,15 +2158,30 @@ class CCBot:
     async def _restart_session(self, mgd, force: bool = False) -> _Restart:
         """`_restart_in_place`, once at a time per session."""
         sid = mgd.session_id
-        if mgd.is_sdk:
-            return _Restart(False, _sdk_not_yet())
         if sid in self.restarting:
             return _Restart(False, _("a restart of it is already under way"))
         self.restarting.add(sid)
         try:
+            if mgd.is_sdk:
+                return await self._restart_sdk(mgd, force)
             return await self._restart_in_place(mgd, force)
         finally:
             self.restarting.discard(sid)
+
+    async def _restart_sdk(self, mgd, force: bool) -> _Restart:
+        """An SDK session onto the CLI on disk: the host leaves the client and
+        resumes the same id, so the context comes back with it."""
+        try:
+            data = await self.bridge.link.call("restart", timeout=180, name=mgd.name,
+                                               force=force)
+        except HostError as exc:
+            if exc.code == "busy":
+                # Not offered "anyway": what would stop is the turn itself, or
+                # the question it waits on — not background work.
+                return _Restart(False, _("it is working or waiting for an answer"))
+            log.warning("sdk restart failed id=%s: %s", mgd.session_id[:8], exc)
+            return _Restart(False, html.escape((exc.message or exc.code)[:300]))
+        return _Restart(True, version=str((data.get("info") or {}).get("version") or ""))
 
     async def _restart_in_place(self, mgd, force: bool) -> _Restart:
         """Relaunch a session's `claude` in place, context and all.
@@ -2335,11 +2356,12 @@ class CCBot:
         disk = await updates.installed()
         views = {v.session_id: v for v in await sess.managed_views(self.store)}
         rows = []
-        # SDK sessions are not restarted onto a new build yet (stage d).
-        for m in self.store.all_managed(backend="tmux"):
+        for m in self.store.all_managed():
             view = views.get(m.session_id)
+            # A resting SDK session runs nothing: it wakes on the build on disk.
+            resting = m.is_sdk and self.bridge.state(m) in ("dormant", "offline", "closed")
             rows.append((m, view.status if view else "",
-                         updates.stale(m.session_id, disk)))
+                         not resting and updates.stale(m.session_id, disk)))
         return disk, rows
 
     async def _update_text(self, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -2403,6 +2425,8 @@ class CCBot:
             return _Restart(False, _("it is waiting for an answer"))
         if status != "busy":
             return _Restart(False, _("its state could not be read"))
+        if mgd.is_sdk:
+            return _Restart(False, _("it is working or waiting for an answer"))
         try:
             raw = await tmux.capture(mgd.window_id)
         except tmux.TmuxError:
@@ -2569,6 +2593,68 @@ class CCBot:
         with contextlib.suppress(Exception):
             await note.edit_text(text, parse_mode="HTML")
 
+    async def _sdk_picker(self, c: CallbackQuery, msg: Message, mgd, kind: str) -> None:
+        """Models or effort levels of an SDK session, from Claude Code's own data.
+
+        `get_server_info()` lists the models with their effort levels — the
+        list the TUI picker draws, so nothing is written down in the bot.
+        A pick applies to this session only.
+        """
+        try:
+            server = (await self.bridge.link.call("info", name=mgd.name)).get("server") or {}
+        except HostError:
+            await c.answer(_picker_failed(), show_alert=True)
+            return
+        models = [m for m in server.get("models") or [] if isinstance(m, dict)]
+        rt = self.bridge.info(mgd)
+        info = rt.info if rt else {}
+        current = str(info.get("model") or "")
+        if kind == "model":
+            kb = sdk_models_kb(mgd.session_id, models, current)
+            title = _("🧠 Model for <b>{name}</b> — this session only").format(
+                name=html.escape(mgd.full_label))
+            lines = [title, ""] + [
+                f"<b>{html.escape(str(m.get('displayName') or m.get('value')))}</b> — "
+                f"{html.escape(str(m.get('description') or ''))}" for m in models]
+        else:
+            here = next((m for m in models if m.get("resolvedModel") == current), None) \
+                or (models[0] if models else {})
+            levels = [str(x) for x in here.get("supportedEffortLevels") or []]
+            kb = sdk_effort_kb(mgd.session_id, levels, str(info.get("effort") or ""))
+            lines = [_("◉ Reasoning effort for <b>{name}</b> — this session only").format(
+                name=html.escape(mgd.full_label))]
+            if not levels:
+                lines.append(_("This model takes no effort level."))
+        await c.answer()
+        await self._safe_edit(msg, "\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+    async def _sdk_pick(self, c: CallbackQuery, mgd, what: str, value: str) -> None:
+        """A model (`smd:`) or an effort level (`sef:`) picked for an SDK session."""
+        try:
+            if what == "smd":
+                await self.bridge.link.call("set_model", name=mgd.name, model=value)
+            else:
+                await self.bridge.link.call("set_effort", name=mgd.name, effort=value)
+        except HostError as exc:
+            await c.answer(_("It is waiting for an answer — deal with that first")
+                           if exc.code == "request_open" else _picker_failed(), show_alert=True)
+            return
+        rt = self.bridge.info(mgd)
+        if rt is not None and what == "smd":
+            # The model in force is known from the next reply; until then the
+            # card and the effort list follow the pick.
+            with contextlib.suppress(HostError):
+                server = (await self.bridge.link.call("info", name=mgd.name)).get("server") or {}
+                picked = next((m for m in server.get("models") or []
+                               if isinstance(m, dict) and m.get("value") == value), None)
+                if picked and picked.get("resolvedModel"):
+                    rt.info["model"] = picked["resolvedModel"]
+        log.info("sdk %s -> %s id=%s", "model" if what == "smd" else "effort", value,
+                 mgd.session_id[:8])
+        await c.answer(_("Model: {value}").format(value=value) if what == "smd"
+                       else _("Effort: {value}").format(value=value))
+        await self._show_session_card(c, mgd)
+
     async def _ask_sdk_text(self, c: CallbackQuery, msg: Message, chat_id: int,
                             short: str, act: str) -> None:
         """✏️ on an SDK card: the next message is the answer, the changes, the reason."""
@@ -2683,6 +2769,16 @@ class CCBot:
         """
         self._typed(mgd)
         log.info("prompt -> %s (%s): %r", mgd.full_label, mgd.session_id[:8], text[:120])
+        if mgd.is_sdk and text.split(maxsplit=1)[:1] == ["/btw"]:
+            # Not available through the SDK as a command: the bot asks a fork.
+            parts = text.split(maxsplit=1)
+            question = parts[1].strip() if len(parts) > 1 else ""
+            if question:
+                self.bridge.side(mgd, question)
+            else:
+                await self.bot.send_message(self.cfg.owner, _(
+                    "/btw needs the question after it, in the same message."))
+            return
         if mgd.is_sdk:
             try:
                 await self.bridge.send(mgd, text, guard=guard)
@@ -4682,6 +4778,9 @@ class CCBot:
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
+            if kind in ("model", "effort") and mgd.is_sdk:
+                await self._sdk_picker(c, msg, mgd, kind)
+                return
             if kind in ("model", "effort"):
                 # The list is Claude Code's own: /model and /effort are asked
                 # in the session and their dialog becomes the card (the
@@ -4700,6 +4799,15 @@ class CCBot:
                 parse_mode="HTML",
                 reply_markup=choice_kb(mgd.session_id, kind, st.mode),
             )
+            return
+
+        if data.startswith(("smd:", "sef:")):
+            what, short, value = data.split(":", 2)
+            mgd = self._resolve(short)
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            await self._sdk_pick(c, mgd, what, value)
             return
 
         if data.startswith("set:"):
@@ -5437,6 +5545,18 @@ class CCBot:
         return False
 
     async def _apply_setting(self, mgd, kind: str, value: str) -> bool:
+        if mgd.is_sdk:
+            # The SDK switches the mode directly; "manual" is its "default".
+            try:
+                await self.bridge.link.call("set_mode", name=mgd.name,
+                                            mode="default" if value == "manual" else value)
+            except HostError as exc:
+                log.warning("sdk set_mode failed id=%s: %s", mgd.session_id[:8], exc)
+                return False
+            return True
+        return await self._apply_tmux_setting(mgd, kind, value)
+
+    async def _apply_tmux_setting(self, mgd, kind: str, value: str) -> bool:
         # Only the permission mode comes through here: the model and the
         # effort level are picked in Claude Code's own dialogs, which is the
         # only way to choose between "this session" and "the default too".
@@ -5855,6 +5975,9 @@ class CCBot:
             if not await self._send_command(mgd, "/compact"):
                 await c.answer(_("It is waiting for an answer — deal with "
                                  "that first"), show_alert=True)
+                return
+            if mgd.is_sdk:
+                await c.answer(_("/compact sent — the chat is told when it is done"))
                 return
             self.watcher.screen_when_idle(mgd.session_id)
             await c.answer(_("/compact sent — the result comes back as a "
