@@ -3,7 +3,7 @@
 
 It runs on the *system* Python, before the virtualenv exists, so it uses
 nothing but the standard library. Every step it performs is also spelled out
-in the README under "Встановлення вручну" — this script is the automation of
+in the README under "Manual install" — this script is the automation of
 those steps, never the only place they are written down.
 
     ./install.sh            install, or update an existing install
@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -36,8 +35,6 @@ UNIT_FILE = Path.home() / ".config" / "systemd" / "user" / f"{UNIT}.service"
 # The session host: holds the Agent SDK sessions and outlives bot restarts.
 HOST_UNIT = "claude-tg-host"
 HOST_UNIT_FILE = UNIT_FILE.parent / f"{HOST_UNIT}.service"
-CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
-TEE = ROOT / "bin" / "statusline-tee.sh"
 
 
 def _xdg(env: str, default: str) -> Path:
@@ -51,8 +48,17 @@ def _xdg(env: str, default: str) -> Path:
 
 
 LOG_FILE = _xdg("XDG_CACHE_HOME", ".cache") / "bot.log"
-# Generated only when a status line is already configured: see wire_statusline.
-WRAPPER = _xdg("XDG_CONFIG_HOME", ".config") / "statusline.sh"
+HOST_LOG_FILE = _xdg("XDG_CACHE_HOME", ".cache") / "host.log"
+
+
+def host_socket() -> Path:
+    """Mirror of ccbot/host/protocol.socket_path — the host's NDJSON socket."""
+    raw = os.getenv("CCBOT_HOST_SOCKET")
+    if raw:
+        return Path(raw).expanduser()
+    runtime = os.getenv("XDG_RUNTIME_DIR")
+    base = Path(runtime) if runtime else Path.home() / ".cache"
+    return base / "ccbot" / "host.sock"
 
 
 # --------------------------------------------------------------------------
@@ -169,9 +175,9 @@ def check_platform() -> None:
         )
     if sys.platform.startswith("win") or os.name == "nt":
         die(
-            "Native Windows is not supported, and cannot be.",
-            "The bot drives the Claude Code TUI through tmux, which does not exist",
-            "on Windows. Install WSL and run this from inside it:",
+            "Native Windows is not supported.",
+            "The bot and its session host run as systemd user units, which do not",
+            "exist on Windows. Install WSL and run this from inside it:",
             "    wsl --install        (in PowerShell, then reopen a terminal)",
         )
     if not sys.platform.startswith("linux"):
@@ -183,18 +189,6 @@ def check_platform() -> None:
 # --------------------------------------------------------------------------
 # Prerequisites
 # --------------------------------------------------------------------------
-
-def check_tmux(fatal: bool = True) -> bool:
-    path = shutil.which("tmux")
-    if not path:
-        msg = "tmux is missing — it is how the bot types into Claude Code."
-        if fatal:
-            die(msg, install_hint("tmux"), "then run this installer again")
-        bad(msg)
-        return False
-    ok(f"tmux: {path}")
-    return True
-
 
 def check_claude(fatal: bool = True) -> bool:
     path = os.getenv("CCBOT_CLAUDE_BIN") or shutil.which("claude")
@@ -218,15 +212,6 @@ def check_claude(fatal: bool = True) -> bool:
         return False
     ok("claude is signed in and answering")
     return True
-
-
-def check_jq() -> bool:
-    if shutil.which("jq"):
-        ok("jq: {}".format(shutil.which("jq")))
-        return True
-    warn("jq is missing — only the exact-metrics status-line hook needs it.")
-    info(install_hint("jq"))
-    return False
 
 
 def check_git() -> None:
@@ -312,7 +297,7 @@ def ensure_venv(dev: bool) -> None:
     else:
         create_venv()
     install_deps(dev)
-    rc, out = run([str(VENV_PY), "-c", "import aiogram, dotenv, PIL"],
+    rc, out = run([str(VENV_PY), "-c", "import aiogram, dotenv, claude_agent_sdk"],
                   cwd=str(ROOT), timeout=60)
     if rc != 0:
         die("the environment does not import cleanly", out)
@@ -512,88 +497,6 @@ def configure_timezone(env: dict) -> None:
 
 
 # --------------------------------------------------------------------------
-# Status-line hook
-# --------------------------------------------------------------------------
-
-def statusline_state() -> str:
-    """'ours', 'other', 'none' or 'unreadable'."""
-    if not CLAUDE_SETTINGS.exists():
-        return "none"
-    try:
-        data = json.loads(CLAUDE_SETTINGS.read_text())
-    except (OSError, ValueError):
-        return "unreadable"
-    if not isinstance(data, dict):
-        return "unreadable"
-    line = data.get("statusLine")
-    command = line.get("command", "") if isinstance(line, dict) else ""
-    if not isinstance(command, str):
-        return "unreadable"
-    if "statusline-tee.sh" in command or command == str(WRAPPER):
-        return "ours"
-    return "other" if command else "none"
-
-
-def wire_statusline() -> None:
-    head("Exact metrics (status-line hook)")
-    info("Claude Code hands its status line a JSON payload with real context and")
-    info("rate-limit numbers. Mirroring it lets the bot report exact figures")
-    info("instead of scraping rounded bars off the screen. Optional.")
-    state = statusline_state()
-    if state == "ours":
-        ok("already wired to bin/statusline-tee.sh")
-        return
-    if state == "unreadable":
-        warn("~/.claude/settings.json is not valid JSON — not touching it.")
-        return
-    if not confirm("Wire it up?", True):
-        info("skipped — the bot falls back to reading the screen")
-        return
-    TEE.chmod(0o755)
-    CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    data: dict = {}
-    if CLAUDE_SETTINGS.exists():
-        raw = CLAUDE_SETTINGS.read_text()
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            warn("~/.claude/settings.json is not a JSON object — not touching it.")
-            return
-        data = parsed
-        backup = CLAUDE_SETTINGS.with_suffix(".json.ccbot-backup")
-        backup.write_text(raw)
-        ok(f"backed up settings.json to {backup.name}")
-    current = data.get("statusLine")
-    line: dict = current if isinstance(current, dict) else {}
-    existing = line.get("command", "")
-    if not isinstance(existing, str):
-        existing = ""
-    if existing:
-        # Keep whatever status line was already there by chaining it behind the
-        # tee. The variable goes into a generated wrapper rather than straight
-        # into statusLine.command, because nothing promises that setting is run
-        # through a shell — and "VAR=x /path" means nothing without one.
-        WRAPPER.parent.mkdir(parents=True, exist_ok=True)
-        WRAPPER.write_text(
-            "#!/bin/sh\n"
-            "# Generated by the claude-tg-bot installer; redo with ./install.sh\n"
-            "# Mirrors the status-line payload for the bot, then runs the status\n"
-            "# line you already had, unchanged.\n"
-            f"CCBOT_REAL_STATUSLINE={shlex.quote(existing)}"
-            f" exec {shlex.quote(str(TEE))}\n"
-        )
-        WRAPPER.chmod(0o755)
-        command = str(WRAPPER)
-        ok(f"kept your existing status line, chained behind the tee ({WRAPPER})")
-    else:
-        command = str(TEE)
-    line.update({"type": "command", "command": command})
-    data["statusLine"] = line
-    CLAUDE_SETTINGS.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-    ok("statusLine.command now points at bin/statusline-tee.sh")
-    info("It takes effect in sessions started from now on.")
-
-
-# --------------------------------------------------------------------------
 # Autostart
 # --------------------------------------------------------------------------
 
@@ -640,27 +543,8 @@ def wsl_systemd_help() -> None:
     info("Reopen the terminal and run this installer again.")
 
 
-def tmux_supervisor(start: bool) -> None:
-    """Fallback autostart: a restart loop in its own tmux session.
-
-    Plain `python main.py &` would leave the bot dead after any crash and would
-    turn /restart — which works by exiting and letting the supervisor return —
-    into a way to kill it for good.
-    """
-    if not start:
-        return
-    run(["tmux", "kill-session", "-t", "ccbot-service"], timeout=20)
-    loop = f"while true; do {shlex.quote(str(VENV_PY))} main.py; sleep 5; done"
-    rc, out = run(["tmux", "new-session", "-d", "-s", "ccbot-service",
-                   "-c", str(ROOT), "bash", "-lc", loop], timeout=30)
-    if rc != 0:
-        die("could not start the tmux supervisor", out)
-    ok("started in tmux session 'ccbot-service' (attach: tmux attach -t ccbot-service)")
-    warn("This does not survive a reboot, and /restart in chat is unavailable.")
-
-
 def install_autostart() -> str:
-    """Returns 'unit', 'tmux' or 'none'."""
+    """Returns 'unit' or 'none'."""
     head("Autostart")
     pid, stray = stray_instance()
     if stray and not unit_active():
@@ -680,14 +564,14 @@ def install_autostart() -> str:
             wsl_systemd_help()
         else:
             bad("systemd user session is unavailable.")
-        if confirm("Run under a tmux supervisor instead?", True):
-            tmux_supervisor(True)
-            return "tmux"
+        info("Without it, start both processes by hand (they do not come back")
+        info("after a crash, and /restart in the chat is unavailable):")
+        info("    .venv/bin/python host_main.py &   .venv/bin/python main.py")
         return "none"
     if not confirm("Install the systemd user unit and start the bot?", True):
         return "none"
     UNIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    # The host first: the bot's unit wants it, and SDK sessions need it.
+    # The host first: the bot's unit wants it, and every session lives in it.
     host = (ROOT / "contrib" / f"{HOST_UNIT}.service").read_text()
     HOST_UNIT_FILE.write_text(host.replace("%INSTALL_DIR%", str(ROOT)))
     ok(f"wrote {HOST_UNIT_FILE}")
@@ -697,7 +581,7 @@ def install_autostart() -> str:
     run(["systemctl", "--user", "daemon-reload"], timeout=30)
     rc, out = run(["systemctl", "--user", "enable", "--now", HOST_UNIT], timeout=60)
     if rc != 0:
-        warn(f"{HOST_UNIT} did not start — SDK sessions will be unavailable")
+        warn(f"{HOST_UNIT} did not start — no session can run without it")
         for line in out.splitlines()[-3:]:
             info(line)
     rc, out = run(["systemctl", "--user", "enable", "--now", UNIT], timeout=60)
@@ -812,14 +696,12 @@ def verify(env: dict, how: str, started: float) -> None:
 
 def final_card(how: str, username: str) -> None:
     running = {
-        "unit": f"running as the systemd user unit '{UNIT}'",
-        "tmux": "running under a tmux supervisor (session 'ccbot-service')",
+        "unit": f"running as the systemd user units '{UNIT}' and '{HOST_UNIT}'",
         "none": "installed, but NOT started",
     }[how]
     local = {
-        "unit": f"systemctl --user restart {UNIT}    restart it",
-        "tmux": "tmux attach -t ccbot-service              attach to it",
-        "none": ".venv/bin/python main.py                  start it",
+        "unit": f"systemctl --user restart {UNIT}    restart the bot",
+        "none": ".venv/bin/python host_main.py & .venv/bin/python main.py",
     }[how]
     head("Done")
     print(f"""
@@ -850,9 +732,7 @@ def doctor() -> int:
     ok("WSL" if is_wsl() else "Linux")
 
     head("Prerequisites")
-    problems += 0 if check_tmux(fatal=False) else 1
     problems += 0 if check_claude(fatal=False) else 1
-    check_jq()
     check_git()
 
     head("Python environment")
@@ -910,22 +790,10 @@ def doctor() -> int:
         else:
             ok(f"host clock is {zone}")
 
-    head("Exact metrics")
-    state = statusline_state()
-    if state == "ours":
-        ok("status-line hook is wired")
-    elif state == "other":
-        warn("another status line is configured — metrics come from the screen")
-    else:
-        warn("status-line hook is not wired — metrics come from the screen")
-
     head("Service")
     if not systemd_available():
         warn("no systemd user session")
-        rc, out = run(["tmux", "has-session", "-t", "ccbot-service"], timeout=20)
-        if rc == 0:
-            ok("running under the tmux supervisor")
-        else:
+        if not stray_instance()[0]:
             bad("the bot does not appear to be running")
             problems += 1
     elif unit_active():
@@ -935,13 +803,23 @@ def doctor() -> int:
         bad(f"{UNIT} is not active")
         info(f"systemctl --user status {UNIT} --no-pager")
         problems += 1
+
+    head("Session host")
     if systemd_available():
         _rc, out = run(["systemctl", "--user", "is-active", HOST_UNIT], timeout=20)
         if out.strip() == "active":
-            ok(f"{HOST_UNIT} is active (SDK sessions)")
+            ok(f"{HOST_UNIT} is active")
         else:
-            warn(f"{HOST_UNIT} is not active — tmux sessions work, SDK sessions do not")
+            bad(f"{HOST_UNIT} is not active — no session can run without it")
             info(f"systemctl --user enable --now {HOST_UNIT}")
+            info(f"its log: {HOST_LOG_FILE}")
+            problems += 1
+    sock = host_socket()
+    if sock.is_socket():
+        ok(f"socket: {sock}")
+    else:
+        bad(f"no socket at {sock} — the host is not listening")
+        problems += 1
     stray = stray_instance()[1]
     if stray and not unit_active():
         warn(f"an unmanaged instance is running: {stray}")
@@ -976,9 +854,7 @@ def install() -> int:
     check_platform()
 
     head("Prerequisites")
-    check_tmux()
     check_claude()
-    check_jq()
     check_git()
 
     dev = confirm("Install developer tools too (ruff, basedpyright, Babel)?", False)
@@ -989,7 +865,6 @@ def install() -> int:
 
     env = configure_env()
     configure_timezone(env)
-    wire_statusline()
     started = time.time()
     how = install_autostart()
     verify(env, how, started)

@@ -12,8 +12,9 @@ control, SSH from the phone and API-wrapper bots — is on the project page:
 
 ## Quick start
 
-You need Linux or WSL, [Claude Code](https://claude.com/product/claude-code)
-installed and signed in, and `tmux`. The installer handles everything else.
+You need Linux or WSL with a systemd user session, and
+[Claude Code](https://claude.com/product/claude-code) installed and signed in.
+The installer handles everything else.
 
 ```bash
 git clone <url> claude-tg-bot && cd claude-tg-bot
@@ -25,92 +26,60 @@ from [@BotFather](https://t.me/BotFather) — validating it on the spot, so a
 mistyped token is caught in two seconds rather than five minutes later in the
 log. Then, instead of sending you off to look up your numeric Telegram id, it
 asks you to message the bot and reads the id off that message: one action that
-also proves you can reach the bot. Finally it wires the status-line hook,
-installs the systemd user unit, starts the bot, and confirms the whole chain
-works by sending you a message in Telegram.
+also proves you can reach the bot. Finally it installs the two systemd user
+units — the session host first, then the bot — starts them, and confirms the
+whole chain works by sending you a message in Telegram.
 
 Run it again whenever you like — it is also the update path
 (`git pull && ./install.sh`), and it never overwrites a working `.env` without
 asking. `./install.sh --doctor` inspects an existing install and changes
 nothing.
 
-**Windows** is not supported natively and cannot be: the bot drives the Claude
-Code TUI through tmux. Install WSL (`wsl --install` in PowerShell) and run
-everything inside it. **macOS** runs the bot fine, but has no autostart
-template yet — install by hand, as below.
+**Windows** is not supported natively: the bot and its session host run as
+systemd user units, which Windows does not have. Install WSL (`wsl --install`
+in PowerShell) and run everything inside it. **macOS** runs the bot fine, but
+has no autostart template yet — install by hand, as below.
 
-## Why it works this way
+## How it works
 
 The built-in channels (`--remote-control`, `--channels`) are blocked by a
-corporate org policy here. So the bot drives sessions from the outside:
-
-| Direction | Mechanism |
-|---|---|
-| In (prompts, option choices, `/`-commands) | `tmux paste-buffer` / `send-keys` |
-| Out (the text of the answers) | `~/.claude/projects/*/<uuid>.jsonl` |
-| Blocking dialogs | `tmux capture-pane` + `ccbot/screen.py` |
-| The list of live sessions | `claude agents --json` |
-
-Answer text comes from the transcript rather than the screen: it is clean, free
-of ANSI, unwrapped and not limited by the scrollback. The screen is needed only
-for dialogs.
-
-## Sessions through the Agent SDK (being introduced)
-
-Since 2026-11 the bot is moving from driving the TUI to the official
-[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/python): questions,
-permission requests and plans arrive as data (`can_use_tool`), so the cards are
-built from data and a new Claude Code release can no longer break them. Both
-paths run side by side while the new one is proven.
+corporate org policy here. So the bot holds the sessions itself, through the
+official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/python):
+questions, permission requests and plans arrive as data (`can_use_tool`), so
+the cards are built from data and a new Claude Code release cannot break them.
 
 | Part | Where |
 |---|---|
 | The session host — a process of its own that holds one `ClaudeSDKClient` per session | `host_main.py`, `ccbot/host/`, unit `claude-tg-host` |
 | The socket between them (NDJSON, event journal with replay) | `ccbot/host/protocol.py`, `ccbot/hostlink.py` |
 | Host events → chat messages and cards | `ccbot/bridge.py` |
+| Chat → sessions: commands, batching, routing, pickers | `ccbot/bot.py` |
 
 Why a separate process: a `claude` child dies with the process that started it,
 so sessions held inside the bot would die on every bot restart. The host is
 restarted only when its own code changes; the bot restarts freely, and a turn in
-progress or an open question survive it (the host journals its events, and the
-bot replays what it had not delivered). A host restart ends the turns in
-progress: the chat gets a 🔌 card naming the prompts that were cut off, and each
-session wakes up by `resume` with your next message.
+progress or an open question survive it — the host journals its events, every
+event has a sequence number, and the bot acknowledges one only once its effect
+has reached the chat, so after a restart exactly what had not gone out is
+replayed.
 
-**The switch** — `/service` → «🧪 New sessions», or `CCBOT_SDK` in `.env`
-(which then wins): `off` — tmux, as before; `preview` — tmux, plus a «🧪 SDK»
-button next to every folder in the new-session picker; `default` — new sessions
-start through the SDK. Existing sessions keep the backend they started with.
-Rolling back is `off` plus a restart.
-
-What an SDK session's card offers, and how it differs from a tmux one:
+What a session's card offers:
 
 * **Cards from data.** Questions (one card paged part by part, «✏️ Own answer»,
   «💬 Discuss»), permission requests (Allow / Always / Deny / «✏️ Deny with a
   reason») and plans (Approve / Approve and accept edits / «✏️ Revise» / Keep
-  planning) come from `can_use_tool`, never from a screen.
-* **No screen.** `/screen` and «📜 Where it stopped» send a recap read from the
-  transcript: the state, your last task, Claude's last steps and last answer.
+  planning) — see [Questions, permissions and plans](#questions-permissions-and-plans).
+* **Where it stopped.** `/screen` and «📜 Where it stopped» send a recap read
+  from the transcript: the state, your last task, Claude's last steps and last
+  answer. No tokens, and true after any restart.
 * **Model, effort, mode** come from Claude Code's own `get_server_info()` and
   apply to this session only; the host remembers them across a wake-up.
 * **Restart** resumes the same id on the CLI on disk; **/btw** asks a fork of
   the session that keeps its model, mode and tools (so it reads the cached
-  context) and is barred from running tools by a hook.
+  context) and is barred from running tools by a hook. The fork is kept out of
+  the history list.
 * **/login** runs `claude auth login` under a pty: the link comes to the chat,
   the code goes back the same way. The login is the machine's, for every session.
-
-**Moving a session across.** A tmux session's card (with the switch on
-`preview` or `default`) has «↗️ Move to SDK»: `/exit` in tmux, then the host
-resumes the same id — same transcript, same name, same buttons in the chat. If
-the host will not take it, the session is resumed in its window again.
-
-## Three kinds of session
-
-* **Managed** — created by the bot inside tmux. Full control.
-* **Foreign** — started by you in an ordinary terminal. View only: their stdin
-  is out of reach from outside, and hijacking them would mean ruining work that
-  is already under way.
-* **Closed** — historical transcripts; brought back with `--resume`.
 
 ## Manual install
 
@@ -118,9 +87,8 @@ the host will not take it, the session is resumed in its window again.
 they are written down. If you would rather not run a script, this is the same
 install by hand.
 
-**1. Prerequisites.** `tmux`, plus Claude Code installed and signed in —
-`claude agents --json` has to answer, since being on `PATH` is not the same as
-being usable. `jq` matters only for step 4.
+**1. Prerequisites.** Claude Code installed and signed in — `claude agents
+--json` has to answer, since being on `PATH` is not the same as being usable.
 
 **2. Environment.** Python 3.12 or newer:
 
@@ -141,43 +109,28 @@ tells you yours. It has no default on purpose: an empty list would mean a bot
 that runs shell sessions for anyone who finds it, so the bot refuses to start
 without one.
 
-**4. Exact metrics** (optional). Point `statusLine.command` in
-`~/.claude/settings.json` at `bin/statusline-tee.sh`; if you already have a
-status line, keep it by naming it in `CCBOT_REAL_STATUSLINE`. Skipping this
-costs precision, not function — the bot falls back to reading the screen. See
-[Exact metrics](#exact-metrics).
+**4. Run it.** Both systemd user units, the host first — see
+[Autostart](#autostart). Without systemd, start both by hand:
+`.venv/bin/python host_main.py` (the session host) and
+`.venv/bin/python main.py` — nothing brings them back after a crash, and
+`/restart` in the chat is unavailable. Without the host no session can run.
 
-**5. Run it.** `.venv/bin/python host_main.py` (the session host) and
-`.venv/bin/python main.py`, or install both systemd user units — see
-[Autostart](#autostart). Without the host, tmux sessions work as before and SDK
-sessions are unavailable.
-
-**6. Check.** `./install.sh --doctor` verifies all of the above and tails the
-log, whichever way you installed.
+**5. Check.** `./install.sh --doctor` verifies all of the above — both units,
+the host socket — and tails the log, whichever way you installed.
 
 ## Model, effort, permission mode
 
-The session card shows the current values (read off the TUI status line) and
-offers buttons to change them. `/menu` opens that card for the session you are
-talking to — the buttons below used to be reachable only by walking through
-`/sessions` and tapping a row:
+The session card shows the current values and offers buttons to change them.
+`/menu` opens that card for the session you are talking to — the buttons below
+used to be reachable only by walking through `/sessions` and tapping a row:
 
-* **🧠 Model** and **◉ Effort** open Claude Code's own dialogs — `/model` and
-  `/effort` are sent to the session, and the card is the dialog itself, with
-  one button per row it offers. Nothing is listed in the bot: a table in the
-  source went stale the day Fable 5.1 shipped, and `ultracode` is not always
-  on the slider at all. A `/model` you type yourself comes out as the same
-  card.
-
-  Under the list sits the choice the terminal's footer offers: **this
-  session** (`s`) or **+ new sessions** (Enter, which Claude Code saves as the
-  default for new sessions). It defaults to this session alone — pressing a
-  model used to move the default for every session started afterwards, with
-  only a warning to say so.
-* **🔐 Mode** — there is no slash command for it, so the bot presses Shift+Tab
-  until the status line shows the mode you asked for. The cycle is
-  `auto → manual → accept edits → plan`. `bypassPermissions` and `dontAsk` can
-  only be set when the process starts.
+* **🧠 Model** and **◉ Effort** list what the session's own
+  `get_server_info()` reports — the models with their descriptions, and the
+  effort levels the current model supports. Nothing is listed in the bot: a
+  table in the source went stale the day Fable 5.1 shipped. A pick applies to
+  this session only, and the host keeps it across a wake-up and a restart.
+* **🔐 Mode** — auto, plan, accept edits or manual, switched on the running
+  session.
 
 ## Lists
 
@@ -219,7 +172,7 @@ spent on what tells them apart.
 The name itself comes from the first of these that exists:
 
 1. **what you called it** — `/rename` keeps the name in a table of its own, so
-   it survives the session ending and comes back with `--resume`. Such a row is
+   it survives the session ending and comes back with a resume. Such a row is
    marked `✏️`.
 2. **`claude -n`, when a person wrote it** — the bot's own `pay4say-7fda` is
    recognised and skipped.
@@ -248,19 +201,17 @@ through a different project.
 
 ## Session names
 
-The bot calls a managed session `directory-1a2b` — unique, but no help in
-telling two sessions of the same project apart. So the name in the list and in
-message captions is taken from three sources in turn:
+The bot calls a session `directory-1a2b` — unique, but no help in telling two
+sessions of the same project apart. So the name in the list and in message
+captions is taken from these sources in turn:
 
 1. **your own name** — `/rename Billing audit`, or ✏️ on the session card,
    or just `/rename` picked out of the "/" menu: it asks which name, and takes
    your next message as the answer (with a ⬅️ Cancel button, and it lapses
    after three minutes rather than swallowing a message meant for Claude);
-2. **the title Claude came up with** (`ai-title` in the transcript) — managed
-   sessions rarely get one: the bot starts `claude -n <name>`, and Claude does
-   not invent a title for a session that already has one;
-3. **the session's first prompt** — the watcher reads it out of the transcript
-   itself.
+2. **the name it was picked by** — a session resumed from 🕘 history or a
+   search keeps the caption its row had there;
+3. **the launch name** otherwise.
 
 In messages the name comes **with the directory in front** — `pay4say · pricing` —
 because several projects write into one chat at the same time and the name
@@ -269,34 +220,27 @@ the directory, the prefix is not repeated. In list buttons the directory is a
 column of its own, so the name there goes without it.
 
 Renaming changes **only** what you see: alongside it the database keeps `name`,
-the name `claude -n` was started with. That one never changes, and it is how the
-session is found again after `/clear` (see below).
+the name the session was launched with (`claude -n`). That one never changes:
+it is the host's key for the session, and it is how the session is followed
+after `/clear` (see below).
 
 The first prompt sits behind a file-history preamble that easily grows past
 250 KB, so it is looked for in the first megabyte of the file rather than the
-first 128 KB — otherwise a session would end up with no name at all (and a
-closed one would also drop out of the 🕘 list).
+first 128 KB — otherwise a closed session would end up with no name at all, and
+drop out of the 🕘 list.
 
 ## `/clear` changes the session id — and the bot follows
 
-The most treacherous breakage that had to be caught here: after `/clear`,
-Claude does **not** restart — same process, same window, same `-n` name — but
-it starts **a new transcript under a new session id**. Nobody announces this:
-the old file simply stops growing. A bot reading the old id then goes silent
-forever — prompts still arrive (they go through tmux, not through the id),
-Claude still answers them, and the answers are written where nobody is reading.
+After `/clear`, Claude does **not** restart — same process, same launch name —
+but it starts **a new transcript under a new session id**. The host notices
+(the SDK reports the conversation reset, and the next message carries the new
+id), records the new id against the launch name and emits `session_reset`; the
+bridge rebinds the row to it — same name, same reply routes. A line arrives in
+the chat: "🧹 *name*: context cleared — the session was given a new id, and I
+am following it there", with «🎛 Session controls» opening the fresh card.
 
-The thread back is the launch name: `claude agents --json` shows it next to the
-new id. So on every tick the watcher reconciles managed sessions against live
-agents, and when a managed session's id is missing from the live ones while an
-agent with the same name and directory is present, it rebinds the session to
-the new id: same window, same name, same reply routes, offset back to zero. A
-line arrives in the chat: "🧹 *name*: context cleared — the session was given a
-new id, still watching it."
-
-That is exactly why renaming touches `custom_name` only: had it changed `name`,
-the thread would snap and the session would be lost after the very first
-`/clear`.
+That is exactly why renaming touches `custom_name` only: the launch name is the
+thread that ties the new id to the old session.
 
 The rebind moves the row, the active-session pointer and the reply routes to
 the new id — but not the buttons already sitting in the chat: a card carries
@@ -306,28 +250,18 @@ to answer "that session is gone", which is what happens to the card you
 cleared *from*: press 🧹, then ✏️ Rename on the same card, and the rename was
 refused. Hence `session_aliases`, a table of "the id this one became", written
 by `Store.rebind` and read by `Store.find_prefix` (and by `Store.follow`, for
-the two places that write an id down outside the row — a half-finished rename
-and a dialog waiting for its text). Aliases already pointing at the old id are
+the places that write an id down outside the row — a half-finished rename and
+text held for an open question). Aliases already pointing at the old id are
 moved along with it, so a session cleared three times is still reachable from
-its very first card; they expire after 30 days. The "context cleared" note now
-also carries a 🎛 button to the fresh card.
+its very first card; they expire after 30 days.
 
 ## While Claude is thinking
 
-Claude writes the transcript in bursts, so a long turn with reasoning leaves
-nothing in it for minutes — and in a chat that is indistinguishable from a
-hung bot. The terminal, meanwhile, counts out loud:
-`✢ Fluttering… (5m 14s · ↓ 13.7k tokens)`.
-
-So after 75 seconds of uninterrupted work the bot sends **one** line,
-`⏳ <name>`, carrying that counter, and then **edits it in place** every 45
-seconds. When the real answer arrives, the pulse is deleted so it leaves no
-litter. The "esc to interrupt" hint is cut out of the line: there is no way to
-press it from a phone.
-
-It is specifically the line with a spinner and a timer in brackets that is
-picked up — "✻ Worked for 8m 9s" without brackets means the turn is already
-over, and no pulse is due.
+A long turn with reasoning can say nothing for minutes — and in a chat that is
+indistinguishable from a hung bot. So after 75 seconds of uninterrupted work
+the bot sends **one** line, `⏳ <name> · working for N min`, and then **edits
+it in place** every 45 seconds. When the real answer (or a question) arrives,
+the pulse is deleted so it leaves no litter.
 
 ## Running under systemd: PATH
 
@@ -336,25 +270,27 @@ and `claude` simply does not exist as far as the bot is concerned. The
 consequence was insidious: lists of live sessions silently came back empty,
 with no error anywhere.
 
-So the bot resolves the CLI itself: `CCBOT_CLAUDE_BIN` → `PATH` →
-`~/.nvm/versions/node/*/bin/claude` → `~/.local/bin` → `/usr/local/bin`. The
-path it found is written to the log at startup, and if nothing is found the bot
-sends a warning to the chat rather than staying quiet. The unit also spells out
-PATH explicitly.
+So the bot and the host resolve the CLI themselves: `CCBOT_CLAUDE_BIN` → `PATH`
+→ `~/.nvm/versions/node/*/bin/claude` (the bot) → `~/.local/bin` →
+`/usr/local/bin`. The host checks on every session start rather than caching
+the answer, so a stale `CCBOT_CLAUDE_BIN` does not break a launch while a
+working binary is on `PATH`. If nothing is found, the bot sends a warning to the
+chat rather than staying quiet. Both units also spell out PATH explicitly.
 
 ## The log
 
 Written to `~/.cache/ccbot/bot.log` (rotating, 2 MB × 3) and to journald in
-parallel. `/log` shows the last lines right in the chat.
+parallel; the host writes `~/.cache/ccbot/host.log`. `/log` shows the last
+lines right in the chat.
 
 It is recorded systematically rather than in selected spots: an outer
 middleware catches **every** update before any handler — including the ones
 that are dropped afterwards (a sender who is not allowed, no handler matched).
 Those are precisely the cases that are hardest to reconstruct after the fact.
-On top of that: session lifecycle, prompts sent, watcher decisions (a dialog, a
-flush, a threshold, a session gone) and rejected users.
+On top of that: session lifecycle, prompts sent, cards, held and delivered
+batches, rejected users. A sign-in code is masked in every line.
 
-`CCBOT_LOG_LEVEL=DEBUG` adds every tmux command as well.
+`CCBOT_LOG_LEVEL=DEBUG` adds the `claude` stderr the host sees.
 
 ## No error goes silent
 
@@ -364,10 +300,14 @@ an exception never simply stays in the log:
 
 * **an exception in a handler** is caught by `@dp.errors`, which answers in the
   same chat — what broke (type and message) and that sessions are unaffected;
-* **an exception in a watcher tick** stops delivery of answers from every
-  session, so it gets a warning of its own. The tick repeats every second and a
-  half, so the same breakage reports **once an hour**, and when the loop
-  recovers, "✅ the watcher is working again" arrives.
+* **an exception in the bridge tick** stops delivery of answers from every
+  session, so it gets a warning of its own — **once an hour** for the same
+  breakage;
+* **a session host that stays down** for more than 30 seconds is announced
+  («The session host is not answering»), and so is its return;
+* **a session whose `claude` process ends** says so, with the prompts it cut
+  off and «🔁 Send again» for each; the session rests and wakes with your next
+  message.
 
 This is what the failure that prompted it looked like: a running process had an
 old version of the code while the database had already gained a new column,
@@ -378,20 +318,20 @@ nothing until somebody restarted it.
 
 Sessions live independently: starting a task in `finman` and then opening
 `7loc` does not stop the first one — it keeps working, and its answers arrive
-captioned with its own name. The watcher follows every managed session at once.
+captioned with its own name.
 
 The **active** one is whichever you last created, resumed, or opened with the
-"▶️ Open" button. Ordinary text goes there, and the list marks it `▶️`.
+"▶️ Open" button. Ordinary text goes there, and the list marks it `🟢`.
 
-A launch — ➕ new, ▶️ resume from 🕘 history or a search, a restore — answers
-with the same card a row of `/sessions` opens: «▶️ Active session», the
-controls, «🟢 Text now goes to …», and the session that was active before it
-named as still working, reachable by reply. Both that card and the picker line
-it settles into («▶️ Resuming …») belong to the new session, so a reply to
-either lands there. It used to be a bare «✅ Resumed: 7loc-7487»: the launch
-name instead of the one the session was found by, no buttons, no word about
-the text — and on 2026-10-03 two messages meant for a session found by search
-went to the one whose question cards were being answered meanwhile.
+A launch — ➕ new, ▶️ resume from 🕘 history or a search — answers with the
+same card a row of `/sessions` opens: «▶️ Active session», the controls,
+«🟢 Text now goes to …», and the session that was active before it named as
+still working, reachable by reply. Both that card and the picker line it
+settles into («▶️ Resuming …») belong to the new session, so a reply to either
+lands there. It used to be a bare «✅ Resumed: 7loc-7487»: the launch name
+instead of the one the session was found by, no buttons, no word about the
+text — and on 2026-10-03 two messages meant for a session found by search went
+to the one whose question cards were being answered meanwhile.
 
 Buttons are always addressed — the session id is baked into them, so an answer
 to Claude's question lands exactly where the question came from, whichever
@@ -419,18 +359,19 @@ has to be typed by hand.
 | Command | What it does |
 |---|---|
 | `/sessions` | the session list, cards, controls |
-| `/menu` | one session's card, without the list in front of it: model, effort, permission mode, context, rename, end |
+| `/menu` | one session's card, without the list in front of it: model, effort, permission mode, restart, rename, end |
 | `/new` | start a session in a chosen directory |
 | `/usage` | quota and context, without asking Claude |
-| `/screen` | a text snapshot of the terminal |
-| `/esc` | presses Esc — **interrupts what Claude is doing**. The session stays alive, its context untouched |
+| `/screen` | where the session stopped: its state, last task, last steps and last answer |
+| `/esc` | **interrupts what Claude is doing**. The session stays alive, its context untouched |
 | `/clear` | clears the session's context. The session lives on, its history is gone |
 | `/dirs` | the project directories offered when starting a session |
 | `/rename` | your own name for a session (`/rename -` gives the automatic one back) |
 | `/lang` | interface language (`en` and `uk` for now) |
 | `/update` | which Claude Code each session runs, which one is on disk, and a restart that keeps the context |
-| `/login` | logs Claude in to another account (also «🔑 Other account» on the session card): the sign-in link comes to the chat, the code goes back as a message; the other sessions switch to the new account with their next request, no restart |
-| `/exit` | **ends the session**: Claude shuts down on its own, then the tmux window closes |
+| `/login` | logs Claude in to another account (also «🔑 Other account» on the session card): the sign-in link comes to the chat, the code goes back as a message |
+| `/exit` | **ends the session**: the host shuts its Claude down |
+| `/service`, `/restart`, `/log` | the bot itself — see [Driving it from the phone](#driving-it-from-the-phone) |
 
 All of them act on the **active** session, or — in a reply — on the one whose
 message you are quoting.
@@ -440,39 +381,27 @@ the *memory*, `/exit` closes the *session*. After `/exit` the transcript stays,
 so the session can be brought back from 🕘 in the list.
 
 `/usage` and `/context` are not the same thing either. `/usage` is the bot's own
-summary, read off the status-line payload: how much of the 5-hour and 7-day
-quota is spent, how full the context is, plus model, effort and cost. It is
-instant, costs no tokens and does not disturb the session. `/context` is Claude
-Code's own breakdown of what is filling the window (system prompt, tools, MCP,
-memory files, messages), typed into the session like any other command. The
-card's "🗜 /compact" runs `/compact`: the conversation is summed up and the
-session carries on with the summary instead of the history, keeping its id, its
-name and its tmux window. "🔁 Restart" next to it is the restart `/update`
-offers (below), for one session and whatever version it is on — it took the
-place of a "📉 Context breakdown" button on 2026-11-10.
+summary of what the session last reported to the host: how much of the 5-hour
+and 7-day quota is spent, how full the context is, plus model, effort and cost.
+It is instant, costs no tokens and does not disturb the session. `/context` is
+Claude Code's own breakdown of what is filling the window (system prompt,
+tools, MCP, memory files, messages), sent into the session like any other
+command; its answer comes back as the turn's result. The card's "🗜 /compact"
+runs `/compact`: the conversation is summed up and the session carries on with
+the summary instead of the history, keeping its id and its name, and the chat
+is told «🗜 Context compacted» when it is done. "🔁 Restart" next to it is the
+restart `/update` offers (below), for one session and whatever version it is
+on.
 
-Both of those print their answer on the terminal and nowhere else — a local
-command leaves no assistant record, and only assistant records are forwarded —
-so the bot promises a screen instead: the snapshot arrives once the session has
-gone quiet (`Watcher.screen_when_idle`), which for a compaction is when it has
-finished rather than when the key was pressed.
-
-Any other `/command` (`/model`, `/compact`, `/cost`, `/context`…) is passed to
-Claude unchanged.
-
-### Why /exit and not /kill
-
-The process is not killed. `/exit` goes into the session — Claude shuts itself
-down and gets to finish writing the transcript; only then is the tmux window
-taken away. Calling it `kill` would promise the opposite. Ctrl+D does not work
-here: the TUI ignores it (verified).
+Any other `/command` (`/model`, `/cost`, `/context`…) is passed to Claude
+unchanged.
 
 ## Updating Claude Code
 
 Claude Code updates itself in the background, but a running process keeps the
 build it started with: the new one reaches a session only when its `claude` is
-started again. Nothing in the TUI says so, so a session can sit three releases
-behind for a week and look perfectly healthy.
+started again. Nothing says so, so a session can sit three releases behind for
+a week and look perfectly healthy.
 
 `/update` puts both numbers on one card — the version on disk, the version each
 session is actually running — and offers the restart that closes the gap.
@@ -487,58 +416,26 @@ On disk: 2.1.251 — what a session gets the moment it is started again.
 🟢⏸ claude-tg-bot · the update card — 2.1.241 ⬆️
 
 3 sessions are behind.
-Busy or waiting, so left alone: claude-tg-bot · the update card
+Left alone by «Restart all»:
+• claude-tg-bot · the update card — it is waiting for an answer
 ```
 
 **Where the numbers come from.** On disk: `claude --version`, asked at most
 every five minutes — it only moves when the background updater has been at
-work. In a session: the `version` field of the status-line payload, which the
-process rewrites on every status-line render, with the transcript as the
-fallback where the tee is not installed. Both are written by the process
-itself, so they describe the build that is running and not the file on disk.
+work. In a session: the version the session's own process reports to the host,
+with the transcript as the fallback. Both describe the build that is running
+and not the file on disk.
 
-**What a restart is.** `/exit` into the session, then
-`claude --resume <id> -n <name>` in the *same* tmux window. The session id
-survives a resume, so the transcript keeps growing in the same file, the
-reader's offset stays valid, and nothing is replayed into the chat. The launch
-name comes back exactly as it was — it is the only thread back to a session
-that is later `/clear`ed. The context comes back with the history; the prompt
-cache does not, so the first reply after a restart takes a little longer, and
-anything half-typed into the session's input line is gone.
-
-**The self-update is the hazard here.** Claude Code replaces its own binary in
-place, and for a second or two `claude` is missing — or half-written, which
-bash reports as `Exec format error`. A session shut down inside that window has
-nothing to come back to: that is exactly how one session ended up at a shell
-prompt on 2026-08-30. So the CLI is checked *before* anything is shut down, and
-a launch that does not come up is tried once more. Even then the window is
-left standing, and pressing restart again resumes the session.
+**What a restart is.** The host leaves the session's client and resumes the
+same id on the CLI on disk. The session id survives a resume, so the
+transcript keeps growing in the same file and the launch name stays as it was;
+the model, effort and mode picked from the chat come back with it. The context
+comes back with the history; the prompt cache does not, so the first reply
+after a restart takes a little longer.
 
 **What it refuses to do.** A session that is working, or waiting on a question,
-is left alone — checked twice over, because neither source is enough on its
-own: `claude agents --json` (asked fresh, not from the five-second cache) knows
-about dialogs the screen parser does not recognise, and the screen answers
-immediately for a session that has only just been relaunched and is missing
-from the agent list for a couple of seconds. If `/exit` does not finish in
-20 seconds, or the resumed `claude` does not appear within 40, the restart
-stops and says so — the window is never killed, unlike `/exit` from the menu.
-
-**Background work is the user's call, not a "busy".** `claude agents --json`
-says `busy` while background shells or subagents run, and the prompt looks free
-— so a refusal that said only "busy" read as the bot being wrong. On
-2026-11-10 «Restart all» passed a finman session by for a wait loop stuck since
-three days earlier (`pgrep -f` matching its own shell) and a subagent long
-finished but still drawn in the panel. Now the refusal names the work, read off
-the lines under the input box (`screen.background_summary`: "2 shells",
-"general-purpose: Checking the frames…"), and offers «🔁 Restart anyway» — on
-the session's own refusal and, by name, on the `/update` card. Forced, the
-restart answers the question `/exit` asks in that state ("The following will
-stop when you exit" — `1. Exit and stop tasks / 2. Move to background and exit
-/ 3. Stay`, 2.1.322) with "Exit and stop tasks": moving them to the background
-would leave them running for a process the resume no longer owns. Unforced, the
-same question (the agent list called the session idle, yet a shell was running)
-is cancelled with Esc and turned into the same refusal. A turn in progress or
-an open question is never forced.
+is left alone — the host checks, and the refusal says why. A resting session
+needs no restart: it wakes on the build on disk with your next message.
 
 **"🆕 What's new"** answers the obvious next question — what a restart would
 actually bring in. Claude Code keeps the full changelog at
@@ -553,109 +450,71 @@ other side.
 "check and install if there is anything". It changes what is on disk and
 nothing else: the restart is still yours to press.
 
-**Being told about it.** When a release lands on disk while sessions are behind,
-the watcher says so once — one message per version, remembered in
+**Being told about it.** When a release lands on disk while running sessions
+are behind, the bot says so once — one message per version, remembered in
 `config.json`, so a bot restart does not turn one release into a second
-notification. Between messages the badge is enough: `⬆️` and a count in
-`/sessions`, the two versions on the session card, and the disk version in
-`/service`.
+notification. It looks every ten minutes, and resting sessions do not count.
+Between messages the badge is enough: `⬆️` and a count in `/sessions`, the two
+versions on the session card, and the disk version in `/service`.
 
 ## Logging in to another account
 
 When one account's limits run out, `/login` — or «🔑 Other account» on the
 session card — switches the machine to another without going to it. The bot
-types `/login` into the session (the active one,
-or the one replied to), picks "Claude account with subscription" itself, and
-sends the link Claude Code prints — under WSL and in a detached tmux the
-browser never opens, so the panel shows `Browser didn't open? Use the url
-below to sign in` and waits on `Paste code here if prompted >`. The link comes
-as a button. The page it opens shows a code (`<code>#<state>`), which goes back
-as an ordinary message: the bot types it into the panel, presses Enter, and
-deletes the message. On success it presses the "Press Enter to continue" too,
-and says which account it now is.
-
-**The screen is the whole state.** `screen.login_screen()` reads the panel into
-its step — the method menu, the code step with the link, the checks, success,
-an OAuth error, a not-saved warning — and `Watcher._tick_login` sends one card
-per step. Nothing is remembered between ticks but which card was sent, so a
-`/login` typed in the terminal gets the same cards, and a bot restarted in the
-middle carries on from the next frame. The link is printed from column 0 and
-broken at the pane's width with real line ends (`capture-pane -J` does not
-join it), so it is joined back from the column-0 lines and taken only once a
-line under it is drawn. A 465-character URL is fine on an inline button.
+runs `claude auth login` under a pseudo-terminal and sends the sign-in link it
+prints as a button. The page it opens shows a code (`<code>#<state>`), which
+goes back as an ordinary message: the bot deletes the message, enters the code,
+and says which account it now is (`claude auth status`). A rejected code gets
+«🔁 Try again with a new link»; «✖️ Cancel» stops the login.
 
 **The code takes its own road.** Text shaped like a code (`…#…`, base64url on
-both sides, not forwarded) is caught before the inbox: the session it goes to
-is the one whose screen is waiting for a code, not the active one, and the
-paste is refused under the input lock unless the panel still waits — with a
-second check before the Enter, so a panel closed in the terminal meanwhile
-does not turn the code into a prompt. A code no session is waiting for is
-answered and goes nowhere. The log records its length only, in the handler
-and in the update middleware. Any other text sent during the login is held
-like text sent into a question, minus «Close the question and send», which
-would cancel the login.
+both sides, not forwarded) is caught before the inbox and never becomes a
+prompt. A message that is nothing but a code, with no login waiting, is
+answered and goes nowhere. The log records it masked, in the handler and in the
+update middleware.
 
-**The other sessions follow on their own.** Every running session of the same
-profile sends its next request with the new credentials — no restart
+**The sessions follow on their own.** The login is the machine's: every running
+session sends its next request with the new credentials — no restart
 (verified on 2.1.318: a session started at 11:44 sent its first request after
-a login made in another session at 13:39 as the new organisation). The
-success message says so and offers nothing; a card from an older build that
-still carries restart buttons answers them with the same news.
+a login made elsewhere at 13:39 as the new organisation).
 
 ### Which account each session runs
 
 `👤 Account: …` stands on the session card, its details, the launch card,
-`/usage` (right under the name — the limits belong to the account), the card
-of a session in your own terminal, and the `/sessions` caption (one line when
-every session shares an account, one line per account otherwise). A limit
-alert ends with the address too: that is the moment to switch. Closed
-sessions show none — a resume runs under the current login.
+`/usage` (right under the name — the limits belong to the account), and the
+`/sessions` caption (one line when every session shares an account, one line
+per account otherwise). A limit alert ends with the address too: that is the
+moment to switch. Closed sessions show none — a resume runs under the current
+login.
 
-`~/.claude.json` is **not** the source: it names the last `/login` only, and a
+`~/.claude.json` is **not** the source: it names the last login only, and a
 session moves to it with its next request — one that has been quiet since is
 still on the account it last used. The session says it itself, in two
 attachment records of its transcript: `session_context`, whose `userEmail`
-names the address, written with the first request after a start, a resume or
-its own login; and `credential_org` (an organisation id), written beside it
-and **alone** when the credentials changed under a running session — the
-address is not repeated then. `ccbot/account.py` takes the newest of both
-(read from the end once, then only the appended bytes). A `credential_org`
-newer than the address is resolved through the organisations whose address
-is known (the pair written together, and `oauthAccount` in `~/.claude.json`,
-remembered in `~/.cache/ccbot/account-orgs.json` across restarts); one that
-cannot be resolved — or that several addresses share, as a team does — shows
-nothing rather than the stale address. A
-record is trusted only if it is not older than the running process
-(`startedAt` from `claude agents --json`): a resume appends to the same file
-and writes its own record only with the first prompt, so until then nothing
-is shown rather than the previous run's account. The session that just logged in, and one the bot has just restarted,
-are known before their transcript says so (`account.note_login`).
+names the address, written with the first request after a start, a resume or a
+login; and `credential_org` (an organisation id), written beside it and
+**alone** when the credentials changed under a running session — the address
+is not repeated then. `ccbot/account.py` takes the newest of both (read from
+the end once, then only the appended bytes). A `credential_org` newer than the
+address is resolved through the organisations whose address is known (the pair
+written together, and `oauthAccount` in `~/.claude.json`, remembered in
+`~/.cache/ccbot/account-orgs.json` across restarts); one that cannot be
+resolved — or that several addresses share, as a team does — shows nothing
+rather than the stale address. A record is trusted only if it is not older
+than the running process: a resume appends to the same file and writes its own
+record only with the first prompt, so until then nothing is shown rather than
+the previous run's account.
 
-The terminal status line (`~/.claude/statusline-command.sh`, not part of this
-repo) shows the same address next to the profile, by the same rule: the
-process start comes from `~/.claude/sessions/<pid>.json`, and the address is
-cached per session in `~/.cache/ccbot/account/`, so a redraw costs a `stat`.
+## Two kinds of session in the list
 
-**Seen live, and not.** The menu, the code step, the OAuth error after a
-wrong code, Enter back to the menu and Esc ("Login interrupted") were
-measured on 2.1.312. The success screen, the "Logged in as" line and the
-warning are known only from the binary's strings; an unknown login panel that
-stands for 15 seconds goes to the chat as an unrecognised screen.
-
-## Three kinds of session in the list
-
-* **managed** (`⏸ ⚡ ✅`) — created by the bot in tmux, full control;
-* **foreign** (`🔗`) — started by you in an ordinary terminal. They cannot be
-  driven from here, but they are visible, and the "🔗 Move to tmux" button sends
-  the process a SIGTERM and brings `claude --resume` up in a tmux window. The
-  card says so plainly, and separately warns when the session is busy right now;
-* **closed** (`🕘`) — history, brought back with `--resume`. Sessions where
-  nothing happened (only `/exit`) do not make the list: there is nothing to
+* **managed** (`⏸ ⚡ ☑️`) — started or resumed by the bot and held by the
+  session host, full control;
+* **closed** (`🕘`) — history, brought back with a resume through the host.
+  Sessions where nothing happened do not make the list: there is nothing to
   resume. Judging that has to be done by content, because even an empty session
-  weighs hundreds of kilobytes thanks to the file-history snapshot.
-
-There is no reaching the stdin of a foreign session from outside, so a clean
-`/exit` is impossible for one — hence a signal instead of a command.
+  weighs hundreds of kilobytes thanks to the file-history snapshot. A session
+  still running somewhere (`claude agents --json` names it) is not offered as
+  closed either.
 
 ## The session card
 
@@ -676,58 +535,31 @@ decided there" — so that tapping never feels irreversible:
     7 days: 24% · resets Fri 22:00
 💵 Session cost: $0.21
 🕘 Created: 23.08 12:09
-🖥 tmux: @3
 🔑 6789ea9b-2bcc-4626-8e9e-97ee33c717dc
 
 [▶️ Open]  [⬅️ Back]
 ```
 
+The controls under an opened session: «🔔 Show the question» (only while a
+question card stands — it posts that card again at the bottom of the chat, for
+when it has scrolled far up), «📜 Where it stopped», ⏸ Esc, 📊 Limits,
+🧹 /clear, 🗜 /compact, 🔁 Restart, 🧠 Model, ◉ Effort, 🔐 Mode, ✏️ Rename,
+🔑 Other account and 🚪 End.
+
 A closed session gets a card of its own — full name, path, time of last
 activity, the first prompt (when the name came from an AI title), transcript
 size — and only then "🕘 Resume".
 
-A fresh session has no metrics yet: `used_percentage` and `rate_limits` come
-back `null` in the payload until the first request has gone through. The card
-says exactly that instead of showing zeros.
-
-## Exact metrics
-
-The figures come from the same JSON Claude Code hands its status line, not from
-the bars that line draws. The bars are rounded to 10 %, reset times to the
-minute, and the labels depend on how the script is written; the payload, by
-contrast, carries exact `context_window.used_percentage`, the window size,
-`rate_limits.*.resets_at` (epoch), `effort.level`, the model and the session
-cost.
-
-The interception is a wrapper that **does not change** your status line:
-
-```
-"statusLine": { "command": ".../claude-tg-bot/bin/statusline-tee.sh" }
-```
-
-It mirrors stdin into `~/.cache/ccbot/status/<session_id>.json` and hands it on
-to your own script — `~/.claude/statusline-command.sh`, or whatever is named in
-`CCBOT_REAL_STATUSLINE`. If you have no status line of your own, the wrapper
-draws a minimal one itself rather than leaving a blank. Every failure path
-inside is non-fatal: if the write fails, the status line still renders as
-before.
-
-`./install.sh` wires it up for you, backing up `settings.json` first. If a
-status line is already configured, the installer does not lose it: it generates
-a one-line wrapper, `~/.config/ccbot/statusline.sh`, which sets
-`CCBOT_REAL_STATUSLINE` and calls the tee. The variable is not written straight
-into `statusLine.command` because nothing promises that field is run through a
-shell — and `VAR=x /path` without a shell means nothing.
-
-Remove the wrapper from `settings.json` and the bot falls back to parsing the
-screen on its own (warning about it in the log) — the numbers simply get
-coarser.
+A fresh session has no metrics yet: the context and the limits arrive with the
+first request. The card says exactly that instead of showing zeros.
 
 ## Context and limits
 
-Three ways, because each one alone has a flaw: showing it constantly is noise,
-showing it only on request means remembering to ask, and thresholds alone never
-answer "how much right now?".
+The figures are what the session reports to the host — exact context usage
+and window size, every rate limit with its reset time, the model, the effort
+level and the session cost. Three ways to see them, because each one alone has
+a flaw: showing it constantly is noise, showing it only on request means
+remembering to ask, and thresholds alone never answer "how much right now?".
 
 1. **On request** — `/usage`, or the "📊 Limits" button: context as a percentage
    and as tokens out of the window size, every limit with its reset time, plus
@@ -739,94 +571,51 @@ answer "how much right now?".
    only once context is ≥ 50 % or a limit is ≥ 75 %. While there is plenty of
    room, there is no noise at all.
 
-Figures older than 3 minutes are marked stale — the session simply has not
-redrawn its status line in a while.
-
 Reset times ("resets tomorrow 09:00") are quoted on the host's own clock. WSL
 images often sit on `Etc/UTC` even though you do not, and a bot on a rented
 server is in the same position, so set `CCBOT_TZ=Europe/Kyiv` in `.env` when the
 host clock is not yours.
 
-## Complicated dialogs
+## Questions, permissions and plans
 
-Multi-step questions arrive one at a time: answer, and the next one comes.
+Every card is built from the request's data, never from a screen:
 
-When an option has an ASCII diagram, Claude draws it to the side and only for
-the highlighted row. The bot splits the screen into columns: option labels go
-onto buttons, and the diagram is delivered according to its width.
+* **A question** (`AskUserQuestion`) is one card paged part by part — answer a
+  part and the card shows the next, with «⬅️ Back» to the previous one. Options
+  are buttons; a multi-select part ticks ☑ / ☐ and sends the set with «✅ Next»
+  or «✅ Send». «✏️ Own answer» takes your next message as the answer to the
+  part on the card; «🚫 Don't answer» declines.
+* **«💬 Discuss» answers nothing.** It declines the question with an
+  instruction to ask what you would like to clarify first, so Claude asks, and
+  your next message is read as the reply to that — one message, one turn.
+* **A permission request** shows the command or the file and the change, with
+  Allow / Deny, «✏️ Deny with a reason» (your next message goes to Claude with
+  the refusal) and up to two «✅ Always: …» rules the request suggests.
+* **A plan** (`ExitPlanMode`) shows the plan with Approve, Approve and accept
+  edits, «✏️ Revise» (your next message is what to change) and Keep planning.
 
-For years this was the hard part: mobile Telegram did not scroll a code block,
-it wrapped it, so a wide diagram fell apart on a phone while looking flawless on
-the desktop. Anything wider than 36 characters had to leave as a PNG.
-
-**Bot API 10.1 (June 2026) removed the problem.** A rich message's preformatted
-block scrolls sideways, so the diagram now travels inline as text at any width —
-it lines up, and it can be copied. Two things were measured on a live client
-rather than read in the documentation:
-
-* a single block accepted **30 000** characters, where the docs promise 1024;
-* box-drawing (`─ │ ┼`) is **not a letter wide** in Telegram's monospace face,
-  so a captured frame comes out ragged. Plain ASCII (`- | +`) lines up exactly,
-  which is what `rich.ascii_frame()` converts it to.
-
-The PNG path (`ccbot/render.py`, Pillow + DejaVu Sans Mono) stays underneath as
-the fallback for a client that has no rich messages; "🖼 Diagram" still redraws
-the current option on demand.
-
-A small thing that cost time back then, and still applies to the fallback: the
-lines in the PNG overlap by a pixel (`LINE_SPACING = -1`) — otherwise the `│`
-glyph renders a hair shorter than its cell and every vertical comes out dotted.
-
-Parsing the columns is needed precisely so the graphics do not end up inside
-option labels. The question and the heading are rendered across the full width,
-so they are not cut at a column boundary, and the frame characters are stripped
-off their edges.
-
-The ⬆️ ⬇️ ✅ buttons page through the list, and the message is **edited** rather
-than duplicated. The arrows also reach options with no number ("Chat about
-this") that no digit corresponds to.
-
-### The two ways out of a question
-
-A question offers two free-text rows, and they behave nothing alike.
-
-**"Type something"** is an input line *inside* the dialog: the digit moves the
-cursor onto the row, the text is typed into it, and Enter answers the question.
-One turn, and the answer is recorded as the answer. That is the route the
-✏️ button takes — it asks for the text first, then types it in.
-
-**"Chat about this"** answers nothing. The digit alone rejects the question,
-with an instruction that has Claude *ask what you would like to clarify* — so
-whatever is sent along with the press is read only after that question has been
-asked and answered. The 💬 button therefore presses and stops: the question is
-dropped, the session becomes the active one, and the next thing written in the
-chat goes there as an ordinary message. One message, one turn.
+A card whose data the renderer cannot read still arrives, with buttons that
+answer it. Once answered, a card keeps its text and trades its buttons for one
+inert button naming the answer; a question closed any other way is marked
+«⏹ Question closed». Nothing from a session lands under its own open card: its
+output waits until the card is answered.
 
 Answering from a card also **makes that session active**. It has to: what
 follows an answer belongs to the same thread, and plain text goes to the active
-session. Before that, a clarification typed after pressing a dialog button
-could land in another session entirely — which happened on 2026-09-01, and the
-other session started working on a question nobody had asked it.
+session. Before that, a clarification typed after pressing a card button could
+land in another session entirely — which happened on 2026-09-01, and the other
+session started working on a question nobody had asked it.
 
-### Questions with checkboxes
+### Text sent while a question is open
 
-A multi-select question (`AskUserQuestion` with `multiSelect`) is not a list of
-answers but a list of **ticks**, and its digits behave accordingly: pressing "1"
-ticks the first box and leaves the question standing. What sends the ticked set
-is an unnumbered row under the list — captioned `Submit` on the last section of
-a question, `Next` while sections remain — and no digit reaches it.
-
-So the chat gets a button of its own for that row ("✅ Send 2 choices" /
-"➡️ Next question"), the buttons carry ☑ / ☐, and pressing one edits the card
-instead of retiring it. Under the button the cursor is walked onto the row and
-the screen re-read after every move: Enter on the wrong row would answer with
-that single option instead of the set. Whatever follows — the
-"Review your answers" page — is confirmed by the bot itself, since the chat
-has just confirmed the same thing; a page that warns "Some questions are
-unanswered" goes out as a card instead.
-
-Without that button the question dead-ended: the boxes could be ticked from the
-phone and there was no way to send them.
+Text is never sent into a session that is waiting on a question: it would land
+beside the question nobody has answered. It is held, and a card asks what to do
+with it — «✏️ This answers the question» (for a question that takes a typed
+answer), «💬 Close the question and send» (declines the open request, then
+sends), «⏳ Send after the answer» or «🗑 Don't send». Anything sent while that
+card stands joins the same held text, and the card is asked again at the
+bottom. The host checks too: a guarded send is refused while a request is
+open, so nothing slips in between.
 
 ## Attachments
 
@@ -834,9 +623,7 @@ Anything Telegram can carry — a photo, an album, a document of any type, a
 video, an audio file, a voice message, a sticker — is saved into
 `~/.cache/ccbot/media/<session>/` and handed to Claude as a path. Its `Read`
 displays images natively; a JSON, a log or a CSV it simply reads, and an
-archive or an audio file it can unpack or convert on its own. The system
-clipboard is not used here: WSL has no display, so there is no way to paste a
-picture "with Ctrl+V".
+archive or an audio file it can unpack or convert on its own.
 
 **The format is not filtered.** It used to be — images and PDFs only, and a
 forwarded JSON came back as "I only take images and PDFs", which is a bot
@@ -871,11 +658,7 @@ The reason is what a phone actually sends. Forwarding a conversation produces a
 message per bubble, Telegram hands the whole lot over in a single poll (13 of
 them within 190 ms on 2026-08-27), and aiogram runs an update per task. Sent
 straight through, that became 13 prompts in whatever order the event loop
-scheduled them, each with its own Enter — and 13 simultaneous
-`tmux load-buffer`/`paste-buffer` pairs on one buffer name, of which 11 died
-with `no buffer ccbot-7`, because `paste-buffer -d` deletes the buffer another
-call was about to paste. Hence both halves of the fix: the inbox, and one lock
-per window in `tmux.py` (`tmux.submit_text` — paste and Enter, indivisible).
+scheduled them, each a turn of its own.
 
 A forwarded batch also keeps its authorship. `forward_origin` says who wrote
 each message — a visible user, a hidden one, a group, a channel — and the
@@ -902,7 +685,7 @@ through byte for byte — the ordinary case is untouched.
 Two things deliberately skip the queue: a `/command` bound for Claude (it
 flushes whatever is waiting and then goes alone, because a command has to be
 the first thing on its line) and an answer to a question the bot asked
-("send me a path", a dialog option), which is a conversation of its own.
+("send me a path", «✏️ Own answer»), which is a conversation of its own.
 
 ### A forwarded batch asks where it goes
 
@@ -910,10 +693,8 @@ Forwarding a conversation is normally how a session is given the context it
 should *start* from, so its destination is a question rather than "whichever
 session is active": the batch is held (`_Parked`) and the chat is asked, with
 «▶️ Current: *name*», «📋 Another session» and «🗑 Discard». The picker behind
-the second one is the session list with every row a destination — the sessions
-in tmux, ➕ a new one in a directory you pick, 🕘 a closed one to bring back.
-Foreign sessions are left out: their stdin is out of reach, so nothing could be
-delivered there.
+the second one is the session list with every row a destination — the running
+sessions, ➕ a new one in a directory you pick, 🕘 a closed one to bring back.
 
 Three details make it usable rather than merely correct:
 
@@ -922,17 +703,8 @@ Three details make it usable rather than merely correct:
   a forward ("look at this") is part of the forward, and a question scrolled
   above the new messages is one that gets answered for the wrong batch.
 * **Both "new" and "recent" go through `_create`**, which delivers the batch
-  itself once the session is up (`_deliver_after_launch`), so there is one
-  delivery path instead of three. It waits for the TUI first
-  (`screen.is_ready`, the mode line under the input box): `paste-buffer` does
-  not care whether Claude is running, and text pasted into the shell prompt a
-  fresh window shows for a second would be *run*. A directory Claude Code has
-  not seen before answers with "Is this a project you trust?" instead — that
-  is not readiness either, so the batch stays parked, the question comes as a
-  card with «✅ Yes, I trust this folder» / «🚪 No, exit» (`screen._trust_dialog`:
-  its rows have no digits, so the button walks the cursor and presses Enter),
-  and the new session is now the active one, which makes «▶️ Current» the
-  single tap that finishes the job once it is answered.
+  itself once the host has the session up (`_deliver_after_launch`), so there
+  is one delivery path instead of three.
 * **A forward sent as a reply to a session's message is not asked about** —
   the reply has already said where it goes — and the answer makes that session
   active, because what the user types next belongs to the thread they have just
@@ -942,13 +714,13 @@ Three details make it usable rather than merely correct:
 Anything the user types themselves still goes straight to the active session:
 a question per message would make the ordinary case cost a tap. **With no
 session active, a batch is parked the same way, forwarded or not**, and the
-question opens straight on the destinations (the sessions in tmux, ➕ a new
+question opens straight on the destinations (the running sessions, ➕ a new
 one, 🕘 a closed one, 🗑 discard) — there is no «Current» to offer, and
 answering "no active session" used to drop the message, so it had to be sent
 again once a session existed. A Claude command on its own (`/compact`) is the
 exception: it acts on a running session, so it still gets that answer. A
 session started from /sessions while a batch waits moves the question under
-its card once its TUI is up, where «▶️ Current» now names it.
+its card, where «▶️ Current» now names it.
 
 ## Project directories
 
@@ -989,8 +761,8 @@ The language is decided from three sources, in descending priority:
    text, so the worst a broken `.mo` can do is leave the interface in English.
 
 `/lang` takes effect **without a restart**. Handlers get the language from a
-middleware on every update, and the watcher — a background loop with no update
-to look at — rereads the setting on every tick and opens the context itself.
+middleware on every update, and the background loops — which have no update to
+look at — reread the setting on every tick and open the context themselves.
 The "/" menu is republished along with the language, since Telegram would
 otherwise keep showing the old command list.
 
@@ -1067,14 +839,16 @@ packaged, and somebody's data has no business living inside it.
 |---|---|
 | Settings the bot changes itself | `~/.config/ccbot/config.json` |
 | State (managed sessions, reply routes) | `~/.local/share/ccbot/state.db` |
-| Log, attachments, status-line payloads | `~/.cache/ccbot/` |
+| The host's sessions and event journal | `~/.local/share/ccbot/host.db` |
+| The host socket | `$XDG_RUNTIME_DIR/ccbot/host.sock` |
+| Logs, attachments | `~/.cache/ccbot/` |
 
 The exception is `locales/`: translations are part of the code, not user data,
 so they live in the repository.
 
-`XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME` are honoured. A database
-in the old location (next to the code) is moved by the bot itself on first
-start.
+`XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME` / `XDG_RUNTIME_DIR` are
+honoured (`CCBOT_HOST_SOCKET` overrides the socket path). A database in the old
+location (next to the code) is moved by the bot itself on first start.
 
 ## Checks before a commit
 
@@ -1102,8 +876,8 @@ from the tree, and a tree that fails is a bot that will not come back up.
 ## Autostart
 
 `./install.sh` does exactly this and verifies the result. By hand: the unit
-template lives in `contrib/claude-tg-bot.service`, with `%INSTALL_DIR%`
-substituted at install time:
+templates live in `contrib/`, with `%INSTALL_DIR%` substituted at install
+time — the host first, since the bot's unit wants it:
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -1114,136 +888,43 @@ systemctl --user daemon-reload
 systemctl --user enable --now claude-tg-host claude-tg-bot
 ```
 
-`claude-tg-host` is the session host (see
-[Sessions through the Agent SDK](#sessions-through-the-agent-sdk-being-introduced)).
-Its unit uses `KillMode=control-group` on purpose: the `claude` processes are its
+`claude-tg-host` is the session host (see [How it works](#how-it-works)). Its
+unit uses `KillMode=control-group` on purpose: the `claude` processes are its
 children and must end with it — one left behind by a host that died would hold
-a session nobody can reach. Its log is `~/.cache/ccbot/host.log`.
+a session nobody can reach. The bot's unit uses the default kill mode too: it
+holds no session, so a stop or restart takes only the bot (and a
+`claude auth login` it may be running).
 
-The unit lives as long as you have at least one session on the machine. To keep
-it running with none: `sudo loginctl enable-linger $USER`.
+The units live as long as you have at least one session on the machine. To keep
+them running with none: `sudo loginctl enable-linger $USER`.
 
-### KillMode=process is not cosmetic
+### When the host or the machine restarts
 
-The tmux server is started by the bot itself, so it ends up in the unit's
-cgroup. With the usual `KillMode=control-group`, every `systemctl restart` would
-take down the whole cgroup — that is, the tmux server and with it **every Claude
-session**. Verified on a twin unit: with the default mode the server's PID after
-a restart is a different one; with `KillMode=process` it is the same.
-
-Hence `KillMode=process` in the unit: only the bot gets the signal, and sessions
-carry on. tmux panes, incidentally, already live in their own
-`tmux-spawn-*.scope`, but without this option the server dies along with the bot.
-
-### When the machine goes down
-
-`KillMode=process` saves the sessions from a bot restart; nothing saves them
-from a restart of the machine. The tmux server dies with everything in it, and
-the bot — which comes back with the unit — used to answer that with a tombstone
-per session ("💀 *name* is gone (its tmux window was closed)") and delete the
-row that named it. Nine of them arrived at once when Windows rebooted itself on
-2026-09-09, and with the rows went the only record of what had been running
-where.
-
-Nothing about it is unrecoverable, though: the transcripts are on disk, and
-`claude --resume <id>` brings a session back with its whole context. What was
-missing was the id, the directory and the names — all of which are in the row
-that was being thrown away. So a row is now **moved, not deleted**
-(`Store.orphan` → the `orphans` table), and the chat gets one card instead of
-nine tombstones: «🔌 N sessions were stopped», with a button per session, «↩️
-Restore all» and «🗑 Forget them». A restore is the ordinary launch path
-(`_create` with `--resume`), so a session comes back under its own name, and
-«all» works through the list one at a time, waiting for each TUI — nine node
-processes started at once are nine node processes fighting over one CPU, and a
-directory Claude Code has not seen before stops on "Is this a project you
-trust?".
-
-Two signals tell a machine restart from a window somebody closed: the kernel's
-boot id (`/proc/sys/kernel/random/boot_id`, kept in the `meta` table) has
-changed, or the tmux server is not answering at all (`tmux kill-server`, no
-reboot). One window disappearing on a live server is still an ending, and still
-gets its tombstone. The offer expires after seven days, and it also goes away by
-itself when the session is resumed from 🕘 history instead — `Store.add` clears
-the row. The card scrolls away like any other message, so `/sessions` grows a
-«🔌 Restore stopped sessions (N)» row for as long as any are waiting.
-
-A restored session opens on an empty prompt. The context is all there, but work
-that was running at the moment of the crash is not picked up again, and a
-question that was on the screen is gone with the screen.
+Sessions rest in the host. After a host restart, or a reboot, each one wakes by
+resume — same id, same context — with the next message sent to it. Work that
+was in progress at that moment is not picked up again: the chat gets «🔌 The
+session host was restarted», naming the prompts that were cut off with
+«🔁 Send again» for each, and how many open questions were closed with it.
 
 ### Driving it from the phone
 
 | Command | What it shows / does |
 |---|---|
-| `/service` | uptime, PID, code version (git hash + whether the tree is clean), tmux server PID, poll interval, number of managed sessions |
-| `/restart` | restart the bot, with a confirmation; the same thing sits on a button in `/service` |
+| `/service` | uptime, code version (git hash + whether the tree is clean), Claude Code on disk, PID and whether systemd supervises it, number of managed sessions, the journal, and the session host: PID, uptime, SDK version, live sessions |
+| `/restart` | restart the bot, with a confirmation; the same thing sits on a button in `/service`. Sessions are unaffected |
 
 A restart is arranged as an ordinary exit: the bot stops polling and finishes,
 and `Restart=always` brings it back in five seconds. That is why the button
 appears **only** when the process really is a unit — checked through its own
-cgroup rather than `INVOCATION_ID`, which the tmux server inherits and therefore
-so does every session. A bot started by hand answers `/restart` with the
-instructions for installing the unit and goes nowhere.
+cgroup rather than `INVOCATION_ID`, which every process started inside a unit
+inherits (a Claude session of the host, and a bot launched by hand from one of
+them). A bot started by hand answers `/restart` with the instructions for
+installing the unit and goes nowhere.
 
 Who asked for the restart is recorded in `~/.cache/ccbot/restart.json`, so once
 it is back up the bot reports in that same chat: "✅ Back — the restart took N s."
 A flag older than 10 minutes is ignored: it stands for a start that never
 returned.
-
-## Attaching to the same session locally
-
-```bash
-tmux attach -t ccbot \; select-window -t @N
-```
-
-## Maintaining the TUI parser
-
-`ccbot/screen.py` is the only place that knows what the Claude Code interface
-looks like. If the buttons stop appearing after a CLI update, take a fresh
-sample:
-
-```bash
-tmux capture-pane -p -t @N > /tmp/dialog.txt
-```
-
-and compare it against `find_dialog()`.
-
-A dialog is recognised by its **footer**, and there are two kinds of footer:
-
-* choosing an option — `Enter to select · Esc to cancel`;
-* a permission request (from a tool or a `PreToolUse` hook) —
-  `Esc to cancel · Tab to amend · ctrl+e to explain`. This one went unrecognised
-  for a long time: the session sat quietly on "Do you want to proceed?" while
-  the chat showed nothing.
-
-The list of options is searched **bottom-up, from the footer to the item "1."**.
-Otherwise the parser latched onto the first numbered line on the screen — and
-Claude numbers its prose all the time, so the items of its own plan ended up on
-the buttons.
-
-### If the question still is not recognised
-
-`claude agents --json` says `waiting` whatever the dialog looks like, which
-makes it a more honest signal than the parser. When a session is waiting and
-`find_dialog()` stays silent, the bot sends the screen as it is, with buttons
-that work without any parsing: digits, arrows, ✅ and Esc. Staying quiet in that
-situation is not an option.
-
-### `/btw` answers are not questions
-
-A `/btw` side question opens an overlay of its own: the asked line under a
-rule, the answer, and `c to copy · f to fork · Esc to close`. The session reads
-as `waiting` while it stands, but nothing is being asked — and the answer is
-written nowhere, neither to the transcript nor to `history.jsonl`, so an Esc
-alone would throw it away. `screen.side_answer()` recognises the finished
-overlay (while it is still answering, the footer has no `c to copy`), the bot
-presses `c`, which loads the whole answer into a tmux buffer in Markdown
-however little of it fits on the pane, sends it to the chat, and closes the
-overlay with Esc. The buffer has to hold the answer's first line, since a
-selection made in another window of the same tmux server is a new buffer too.
-If the copy does not arrive, the screen comes with the overlay's own keys
-instead — 📋 copy again, ⬆️⬇️ to scroll, ⬅️➡️ through its history, ✖️ Close —
-and the overlay is left standing.
 
 ## Later
 
@@ -1253,8 +934,8 @@ and the overlay is left standing.
 * **Native tables.** Claude's Markdown tables are already drawn by the client;
   the bot's own lists (sessions, usage) are still `·`-separated text and could
   become `InputRichBlockTable`.
-* **Long plans.** `ExitPlanMode` with a large plan is truncated for now — it
-  ought to be split across several messages.
+* **Long plans.** A plan too large for one rich message goes out as plain text
+  in pieces; it ought to be split across several rich messages instead.
 
 ## License
 

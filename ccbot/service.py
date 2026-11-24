@@ -33,10 +33,10 @@ _FLAG_TTL = 600.0
 def under_systemd() -> bool:
     """Whether this process *is* the unit — so exiting means being restarted.
 
-    Not INVOCATION_ID: the tmux server the bot starts inherits it, so every
-    Claude session — and a bot launched by hand from one of them — would claim
-    to be supervised and exit into nothing. The cgroup says where the process
-    actually lives.
+    Not INVOCATION_ID alone: every process started from inside a unit (a
+    Claude session of the host, and a bot launched by hand from one of them)
+    inherits it, and would claim to be supervised and exit into nothing. The
+    cgroup says where the process actually lives.
     """
     try:
         cgroup = Path("/proc/self/cgroup").read_text(encoding="utf-8")

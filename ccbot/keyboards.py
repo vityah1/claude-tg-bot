@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
-
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from .i18n import _, language_name, ngettext, offered
-from .screen import Dialog, is_chat_label
+from .i18n import _, language_name, offered
 from .sessions import DirStat, SessionView
-from .state import Orphan
 
-# Models and effort levels are NOT listed here. They are read off the live
-# /model and /effort dialogs (`screen._model_dialog` / `_effort_dialog`),
-# because a table in the source is a table that goes stale: this one still
-# offered "Fable 5" and five effort levels when Claude Code had moved on to
-# Fable 5.1 and six.
-# Shift+Tab cycles in this order; the bot presses it until the target is shown.
+# Models and effort levels are NOT listed here. They come from the session's
+# own `get_server_info()` (`CCBot._sdk_picker`), because a table in the source
+# is a table that goes stale.
+# The permission modes, in the order the picker offers them.
 MODES = [
     ("⏵⏵ auto", "auto"),
     ("⏸ plan", "plan"),
@@ -35,8 +29,6 @@ STATUS_ICON = {
     "idle": "☑️",
     "waiting": "⏸",
     "starting": "🔄",
-    "dead": "💀",
-    "gone": "❓",
     "closed": "🕘",
 }
 
@@ -76,16 +68,9 @@ def _named(v: SessionView) -> str:
     return f"✏️ {v.name}" if v.saved_name else v.name
 
 
-def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
-                active: str | None = None,
-                stopped: int = 0) -> InlineKeyboardMarkup:
+def sessions_kb(managed: list[SessionView],
+                active: str | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    # The two kinds look alike in a list of rows, so they are split by a
-    # divider row. Telegram centres a caption, which makes dashes read as a
-    # separator; tapping one explains the group rather than doing nothing.
-    if managed:
-        kb.row(InlineKeyboardButton(
-            text=_("──── 🖥 in tmux ────"), callback_data="grp:tmux"))
     for v in managed:
         icon = STATUS_ICON.get(v.status, "•")
         label = _distinct_name(v.name, v.dir_name)
@@ -96,23 +81,6 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
             text=_fit(f"{mark} {v.dir_name} · {label}", hint),
             callback_data=f"s:{sid8(v.session_id)}",
         ))
-    if foreign:
-        kb.row(InlineKeyboardButton(
-            text=_("──── 🔗 in your terminal ────"), callback_data="grp:term"))
-    for v in foreign:
-        # 🔗 means "not mine yet" — opening it moves the session into tmux.
-        hint = _("waiting") if v.status == "waiting" else ""
-        kb.row(InlineKeyboardButton(
-            text=_fit(f"🔗 {v.dir_name} · {v.name}", hint),
-            callback_data=f"f:{sid8(v.session_id)}",
-        ))
-    # The card the watcher sends after a reboot scrolls away; without a way
-    # back to it the restore is reachable for as long as one keeps the chat
-    # open, and no longer.
-    if stopped:
-        kb.row(InlineKeyboardButton(
-            text=_("🔌 Restore stopped sessions ({count})").format(count=stopped),
-            callback_data="orph:show"))
     kb.row(
         InlineKeyboardButton(text=_("➕ New session"), callback_data="new"),
         InlineKeyboardButton(text=_("🕘 Recent"), callback_data="hist"),
@@ -122,7 +90,7 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
 
 
 def confirm_kb(session_id: str, kind: str, back: str = "hist",
-               asking: bool = False, movable: bool = False) -> InlineKeyboardMarkup:
+               asking: bool = False) -> InlineKeyboardMarkup:
     """Detail card actions: a button caption is one line, a card is not.
 
     *asking*: the session waits on a choice, so its question can be posted
@@ -138,95 +106,38 @@ def confirm_kb(session_id: str, kind: str, back: str = "hist",
             InlineKeyboardButton(text=_("▶️ Resume"), callback_data=f"dores:{s}"),
             InlineKeyboardButton(text=_("⬅️ Back"), callback_data=back),
         )
-    elif kind == "foreign":
-        # Ending is offered here as well: reaching it through "move into tmux"
-        # first would mean starting the session up again to stop it.
-        kb.row(
-            InlineKeyboardButton(text=_("🔗 Move into tmux"), callback_data=f"grab:{s}"),
-            InlineKeyboardButton(text=_("🚪 End"), callback_data=f"fx:{s}"),
-        )
-        kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="ls"))
     else:
         kb.row(
             InlineKeyboardButton(text=_("▶️ Open"), callback_data=f"open:{s}"),
             InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
         )
-        if movable:
-            # Walking the list moving sessions one by one: the result is
-            # shown on this card, which then leads back to the list.
-            kb.row(InlineKeyboardButton(text=_("↗️ Move to SDK"),
-                                        callback_data=f"k:{s}:tosdkl"))
         kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="ls"))
     return kb.as_markup()
 
 
-def back_to_list_kb(extra: InlineKeyboardMarkup | None = None) -> InlineKeyboardMarkup:
-    """A settled card's way back to /sessions (after any buttons of its own)."""
-    kb = InlineKeyboardBuilder()
-    for row in (extra.inline_keyboard if extra else []):
-        kb.row(*row)
-    kb.row(InlineKeyboardButton(text=_("⬅️ To the list"), callback_data="ls"))
-    return kb.as_markup()
-
-
-def session_kb(v: SessionView, asking: bool = False,
-               sdk: bool = False, movable: bool = False) -> InlineKeyboardMarkup:
+def session_kb(v: SessionView, asking: bool = False) -> InlineKeyboardMarkup:
+    """A session's controls. «📜 Where it stopped» is the recap read from its
+    transcript — there is no screen to show."""
     s = sid8(v.session_id)
     kb = InlineKeyboardBuilder()
-    if sdk:
-        # An SDK session gets only what works for it; a button that answers
-        # "not yet" is a button that should not be there. It has no screen:
-        # «📜 Where it stopped» is the recap read from its transcript.
-        if asking:
-            kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
-                                        callback_data=f"k:{s}:ask"))
-        kb.row(InlineKeyboardButton(text=_("📜 Where it stopped"),
-                                    callback_data=f"k:{s}:recap"))
-        kb.row(InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
-               InlineKeyboardButton(text=_("📊 Limits"), callback_data=f"k:{s}:usage"))
-        kb.row(InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
-               InlineKeyboardButton(text="🗜 /compact", callback_data=f"k:{s}:compact"),
-               InlineKeyboardButton(text=_("🔁 Restart"), callback_data=f"k:{s}:restart"))
-        kb.row(InlineKeyboardButton(text=_("🧠 Model"), callback_data=f"cfg:{s}:model"),
-               InlineKeyboardButton(text=_("◉ Effort"), callback_data=f"cfg:{s}:effort"),
-               InlineKeyboardButton(text=_("🔐 Mode"), callback_data=f"cfg:{s}:mode"))
-        kb.row(InlineKeyboardButton(text=_("✏️ Rename"), callback_data=f"ren:{s}"),
-               InlineKeyboardButton(text=_("🔑 Other account"), callback_data=f"k:{s}:login"),
-               InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"))
-        kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
-        return kb.as_markup()
     if asking:
         # The session waits on a question whose card may be far up the chat
         # by now; this sends it again at the bottom (`CCBot._show_question`).
         kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
                                     callback_data=f"k:{s}:ask"))
-    kb.row(
-        InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
-        InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
-        InlineKeyboardButton(text=_("📊 Limits"), callback_data=f"k:{s}:usage"),
-    )
-    # The context controls travel together, and "End" leaves the row they are
-    # in: it used to sit where the thumb lands for /clear. "Restart" took the
-    # place of /context on 2026-11-10 (the user asked; /context is still a
-    # command to type). Old cards keep their `k:…:ctx`, which still works.
-    kb.row(
-        InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
-        InlineKeyboardButton(text="🗜 /compact", callback_data=f"k:{s}:compact"),
-        InlineKeyboardButton(text=_("🔁 Restart"), callback_data=f"k:{s}:restart"),
-    )
-    kb.row(
-        InlineKeyboardButton(text=_("🧠 Model"), callback_data=f"cfg:{s}:model"),
-        InlineKeyboardButton(text=_("◉ Effort"), callback_data=f"cfg:{s}:effort"),
-        InlineKeyboardButton(text=_("🔐 Mode"), callback_data=f"cfg:{s}:mode"),
-    )
-    kb.row(
-        InlineKeyboardButton(text=_("✏️ Rename"), callback_data=f"ren:{s}"),
-        InlineKeyboardButton(text=_("🔑 Other account"), callback_data=f"k:{s}:login"),
-        InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
-    )
-    if movable:
-        # The way across: the same session, carried on by the session host.
-        kb.row(InlineKeyboardButton(text=_("↗️ Move to SDK"), callback_data=f"k:{s}:tosdk"))
+    kb.row(InlineKeyboardButton(text=_("📜 Where it stopped"),
+                                callback_data=f"k:{s}:recap"))
+    kb.row(InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
+           InlineKeyboardButton(text=_("📊 Limits"), callback_data=f"k:{s}:usage"))
+    kb.row(InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
+           InlineKeyboardButton(text="🗜 /compact", callback_data=f"k:{s}:compact"),
+           InlineKeyboardButton(text=_("🔁 Restart"), callback_data=f"k:{s}:restart"))
+    kb.row(InlineKeyboardButton(text=_("🧠 Model"), callback_data=f"cfg:{s}:model"),
+           InlineKeyboardButton(text=_("◉ Effort"), callback_data=f"cfg:{s}:effort"),
+           InlineKeyboardButton(text=_("🔐 Mode"), callback_data=f"cfg:{s}:mode"))
+    kb.row(InlineKeyboardButton(text=_("✏️ Rename"), callback_data=f"ren:{s}"),
+           InlineKeyboardButton(text=_("🔑 Other account"), callback_data=f"k:{s}:login"),
+           InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"))
     kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
     return kb.as_markup()
 
@@ -242,215 +153,6 @@ def choice_kb(session_id: str, kind: str, current: str = "") -> InlineKeyboardMa
             text=f"{mark}{label}", callback_data=f"set:{s}:{kind}:{value}",
         ))
     kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
-    return kb.as_markup()
-
-
-def _scope_row(s: str, scope: str) -> list[InlineKeyboardButton]:
-    """The two commitments the settings dialogs offer, as a visible choice.
-
-    Claude Code answers "s" with "for this session only" and Enter with "saved
-    as your default for new sessions" — a difference the bot used to hide: the
-    session menu sent `/model opus`, which quietly moved the default for every
-    session started afterwards. So the scope is on the card, it defaults to
-    this session alone, and the row says which one is armed.
-    """
-    return [
-        InlineKeyboardButton(
-            text=(_("✅ this session") if scope == "s" else _("this session")),
-            callback_data=f"dsc:{s}:s"),
-        InlineKeyboardButton(
-            text=(_("✅ + new sessions") if scope == "d" else _("+ new sessions")),
-            callback_data=f"dsc:{s}:d"),
-    ]
-
-
-def settings_kb(session_id: str, dialog: Dialog,
-                scope: str = "s") -> InlineKeyboardMarkup:
-    """Buttons for the /model picker and the /effort slider.
-
-    Neither is answered by a digit the way an ordinary question is: the picker
-    commits with "s" or Enter once the cursor is on a row, and the slider has
-    no digits at all. So the buttons carry the row (or the level) and the
-    scope, and the bot walks the terminal there itself.
-    """
-    s = sid8(session_id)
-    kb = InlineKeyboardBuilder()
-    if dialog.kind == "effort":
-        row: list[InlineKeyboardButton] = []
-        for opt in dialog.options:
-            row.append(InlineKeyboardButton(
-                text=f"{'◉ ' if opt.current else '○ '}{opt.label}",
-                callback_data=f"eff:{s}:{opt.number}:{scope}"))
-            if len(row) == 3:
-                kb.row(*row)
-                row = []
-        if row:
-            kb.row(*row)
-        if dialog.toggle:
-            # Tab arms the switch and a level button commits it, so the
-            # button says where the switch stands, not what it will become.
-            text = (_("⚡ {name}: on").format(name=dialog.toggle)
-                    if dialog.toggle_on
-                    else _("⚡ {name}: off").format(name=dialog.toggle))
-            kb.row(InlineKeyboardButton(
-                text=text, callback_data=f"etg:{s}:{int(dialog.toggle_on)}"))
-    else:
-        for opt in dialog.options:
-            # The label names the choice ("Fable"), the description names the
-            # model it resolves to ("Fable 5.1 · Most capable…") — and the
-            # second half is the answer to "which model is this, really".
-            model = opt.description.split("·")[0].strip()
-            caption = f"{opt.label} · {model}" if model else opt.label
-            kb.row(InlineKeyboardButton(
-                text=_fit(f"{'✅ ' if opt.current else ''}{caption}"),
-                callback_data=f"mdl:{s}:{opt.number}:{scope}"))
-        # "▸ More models" folds the older models in and out (2.1.330); the
-        # list on the card follows the screen, so the button only presses
-        # the row and the watcher draws the new list as a card of its own.
-        for i, extra in enumerate(dialog.extras):
-            text = (_("▾ Hide the other models") if extra.startswith("▾")
-                    else _("▸ More models"))
-            kb.row(InlineKeyboardButton(
-                text=text, callback_data=f"dx:{s}:{i}:{row_tag(extra)}"))
-    if not dialog.session_only:
-        kb.row(*_scope_row(s, scope))
-    kb.row(
-        InlineKeyboardButton(text=_("✖️ Cancel"), callback_data=f"k:{s}:esc"),
-        InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
-    )
-    return kb.as_markup()
-
-
-def drafts_kb(session_id: str) -> InlineKeyboardMarkup:
-    """The feedback-drafts question `/exit` asks: Enter or Esc, nothing else.
-
-    It has no digits, so the ordinary keyboard would offer buttons that
-    press nothing.
-    """
-    s = sid8(session_id)
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=_("📨 Review and send"),
-                                callback_data=f"dr:{s}:send"))
-    kb.row(InlineKeyboardButton(text=_("🗑 Discard and exit"),
-                                callback_data=f"dr:{s}:drop"))
-    kb.row(InlineKeyboardButton(text=_("🖥 Screen"),
-                                callback_data=f"k:{s}:screen"))
-    return kb.as_markup()
-
-
-def trust_kb(session_id: str) -> InlineKeyboardMarkup:
-    """"Is this a project you trust?": its two rows, which carry no digits."""
-    s = sid8(session_id)
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=_("✅ Yes, I trust this folder"),
-                                callback_data=f"tr:{s}:yes"))
-    kb.row(InlineKeyboardButton(text=_("🚪 No, exit"),
-                                callback_data=f"tr:{s}:no"))
-    kb.row(InlineKeyboardButton(text=_("🖥 Screen"),
-                                callback_data=f"k:{s}:screen"))
-    return kb.as_markup()
-
-
-def row_tag(label: str) -> str:
-    """A short fingerprint of a row's label, for a button that names no digit.
-
-    The position alone would press whatever row sits there when the button
-    is tapped, which on a card the next question has overtaken is a row
-    nobody chose; the label itself does not fit into 64 bytes.
-    """
-    return hashlib.sha1(label.encode()).hexdigest()[:6]
-
-
-def dialog_kb(session_id: str, dialog: Dialog,
-              scope: str = "s") -> InlineKeyboardMarkup:
-    """One button per option; free-text options route to a reply prompt.
-
-    A multi-select question works differently and the keyboard has to say so:
-    its digits *tick* a box instead of answering, and nothing reaches Claude
-    until the unnumbered row under the list is pressed. So the ticks are drawn
-    on the buttons, and that row gets a button of its own — without it the
-    boxes could be ticked from the chat and the answer never sent. The row
-    moves to the next section rather than sending when the question has more
-    of them, and the button says which it is doing.
-    """
-    if dialog.kind in ("model", "effort"):
-        return settings_kb(session_id, dialog, scope)
-    if dialog.kind == "drafts":
-        return drafts_kb(session_id)
-    if dialog.kind == "trust":
-        return trust_kb(session_id)
-    s = sid8(session_id)
-    kb = InlineKeyboardBuilder()
-    for opt in dialog.options:
-        label = opt.label if len(opt.label) <= 48 else opt.label[:47] + "…"
-        if opt.is_chat_about:
-            # Dropping the question, not answering it: no text is collected up
-            # front, because Claude Code answers this row by asking what the
-            # user wants to clarify — a message sent with it would only be read
-            # after that question, which is how one clarification had to be
-            # typed twice.
-            kb.row(InlineKeyboardButton(
-                text=f"💬 {label}", callback_data=f"dc:{s}:{opt.number}",
-            ))
-        elif opt.is_free_text:
-            kb.row(InlineKeyboardButton(
-                text=f"✏️ {label}", callback_data=f"dt:{s}:{opt.number}",
-            ))
-        else:
-            mark = "▸ " if opt.selected else ""
-            box = "" if opt.checked is None else ("☑ " if opt.checked else "☐ ")
-            # A tick is not an answer: it goes down a route that keeps the
-            # keyboard alive instead of retiring the card.
-            kind = "d" if opt.checked is None else "dm"
-            kb.row(InlineKeyboardButton(
-                text=f"{mark}{box}{opt.number}. {label}",
-                callback_data=f"{kind}:{s}:{opt.number}",
-            ))
-    if dialog.submit_index is not None:
-        n = len(dialog.checked)
-        if dialog.submit_label.lower() == "next":
-            # TRANSLATORS: a multi-part question — this moves to its next part.
-            text = (_("➡️ Next question ({n} ticked)").format(n=n) if n
-                    else _("➡️ Next question"))
-        else:
-            # TRANSLATORS: sends the ticked options of a multi-select question.
-            text = (ngettext("✅ Send {n} choice", "✅ Send {n} choices", n).format(n=n)
-                    if n else _("✅ Send answer"))
-        kb.row(InlineKeyboardButton(text=text, callback_data=f"sub:{s}"))
-    # The rows with no digit ("Chat about this" under a list with previews)
-    # get buttons of their own: a line of text pointing at the arrows was all
-    # there was, and from the chat it read as no way to pick them at all.
-    for i, extra in enumerate(dialog.extras):
-        label = extra if len(extra) <= 48 else extra[:47] + "…"
-        icon = "💬 " if is_chat_label(extra) else ""
-        kb.row(InlineKeyboardButton(text=f"{icon}{label}",
-                                    callback_data=f"dx:{s}:{i}:{row_tag(extra)}"))
-    if dialog.notes:
-        # TRANSLATORS: answers a question with a note of one's own instead
-        # of one of its options ("n to add notes" in the terminal).
-        kb.row(InlineKeyboardButton(text=_("📝 Answer with a note"),
-                                    callback_data=f"dn:{s}"))
-    if dialog.sections:
-        # TRANSLATORS: walk between the parts of a multi-part question.
-        kb.row(
-            InlineKeyboardButton(text=_("⬅️ Previous part"),
-                                 callback_data=f"tab:{s}:prev"),
-            InlineKeyboardButton(text=_("Next part ➡️"),
-                                 callback_data=f"tab:{s}:next"),
-        )
-    # The arrows walk the cursor, which is what shows another option's
-    # preview; ✅ presses whatever row it stands on.
-    nav = [
-        InlineKeyboardButton(text="⬆️", callback_data=f"nav:{s}:up"),
-        InlineKeyboardButton(text="⬇️", callback_data=f"nav:{s}:down"),
-        InlineKeyboardButton(text=_("✅ Select"), callback_data=f"nav:{s}:enter"),
-    ]
-    kb.row(*nav)
-    bottom = [InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc")]
-    if dialog.preview:
-        bottom.append(InlineKeyboardButton(text=_("🖼 Diagram"), callback_data=f"pic:{s}"))
-    bottom.append(InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"))
-    kb.row(*bottom)
     return kb.as_markup()
 
 
@@ -478,10 +180,9 @@ def route_pick_kb(managed: list[SessionView], active: str | None = None,
                   back: bool = True) -> InlineKeyboardMarkup:
     """The session list, but every row is a destination for the held batch.
 
-    Foreign sessions are left out on purpose: their stdin is out of reach, so
-    a batch could not be delivered there. A new session and the recent ones
-    are both offered, because "the context to start from" usually means
-    exactly that — a session that does not exist yet, or one to come back to.
+    A new session and the recent ones are both offered, because "the
+    context to start from" usually means exactly that — a session that does
+    not exist yet, or one to come back to.
     Without *back* the list is the question itself (no session is active, so
     there is no shorter card to go back to) and ends in «🗑 Discard» instead.
     """
@@ -508,31 +209,6 @@ def route_pick_kb(managed: list[SessionView], active: str | None = None,
     return kb.as_markup()
 
 
-def restore_kb(orphans: list[Orphan]) -> InlineKeyboardMarkup:
-    """The 🔌 card: bring the stopped sessions back, all of them or some.
-
-    "All" comes first because after a reboot it is what the answer usually
-    is, and with nine rows below it the one button that ends the whole
-    business should not be the tenth. Every row says the project it belongs
-    to: after a restart the names alone are a list of things one no longer
-    remembers starting.
-    """
-    kb = InlineKeyboardBuilder()
-    if len(orphans) > 1:
-        kb.row(InlineKeyboardButton(
-            text=_("↩️ Restore all ({count})").format(count=len(orphans)),
-            callback_data="orph:all"))
-    for o in orphans:
-        label = _distinct_name(o.label, o.folder)
-        kb.row(InlineKeyboardButton(
-            text=_fit(f"↩️ {o.folder} · {label}"),
-            callback_data=f"orph:one:{sid8(o.session_id)}",
-        ))
-    kb.row(InlineKeyboardButton(text=_("🗑 Forget them"),
-                                callback_data="orph:drop"))
-    return kb.as_markup()
-
-
 def menu_kb(session_id: str) -> InlineKeyboardMarkup:
     """A single way into the session's controls.
 
@@ -546,102 +222,10 @@ def menu_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def blocked_kb(session_id: str) -> InlineKeyboardMarkup:
-    """Controls for a session that is waiting on something we could not parse.
-
-    The keys are the ones that work without knowing the question: digits pick
-    a numbered option, the arrows walk the list, Esc backs out.
-    """
-    s = sid8(session_id)
-    kb = InlineKeyboardBuilder()
-    kb.row(*[InlineKeyboardButton(text=str(n), callback_data=f"d:{s}:{n}")
-             for n in (1, 2, 3)])
-    kb.row(
-        InlineKeyboardButton(text="⬆️", callback_data=f"nav:{s}:up"),
-        InlineKeyboardButton(text="⬇️", callback_data=f"nav:{s}:down"),
-        InlineKeyboardButton(text=_("✅ Select"), callback_data=f"nav:{s}:enter"),
-    )
-    kb.row(
-        InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
-        InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
-    )
-    return kb.as_markup()
-
-
-def side_kb(session_id: str, browse: bool = False) -> InlineKeyboardMarkup:
-    """Controls for a `/btw` answer the bot could not copy.
-
-    The overlay's own keys: the copy again, ↑/↓ to scroll the answer, ⇧←/→
-    through its history when it has one, and Esc to close it.
-    """
-    s = sid8(session_id)
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=_("📋 Copy again"), callback_data=f"bw:{s}:copy"))
-    row = [InlineKeyboardButton(text="⬆️", callback_data=f"bw:{s}:up"),
-           InlineKeyboardButton(text="⬇️", callback_data=f"bw:{s}:down")]
-    if browse:
-        row = [InlineKeyboardButton(text=_("⬅️ Earlier"), callback_data=f"bw:{s}:prev"),
-               *row,
-               InlineKeyboardButton(text=_("Later ➡️"), callback_data=f"bw:{s}:next")]
-    kb.row(*row)
-    kb.row(
-        InlineKeyboardButton(text=_("✖️ Close"), callback_data=f"bw:{s}:close"),
-        InlineKeyboardButton(text=_("🖥 Screen"), callback_data=f"k:{s}:screen"),
-    )
-    return kb.as_markup()
-
-
-def _login_cancel(s: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=_("✖️ Cancel the login"),
-                                callback_data=f"lg:{s}:esc")
-
-
-def login_menu_kb(session_id: str, options: list) -> InlineKeyboardMarkup:
-    """The login methods `/login` offers, one button each, as the screen reads."""
-    s = sid8(session_id)
-    kb = InlineKeyboardBuilder()
-    for o in options:
-        label = o.label if len(o.label) <= 60 else o.label[:59].rstrip() + "…"
-        kb.row(InlineKeyboardButton(text=f"{o.number}. {label}",
-                                    callback_data=f"lg:{s}:{o.number}"))
-    kb.row(_login_cancel(s))
-    return kb.as_markup()
-
-
-def login_link_kb(session_id: str, url: str) -> InlineKeyboardMarkup:
-    """The sign-in link as a button (a 465-character URL is accepted)."""
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=_("🔑 Open the sign-in page"), url=url))
-    kb.row(_login_cancel(sid8(session_id)))
-    return kb.as_markup()
-
-
-def login_error_kb(session_id: str) -> InlineKeyboardMarkup:
-    s = sid8(session_id)
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=_("🔁 Try again with a new link"),
-                                callback_data=f"lg:{s}:retry"))
-    kb.row(_login_cancel(s))
-    return kb.as_markup()
-
-
-def login_warning_kb(session_id: str) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=_("⏎ Continue"),
-                                callback_data=f"lg:{sid8(session_id)}:enter"))
-    return kb.as_markup()
-
-
-def service_kb(can_restart: bool, sdk: str = "off",
-               sdk_locked: bool = False) -> InlineKeyboardMarkup:
+def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
     """Bot-process actions. Restart is offered only when something can bring
     the bot back — otherwise the button would end the conversation."""
     kb = InlineKeyboardBuilder()
-    if not sdk_locked:
-        nxt = {"off": "preview", "preview": "default"}.get(sdk, "off")
-        kb.row(InlineKeyboardButton(
-            text=_("🧪 New sessions: switch to «{mode}»").format(mode=sdk_label(nxt)),
-            callback_data=f"svc:sdk:{nxt}"))
     if can_restart:
         kb.row(InlineKeyboardButton(text=_("🔄 Restart the bot"),
                                     callback_data="svc:ask"))
@@ -690,15 +274,6 @@ def auth_link_kb(url: str, serial: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def move_anyway_kb(session_id: str, in_list: bool = False) -> InlineKeyboardMarkup:
-    """Past a refusal that only background work stood behind."""
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=_("↗️ Move anyway — the background work stops"),
-                                callback_data=f"k:{sid8(session_id)}:"
-                                              f"{'tosdklf' if in_list else 'tosdkf'}"))
-    return kb.as_markup()
-
-
 def auth_retry_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text=_("🔁 Try again with a new link"),
@@ -714,28 +289,20 @@ def ask_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def sdk_label(mode: str) -> str:
-    """How the SDK switch's value is called in the chat."""
-    return {"off": _("tmux"), "preview": _("tmux + 🧪 SDK button"),
-            "default": _("Agent SDK")}.get(mode, mode)
-
-
-def held_kb(session_id: str, free_text: bool,
-            closable: bool = True) -> InlineKeyboardMarkup:
+def held_kb(session_id: str, free_text: bool) -> InlineKeyboardMarkup:
     """What to do with text sent while the session has a question open.
 
-    Pasted into the dialog it would be swallowed and its Enter would pick an
-    option, so it waits for one of these. "This answers the question" needs
-    the dialog's own free-text row, and is offered only where there is one.
+    Sent along it would land in the middle of the question, so it waits for
+    one of these. "This answers the question" is offered only for a question
+    that takes a typed answer, and for a single batch.
     """
     sid = sid8(session_id)
     kb = InlineKeyboardBuilder()
     if free_text:
         kb.row(InlineKeyboardButton(text=_("✏️ This answers the question"),
                                     callback_data=f"hold:ans:{sid}"))
-    if closable:
-        kb.row(InlineKeyboardButton(text=_("💬 Close the question and send"),
-                                    callback_data=f"hold:esc:{sid}"))
+    kb.row(InlineKeyboardButton(text=_("💬 Close the question and send"),
+                                callback_data=f"hold:esc:{sid}"))
     kb.row(InlineKeyboardButton(text=_("⏳ Send after the answer"),
                                 callback_data=f"hold:wait:{sid}"))
     kb.row(InlineKeyboardButton(text=_("🗑 Don't send"),
@@ -748,40 +315,6 @@ def held_wait_kb(session_id: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text=_("🗑 Don't send"),
                                 callback_data=f"hold:drop:{sid8(session_id)}"))
-    return kb.as_markup()
-
-
-def anyway_kb(session_id: str, command: str) -> InlineKeyboardMarkup:
-    """A way past a "busy" refusal: the bot's reading of the screen can be wrong.
-
-    *command* is the bare name (`model`, `effort`, `login`); the press goes
-    through `CCBot._on_callback`'s `anyway:` route, which still refuses to
-    type over an open question.
-    """
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(
-        text=_("📤 Send /{command} anyway").format(command=command),
-        callback_data=f"anyway:{sid8(session_id)}:{command}"))
-    return kb.as_markup()
-
-
-def restart_anyway_kb(items: list[tuple[str, str, str]]) -> InlineKeyboardMarkup:
-    """The way past a restart refused for work /exit ends: (id, label, kind).
-
-    One session gets a button under its own refusal that names what the
-    restart ends ("background" tasks or the "limit" wait's continuation);
-    several (after «Restart all») are named, one row each, the reason being
-    on the line above.
-    """
-    kb = InlineKeyboardBuilder()
-    for sid, label, kind in items:
-        if len(items) > 1:
-            text = _("🔁 Restart anyway: {name}").format(name=label)
-        elif kind == "limit":
-            text = _("🔁 Restart anyway — cancels the automatic continuation")
-        else:
-            text = _("🔁 Restart anyway — stops the background tasks")
-        kb.row(InlineKeyboardButton(text=text, callback_data=f"rsa:{sid8(sid)}"))
     return kb.as_markup()
 
 
@@ -812,16 +345,12 @@ def cancel_rename_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def update_kb(session_id: str | None, outdated: int,
-              forceable: list[tuple[str, str, str]] | None = None
-              ) -> InlineKeyboardMarkup:
+def update_kb(session_id: str | None, outdated: int) -> InlineKeyboardMarkup:
     """Actions on the Claude Code version card.
 
     A restart button appears only for a session that is both behind and idle:
     offering it for one that is working would promise something the bot then
-    refuses to do. *forceable* are the sessions «Restart all» passes by for
-    background work alone — the prompt is free, so a restart that stops that
-    work is offered by name.
+    refuses to do.
     """
     kb = InlineKeyboardBuilder()
     if session_id:
@@ -834,10 +363,6 @@ def update_kb(session_id: str | None, outdated: int,
         kb.row(InlineKeyboardButton(
             text=_("⬆️ Restart all idle ({count})").format(count=outdated),
             callback_data="upd:all"))
-    for sid, label, _kind in forceable or []:
-        kb.row(InlineKeyboardButton(
-            text=_("🔁 Restart anyway: {name}").format(name=label),
-            callback_data=f"upd:force:{sid8(sid)}"))
     kb.row(
         InlineKeyboardButton(text=_("🆕 What's new"), callback_data="upd:news"),
         InlineKeyboardButton(text=_("🔄 Check for updates"),
@@ -884,20 +409,13 @@ def project_dirs_kb(dirs: list[str], discovered: bool) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def dirs_kb(dirs: list[str], sdk_preview: bool = False) -> InlineKeyboardMarkup:
-    """The folders a new session can start in.
-
-    With the SDK switch on "preview" every folder also gets a 🧪 button that
-    starts the session through the Agent SDK instead of tmux.
-    """
+def dirs_kb(dirs: list[str]) -> InlineKeyboardMarkup:
+    """The folders a new session can start in."""
     kb = InlineKeyboardBuilder()
     home = str(__import__("pathlib").Path.home())
     for i, d in enumerate(dirs):
         label = ("~" + d[len(home):]) if d.startswith(home) else d
-        row = [InlineKeyboardButton(text=f"📁 {label}", callback_data=f"nd:{i}")]
-        if sdk_preview:
-            row.append(InlineKeyboardButton(text=_("🧪 SDK"), callback_data=f"nds:{i}"))
-        kb.row(*row)
+        kb.row(InlineKeyboardButton(text=f"📁 {label}", callback_data=f"nd:{i}"))
     kb.row(InlineKeyboardButton(text=_("✏️ Another path"), callback_data="nd:manual"))
     kb.row(InlineKeyboardButton(text=_("⬅️ Cancel"), callback_data="ls"))
     return kb.as_markup()

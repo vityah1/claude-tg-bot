@@ -1,6 +1,5 @@
 aiogram>=3.31,<4
 python-dotenv>=1.0
-Pillow>=11
 # The session host (ccbot/host/). Pinned: an upgrade means restarting the host,
 # which ends the turns its sessions are in — so it is a deliberate step.
 claude-agent-sdk==0.2.188

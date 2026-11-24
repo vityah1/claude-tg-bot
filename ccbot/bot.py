@@ -1,4 +1,4 @@
-"""Telegram front-end: a dispatcher for Claude Code sessions living in tmux."""
+"""Telegram front-end: a dispatcher for Claude Code sessions held by the session host."""
 
 from __future__ import annotations
 
@@ -7,11 +7,8 @@ import contextlib
 import html
 import logging
 import os
-import shlex
-import signal
 import time
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -31,9 +28,18 @@ from aiogram.types import (
     Update,
 )
 
-from . import account, logsetup, media, rich, service, status_feed, tmux, transcript, updates, util
-from . import login as loginmod
-from . import screen as screenmod
+from . import (
+    account,
+    authlogin,
+    logsetup,
+    media,
+    rich,
+    service,
+    status_feed,
+    transcript,
+    updates,
+    util,
+)
 from . import sessions as sess
 from .authlogin import AuthLogin, LoginError
 from .authlogin import status as auth_status
@@ -58,15 +64,12 @@ from .keyboards import (
     ACTIVE_ICON,
     HISTORY_PAGE,
     STATUS_ICON,
-    anyway_kb,
     ask_kb,
     auth_link_kb,
     auth_retry_kb,
-    back_to_list_kb,
     cancel_rename_kb,
     choice_kb,
     confirm_kb,
-    dialog_kb,
     dirs_kb,
     done_kb,
     held_kb,
@@ -74,27 +77,20 @@ from .keyboards import (
     history_dirs_kb,
     history_kb,
     lang_kb,
-    move_anyway_kb,
     project_dirs_kb,
-    restart_anyway_kb,
     restart_confirm_kb,
-    restore_kb,
     route_kb,
     route_pick_kb,
-    row_tag,
     sdk_effort_kb,
-    sdk_label,
     sdk_models_kb,
     search_kb,
     service_kb,
     session_kb,
     sessions_kb,
-    settings_kb,
-    side_kb,
     update_kb,
 )
 from .settings import Settings
-from .state import Managed, Orphan, Store
+from .state import Managed, Store
 from .transport import TolerantSession
 from .util import account_line, as_pre, split_text, usage_report
 from .watcher import Watcher
@@ -118,20 +114,6 @@ _ACK_RETRIES = (10.0, 30.0, 90.0)
 _INBOX_QUIET = 0.8
 # How often the collector looks at a batch it is holding.
 _INBOX_TICK = 0.2
-# Order Shift+Tab walks through permission modes.
-_MODE_CYCLE = ("auto", "manual", "acceptEdits", "plan")
-# How long to let Claude wind down after /exit before removing the window.
-_EXIT_TIMEOUT = 8.0
-# A restart waits longer than that: nothing is killed if it overruns, so there
-# is no reason to be hasty, and a busy machine can take a while to unload.
-_RESTART_EXIT_TIMEOUT = 20.0
-# And how long the relaunched `claude` is given to appear in the window. A
-# successful relaunch takes 3-8 seconds; the rest is room for a loaded machine,
-# and there is a second attempt behind this one anyway.
-_RESTART_START_TIMEOUT = 25.0
-# How long to keep reading the version after a restart before settling for
-# "restarted" without a number. The payload lands on the first status render.
-_RESTART_VERSION_WAIT = 25.0
 # How much of the changelog one message may carry. Below the rich-message
 # document cap, with room for the heading and the "and N older" tail.
 _NEWS_LIMIT = 24000
@@ -152,27 +134,21 @@ _PARKED_TTL = 3600.0
 # Where an attachment lands while no session owns it yet — a forwarded batch
 # is downloaded before the chat has said which session it is for.
 _INBOX_DIR = "inbox"
-# How long a freshly launched session is given to draw its TUI before a batch
-# is pasted into it. A launch takes 3-8 seconds; the rest is room for a loaded
-# machine, and text pasted into a shell prompt would run as a command.
-_LAUNCH_READY = 45.0
-# How long one session may hold up the queue while «Restore all» works
-# through it. Shorter than a single launch on purpose: a session stuck on a
-# question of its own must not keep the other eight waiting.
-_RESTORE_READY = 30.0
-# How long the TUI needs to redraw a list after one key: a tick has to be read
-# back before the button can show it, and the cursor has to have moved before
-# the next step is worked out.
-_NAV_SETTLE = 0.5
 
 # Text held back because the session had a question open: how often the
-# "send after the answer" wait looks, how long the screen has to stay clear
-# of any dialog before it sends (a multi-part question draws its next section
-# at once, so one clear frame proves nothing), and how long an Esc gets to
-# close the question.
+# "send after the answer" wait looks, and how long the session has to stand
+# without a question before it sends (a question answered from its card may
+# be followed by the next one at once).
 _HELD_TICK = 1.0
 _HELD_CLEAR = 2.5
-_ESC_CLEAR = 6.0
+
+
+class Refused(Exception):
+    """The session has a question open, so the text was not sent."""
+
+
+_MODE_LABELS = {"auto": "auto", "manual": "manual", "acceptEdits": "accept edits",
+                "plan": "plan"}
 
 
 @dataclass
@@ -181,23 +157,17 @@ class _Restart:
     ok: bool
     reason: str = ""     # why not, phrased for the chat
     version: str = ""    # the build it came back as, when it could be read
-    # Refused only for work /exit would stop — "background" tasks or a
-    # "limit" wait: the prompt is free, so a "restart anyway" is worth
-    # offering, and the button says which of the two it ends.
-    forceable: str = ""
 
 
 def restart_ask() -> str:
     return _(
         "🔄 <b>Restart the bot?</b>\n\n"
-        "Claude's sessions are unaffected: they live in tmux, and the unit is "
-        "set up to stop the bot alone (<code>KillMode=process</code>). Once it "
-        "is back, the watcher picks the transcripts up where it left off.\n\n"
+        "Claude's sessions are unaffected: they live in the session host, a "
+        "service of their own. Once the bot is back, it picks up the host's "
+        "events where it left off.\n\n"
         "Only what is in the process's memory is lost: a half-finished request "
-        "(\u00absend me a path\u00bb, \u00absend me a name\u00bb), "
-        "attachments waiting for a caption, and the note that says \u00abthis "
-        "question has already been shown\u00bb — an open dialog may arrive in "
-        "the chat a second time.\n\n"
+        "(\u00absend me a path\u00bb, \u00absend me a name\u00bb) and "
+        "attachments waiting for a caption.\n\n"
         "It usually takes 5–10 seconds."
     )
 
@@ -236,20 +206,18 @@ follow the same rule.
 
 <b>Acting on a session</b>
 /usage — how much of the 5-hour and 7-day quota is spent, and
-   how full this session's context is. Read off the status line,
-   so it is instant, costs no tokens and does not disturb the
-   session. Not to be confused with <code>/context</code>: that is
-   Claude Code's own breakdown of which files, tools and messages
-   the context is spent on, drawn in the session.
+   how full this session's context is. Taken from what the
+   session last reported, so it is instant, costs no tokens and
+   does not disturb the session. Not to be confused with
+   <code>/context</code>: that is Claude Code's own breakdown of
+   which files, tools and messages the context is spent on.
    «🗜 /compact» on the card sums the conversation up and carries
    on with the summary instead of the history: the session, its
-   name and its id all stay, and the screen with the result
-   arrives once it is done.
+   name and its id all stay.
    «🔁 Restart» next to it relaunches the session with its
-   context (<code>/exit</code>, then resume). If background tasks
-   are running in it, it says which and asks before stopping them.
-/screen — a text snapshot of the terminal (an SDK session: where it stopped)
-/esc — <b>interrupt what Claude is doing</b> (the Esc key).
+   context.
+/screen — where the session stopped: its last request and answer
+/esc — <b>interrupt what Claude is doing</b>.
    The session stays alive and its context is untouched.
 /clear — clear the session's context. The session lives on,
    its history is gone.
@@ -258,9 +226,8 @@ follow the same rule.
    your next message as it. (<code>/rename -</code> gives the
    automatic one back.) Until you name it, the list shows the
    topic Claude came up with itself.
-/exit — <b>end the session</b>: Claude shuts down on its own, then
-   the tmux window closes. The transcript stays — the session can
-   be brought back from 🕘 in the list.
+/exit — <b>end the session</b>: Claude shuts down. The transcript
+   stays — the session can be brought back from 🕘 in the list.
 
 Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
 <code>/cost</code>…) is passed to Claude as it is.
@@ -274,7 +241,7 @@ Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
    this one run out). The sign-in link comes here, the code from
    the page goes back as a message. The other sessions switch to
    the new account with their next request, without a restart.
-/service — uptime, code version, tmux state, restart button
+/service — uptime, code version, session host state, restart button
 /restart — restart the bot (Claude's sessions are unaffected)
 /log — the last lines of the journal
 /dirs — directories offered when starting a session
@@ -292,7 +259,7 @@ goes. A forwarded message keeps the name of whoever wrote it.
 
 ↪️ <b>Forwarded</b> messages ask where they should go, instead of
 going to the active session: «▶️ Current», «📋 Another session»
-(the sessions in tmux, ➕ a new one, 🕘 a closed one to bring
+(the running sessions, ➕ a new one, 🕘 a closed one to bring
 back) or «🗑 Discard». Anything you send while the question is
 open joins the same batch, so the words that explain a forward
 travel with it. Forwarding as a reply to a session's message
@@ -302,8 +269,13 @@ When Claude asks a question, buttons with the options arrive.""")
 
 
 # The order the states are explained in: from the ones that want something
-# from you down to the ones that are merely broken.
-_LEGEND_ORDER = ("waiting", "busy", "idle", "starting", "dead", "gone")
+# from you down to the ones that are merely busy or free.
+_LEGEND_ORDER = ("waiting", "busy", "idle", "starting")
+
+
+def _mode_label(mode: str) -> str:
+    """A permission mode the way the session card names it."""
+    return _MODE_LABELS.get(mode, mode or "?")
 
 
 def _status_legend(views: list[sess.SessionView],
@@ -331,7 +303,7 @@ def _account_lines(views: list[sess.SessionView]) -> list[str]:
             groups.setdefault(v.account.lower(), (v.account, []))[1].append(v.name)
     if not groups:
         return []
-    live = sum(1 for v in views if v.status not in ("gone", "dead"))
+    live = len(views)
     if len(groups) == 1:
         email, names = next(iter(groups.values()))
         if len(names) == live:
@@ -346,24 +318,18 @@ def _account_lines(views: list[sess.SessionView]) -> list[str]:
 
 
 def _sessions_text(managed: list[sess.SessionView],
-                   foreign: list[sess.SessionView],
                    active: str | None, behind: int = 0) -> str:
-    """The list's caption: a legend for exactly the icons on the screen.
-
-    The two kinds of session are named apart — the bot's own tmux windows and
-    the terminal's, which it can only watch — because a row of buttons alone
-    cannot say which is which.
-    """
+    """The list's caption: a legend for exactly the icons on the screen."""
     if managed:
         waiting = [v for v in managed if v.status == "waiting"]
-        head = ngettext("📋 <b>Sessions</b> — {count} managed",
-                        "📋 <b>Sessions</b> — {count} managed",
+        head = ngettext("📋 <b>Sessions</b> — {count} running",
+                        "📋 <b>Sessions</b> — {count} running",
                         len(managed)).format(count=len(managed))
         if waiting:
             head += ngettext(", {count} waiting for you",
                              ", {count} waiting for you",
                              len(waiting)).format(count=len(waiting))
-        block = [_("🖥 <b>In tmux</b> — started by the bot, driven from here")]
+        block = []
         cur = next((v for v in managed if v.session_id == active), None)
         if cur:
             block.append(_("🟢 active: <b>{name}</b> — plain text goes here"
@@ -375,24 +341,11 @@ def _sessions_text(managed: list[sess.SessionView],
                 "⬆️ {count} session runs an older Claude Code — /update",
                 "⬆️ {count} sessions run an older Claude Code — /update",
                 behind).format(count=behind))
-        parts = [head, "\n".join(block)]
+        parts = [head] + (["\n".join(block)] if block else [])
     else:
-        parts = [_("📋 <b>Sessions</b>\n\nThe bot manages none in tmux yet — "
+        parts = [_("📋 <b>Sessions</b>\n\nNo session is running yet — "
                    "start one with {button}.").format(
                        button=_("➕ New session"))]
-    if foreign:
-        block = [_("🔗 <b>In your own terminal</b> — the bot only shows them; "
-                   "«{button}» on the card takes one over.").format(
-                       button=_("🔗 Move into tmux"))]
-        # Only a session stuck on a prompt is worth calling out: that one
-        # needs a hand at the desk, where the bot cannot reach.
-        stuck = [v for v in foreign if v.status == "waiting"]
-        if stuck:
-            block.append(_("⏸ waiting for you at the keyboard: {names}"
-                           ).format(names=", ".join(
-                               html.escape(v.name) for v in stuck[:3])))
-        block += _account_lines(foreign)
-        parts.append("\n".join(block))
     # Named through the button's own string so the sentence and the keyboard
     # cannot drift apart in a translation.
     parts.append(_("<b>{button}</b> — sessions closed earlier; resuming "
@@ -405,22 +358,11 @@ def _sessions_text(managed: list[sess.SessionView],
     return "\n\n".join(parts)
 
 
-# What an SDK session's card answers today. The rest — model and effort
-# pickers, /login, a restart, the screen — arrive with the later stages.
-_SDK_ACTIONS = {"esc", "clear", "compact", "ctx", "close", "restart", "usage", "recap",
-                "ask", "login"}
-
-
-def _sdk_not_yet() -> str:
-    return _("Not available for SDK sessions yet — it comes with a later stage "
-             "of the move to the Agent SDK.")
-
-
 def _host_refusal(exc: HostError) -> str:
     """Why the session host would not start a session, for the chat."""
     if exc.code == "offline":
-        return _("❌ The session host is not answering, so an SDK session cannot "
-                 "start. tmux sessions work as before.")
+        return _("❌ The session host is not answering, so the session cannot "
+                 "start. It restarts by itself — try again in a minute.")
     detail = html.escape((exc.message or exc.code)[:500])
     return _("❌ The session host could not start the session:\n<code>{detail}</code>"
              ).format(detail=detail)
@@ -439,14 +381,6 @@ def _close_failed(name: str) -> str:
 def _stale_card(command: str) -> str:
     """Telegram forgets a card after 48 hours; say so instead of failing."""
     return _("This card is too old — send {command} again").format(command=command)
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    return True
 
 
 def _editable(target: Message | CallbackQuery) -> Message | None:
@@ -662,40 +596,6 @@ def _batch_text(items: list[_Item]) -> str:
          for i in items])
 
 
-def _dialog_on_screen(raw: str) -> bool:
-    """The refusal test typed text is checked against, under the lock."""
-    return screenmod.find_dialog(raw) is not None
-
-
-# The /btw overlay's keys, by the action on its card.
-_SIDE_KEYS = {"up": "Up", "down": "Down", "prev": "S-Left", "next": "S-Right",
-              "close": "Escape"}
-
-
-def _side_on_screen(raw: str) -> bool:
-    return screenmod.side_answer(raw) is not None
-
-
-def _drafts_on_screen(raw: str) -> bool:
-    dialog = screenmod.find_dialog(raw)
-    return dialog is not None and dialog.kind == "drafts"
-
-
-def _trust_on_screen(raw: str) -> bool:
-    dialog = screenmod.find_dialog(raw)
-    return dialog is not None and dialog.kind == "trust"
-
-
-# How long a move on the trust question may take to show on the screen
-# before the cursor is read again.
-_TRUST_MOVE_WAIT = 2.0
-
-
-def _question_or_unready(raw: str) -> bool:
-    """A question stands, or at least the ordinary input line does not."""
-    return screenmod.find_dialog(raw) is not None or not screenmod.is_ready(raw)
-
-
 @dataclass
 class _Inbox:
     """One chat's messages waiting to leave as a single prompt.
@@ -703,7 +603,7 @@ class _Inbox:
     Telegram delivers a forwarded batch in one poll and aiogram runs an update
     per task, so a forwarded conversation used to become one prompt per
     message, in whatever order the event loop scheduled them, each with its
-    own Enter — and each racing the others for the same tmux buffer. They are
+    own send — and each racing the others into the session. They are
     gathered here instead and sorted by message_id, which is the only ordering
     that survives concurrent handlers.
     """
@@ -731,17 +631,15 @@ class CCBot:
         self.store = Store()
         self.settings = Settings()
         install()
-        self.watcher = Watcher(self.bot, self.store, self.settings,
-                               cfg.owner, cfg.poll_interval)
-        # SDK sessions: held by the session host, followed through its events.
+        self.watcher = Watcher(self.bot, self.store, self.settings, cfg.owner)
+        # The sessions: held by the session host, followed through its events.
         self.bridge = SdkBridge(self.bot, self.store, self.watcher, cfg.owner)
-        # /login for SDK sessions: `claude auth login` under a pty.
+        # /login: `claude auth login` under a pty.
         self.auth = AuthLogin()
         sess.sdk_state = self.bridge.state
         status_feed.sdk_usage = self.bridge.usage_for
-        # chat_id -> ("dir",) | ("dialog", session_id, option_number, card)
-        #          | ("note", session_id, card, question_sig)
-        #          | ("rename", session_id) | ("adddir",)
+        # chat_id -> ("dir",) | ("rename", session_id) | ("adddir",)
+        #          | ("hfind",) | ("sdktext", rid8, act, session_id)
         self.pending: dict[int, tuple] = {}
         # The messages that asked for the pending input: chat_id ->
         # [(message_id, role)], role being "picker", "prompt" or "question".
@@ -756,14 +654,9 @@ class CCBot:
         self.parked: dict[int, _Parked] = {}
         # Text kept out of a session that has a question open, per session.
         self.held: dict[str, _Held] = {}
-        # Sessions whose drafts question was answered: brought back by
-        # `_resume_after_exit` once `claude` has left the window.
-        self.resuming: set[str] = set()
-        # Sessions a restart is under way in: a second press would type a
-        # second `claude --resume` into the shell or the new TUI.
+        # Sessions a restart is under way in: a second press must not ask
+        # the host for a second one.
         self.restarting: set[str] = set()
-        # Sessions on their way to the session host, waiting for a drafts answer.
-        self.moving: set[str] = set()
         # Notices sent from outside a handler (an expired batch, the question
         # re-asked after a launch): kept only so the task is not
         # garbage-collected while it is still speaking.
@@ -820,24 +713,16 @@ class CCBot:
             if not self._ok(m):
                 return
             mgd, _note = await self._target(m)
-            if mgd and mgd.is_sdk:
+            if mgd:
                 await self._send_recap(m.chat.id, mgd)
-            elif mgd:
-                await self.watcher.send_screen(mgd.window_id, mgd.full_label,
-                                               mgd.session_id)
 
         @dp.message(Command("esc"))
         async def _esc(m: Message):
             if not self._ok(m):
                 return
             mgd, note = await self._target(m)
-            if mgd and mgd.is_sdk:
+            if mgd:
                 await self._interrupt_sdk(m, mgd, note)
-            elif mgd:
-                self._typed(mgd)
-                await tmux.send_keys(mgd.window_id, "Escape")
-                await self._ack(m, _("⏸ Esc sent to <b>{name}</b>{note}").format(
-                    name=html.escape(mgd.full_label), note=note), mgd)
 
         @dp.message(Command("rename"))
         async def _rename(m: Message):
@@ -910,9 +795,9 @@ class CCBot:
         async def _login(m: Message):
             if not self._ok(m):
                 return
-            mgd, note = await self._target(m)
+            mgd, _note = await self._target(m)
             if mgd:
-                await self._start_login(m, mgd, note)
+                await self._start_auth_login(m, mgd)
 
         @dp.message(Command("usage"))
         async def _usage(m: Message):
@@ -923,7 +808,6 @@ class CCBot:
                 await self._ack(
                     m,
                     usage_report(mgd.full_label, status_feed.read(mgd.session_id),
-                                 await self._status(mgd),
                                  await self._account_of(mgd)),
                     mgd,
                 )
@@ -935,7 +819,7 @@ class CCBot:
             mgd, _note = await self._target(m)
             if mgd:
                 note = await m.answer(
-                    _("⏳ Ending {name} — sending /exit…").format(name=mgd.full_label))
+                    _("⏳ Ending {name}…").format(name=mgd.full_label))
                 if not await self._close(mgd.session_id):
                     await note.edit_text(_close_failed(mgd.full_label), parse_mode="HTML")
                     return
@@ -1145,8 +1029,7 @@ class CCBot:
             self.store.remember_message(msg.message_id, mgd.session_id)
 
     def _service_kb(self) -> InlineKeyboardMarkup:
-        return service_kb(service.under_systemd(), self.settings.sdk,
-                          self.settings.sdk_locked)
+        return service_kb(service.under_systemd())
 
     async def _service_text(self) -> str:
         """State of the bot's own process — the one thing /sessions cannot show."""
@@ -1162,8 +1045,7 @@ class CCBot:
         ]
         disk = await updates.installed()
         if disk:
-            behind = sum(1 for m in managed
-                         if updates.stale(m.session_id, disk))
+            behind = sum(1 for m in managed if self._stale(m, disk))
             line = _("🧰 Claude Code on disk: <code>{version}</code>").format(
                 version=html.escape(disk))
             if behind:
@@ -1180,39 +1062,24 @@ class CCBot:
             lines.append(
                 _("⚙️ PID {pid} · started by hand — a crash will not bring it "
                   "back").format(pid=os.getpid()))
-        pid = await tmux.server_pid()
-        if pid:
-            lines.append(_("🖥 tmux server: PID {pid} — sessions survive a bot "
-                           "restart").format(pid=pid))
-        else:
-            lines.append(_("🖥 the tmux server is not answering — there are no "
-                           "sessions right now"))
-        lines.append(_("📡 Polling every {seconds} s · managed sessions: {count}")
-                     .format(seconds=self.cfg.poll_interval, count=len(managed)))
+        lines.append(_("📋 Sessions: {count}").format(count=len(managed)))
         lines.append(_("📓 Journal: <code>{path}</code> — /log").format(
             path=logsetup.LOG_PATH))
         lines += ["", await self._host_lines()]
         return "\n".join(lines)
 
     async def _host_lines(self) -> str:
-        """The SDK switch and the session host, for /service."""
-        mode = sdk_label(self.settings.sdk)
-        lines = [_("🧪 New sessions start in: <b>{mode}</b>{locked}").format(
-            mode=html.escape(mode),
-            locked=_(" (set in .env)") if self.settings.sdk_locked else "")]
+        """The session host, for /service."""
         try:
             st = await self.bridge.link.call("status", timeout=5, wait_online=0.5)
         except HostError:
-            sdk_rows = len(self.store.all_managed(backend="sdk"))
-            lines.append(_("🛰 Session host: not answering · SDK sessions: {count}")
-                         .format(count=sdk_rows))
-            return "\n".join(lines)
+            return _("🛰 Session host: not answering — the sessions cannot be "
+                     "reached until it is back")
         up = service.human_delta(time.time() - float(st.get("started") or time.time()))
-        lines.append(_("🛰 Session host: PID {pid}, up for {duration} · SDK {sdk} · "
-                       "live sessions: {live}").format(
-                           pid=st.get("pid"), duration=up,
-                           sdk=html.escape(str(st.get("sdk"))), live=st.get("live")))
-        return "\n".join(lines)
+        return _("🛰 Session host: PID {pid}, up for {duration} · SDK {sdk} · "
+                 "live sessions: {live}").format(
+                     pid=st.get("pid"), duration=up,
+                     sdk=html.escape(str(st.get("sdk"))), live=st.get("live"))
 
     async def _do_restart(self, chat_id: int) -> None:
         """Exit so systemd starts a fresh process a few seconds later."""
@@ -1276,31 +1143,6 @@ class CCBot:
         with contextlib.suppress(Exception):
             await msg.edit_reply_markup(reply_markup=done_kb(label))
 
-    async def _drop_button(self, msg: Message, data: str, label: str) -> None:
-        """Take the pressed button off a card, keeping the others.
-
-        A «Restart all» result may offer several sessions; settling the whole
-        card on the first press would leave the rest out of reach. The last
-        one settles it the usual way (`_mark`).
-        """
-        markup = msg.reply_markup
-        rows = [[b for b in row if b.callback_data != data]
-                for row in (markup.inline_keyboard if markup else [])]
-        rows = [row for row in rows if row]
-        if not rows:
-            await self._mark(msg, label)
-            return
-        with contextlib.suppress(Exception):
-            await msg.edit_reply_markup(
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-
-    @staticmethod
-    def _option_label(dialog, number: int) -> str:
-        """The label of option *number*, or the number itself."""
-        opt = next((o for o in (dialog.options if dialog else [])
-                    if o.number == number), None)
-        return opt.label if opt else str(number)
-
     @staticmethod
     def _dir_picked(path: str) -> str:
         return _("📁 New session in <code>{path}</code>").format(
@@ -1345,8 +1187,6 @@ class CCBot:
         # Only the display name changes: `name` stays the one Claude was
         # launched with, which is how the session is found again after /clear.
         self.store.set_custom_name(mgd.session_id, None if name == auto else name)
-        # Keep the tmux window in step, so `tmux attach` shows the same name.
-        await tmux.rename_window(mgd.window_id, util.window_name(name))
         # The question is answered: its «Cancel» would now only mislead.
         await self._retire_cards(m.chat.id, mark=f"✏️ {name}")
         log.info("session renamed id=%s %r -> %r",
@@ -1364,19 +1204,16 @@ class CCBot:
 
     async def _show_sessions(self, target: Message | CallbackQuery) -> None:
         managed = await sess.managed_views(self.store)
-        foreign = await sess.foreign_views(self.store)
         here = _editable(target)
         if here is None:
             await target.answer(_stale_card("/sessions"), show_alert=True)
             return
         await account.fill(managed)
-        await account.fill(foreign)
         active = self.store.get_active(here.chat.id)
         disk = await updates.installed()
-        behind = sum(1 for v in managed if updates.stale(v.session_id, disk))
-        text = _sessions_text(managed, foreign, active, behind)
-        kb = sessions_kb(managed, foreign, active,
-                         stopped=len(self.store.orphans()))
+        behind = sum(1 for m in self.store.all_managed() if self._stale(m, disk))
+        text = _sessions_text(managed, active, behind)
+        kb = sessions_kb(managed, active)
         if isinstance(target, CallbackQuery):
             await self._safe_edit(here, text, reply_markup=kb, parse_mode="HTML")
             # It may have been a session's card a moment ago; as the list it
@@ -1420,7 +1257,7 @@ class CCBot:
     async def _ask_dir(self, target: Message | CallbackQuery) -> None:
         self.dir_choices = await sess.recent_dirs(self.store, _DIR_CHOICES, roots=self.roots)
         text = _("📁 Which directory should the session start in?")
-        kb = dirs_kb(self.dir_choices, sdk_preview=self.settings.sdk == "preview")
+        kb = dirs_kb(self.dir_choices)
         here = _editable(target)
         if here is None:
             await target.answer(_stale_card("/new"), show_alert=True)
@@ -1432,9 +1269,8 @@ class CCBot:
     # ---------------------------------------------------------- session ops
     async def _create(self, chat_id: int, cwd: str,
                       resume: str | None = None,
-                      title: str | None = None,
-                      backend: str | None = None) -> str | None:
-        """Start (or resume) a session in *cwd*; the new id, or None.
+                      title: str | None = None) -> str | None:
+        """Start (or resume) a session in *cwd* through the host; the new id.
 
         The id is returned because a forwarded batch may be waiting for
         exactly this session — see `_deliver_after_launch`, which is called
@@ -1442,6 +1278,9 @@ class CCBot:
         from the history list) deliver it. *title* is what the chat called
         the session where it was picked; see `_launch_card` for why it has to
         be in place before the card goes out.
+
+        The row is written only once the host has the session up: a launch
+        that fails leaves nothing behind that looks like a session.
         """
         cwd = str(Path(cwd).expanduser())
         if not Path(cwd).is_dir():
@@ -1457,45 +1296,6 @@ class CCBot:
             return None
         session_id = resume or str(uuid.uuid4())
         name = util.default_name(cwd, session_id)
-        backend = backend or ("sdk" if self.settings.sdk == "default" else "tmux")
-        if backend == "sdk":
-            return await self._create_sdk(chat_id, cwd, session_id, name,
-                                          resume, title)
-        wid = await tmux.create_window(name, cwd)
-        flag = f"--resume {session_id}" if resume else f"--session-id {session_id}"
-        await tmux.run_in_window(wid, f"claude {flag} -n {name}")
-        log.info("session created id=%s name=%s cwd=%s window=%s resume=%s",
-                 session_id[:8], name, cwd, wid, bool(resume))
-        previous = self.store.get_active(chat_id)
-        self.store.add(session_id, wid, cwd, name)
-        if title:
-            self.store.set_title(session_id, title)
-        self.store.set_active(chat_id, session_id)
-        if resume:
-            # The payload on disk is the previous run's, and its version would
-            # put a false "⬆️" on the card below.
-            updates.note_restarted(session_id)
-        # A launch reads the credentials on disk; the transcript says so only
-        # with the first request, and a resumed one ends on the old run's.
-        account.note_login(session_id, account.current_login())
-        # Skip transcript written before now, or a resume would replay history.
-        self.watcher.adopt(session_id, skip_existing=True)
-        await self._launch_card(chat_id, session_id, previous,
-                                resumed=bool(resume))
-        # "Send the forwarded messages to a new session" ends here: the
-        # session exists now, so the batch that was waiting for one goes in as
-        # soon as its TUI is up.
-        await self._deliver_after_launch(chat_id, session_id)
-        return session_id
-
-    async def _create_sdk(self, chat_id: int, cwd: str, session_id: str,
-                          name: str, resume: str | None,
-                          title: str | None) -> str | None:
-        """`_create` for a session held by the session host.
-
-        The row is written only once the host has the session up: a launch
-        that fails leaves nothing behind that looks like a session.
-        """
         previous = self.store.get_active(chat_id)
         # The launch name is the host's key for the session, and it can repeat:
         # a transcript resumed after /clear computes the name its row still
@@ -1504,27 +1304,28 @@ class CCBot:
         while True:
             taken = self.store.by_name(name)
             if taken is None or taken.session_id == session_id:
-                probe = Managed(session_id=session_id, window_id="", cwd=cwd,
-                                name=name, created_at=time.time(), offset=0,
-                                title=None, backend="sdk")
+                probe = Managed(session_id=session_id, cwd=cwd, name=name,
+                                created_at=time.time(), title=None)
                 try:
                     await self.bridge.create(probe, resume=bool(resume))
                     break
                 except HostError as exc:
                     if exc.code != "exists" or n >= 9:
-                        log.warning("sdk create failed name=%s: %s", name, exc)
+                        log.warning("create failed name=%s: %s", name, exc)
                         await self.bot.send_message(chat_id, _host_refusal(exc),
                                                     parse_mode="HTML")
                         return None
             n += 1
             name = f"{base}-{n}"
-        log.info("session created id=%s name=%s cwd=%s backend=sdk resume=%s",
+        log.info("session created id=%s name=%s cwd=%s resume=%s",
                  session_id[:8], name, cwd, bool(resume))
-        self.store.add(session_id, "", cwd, name, backend="sdk")
+        self.store.add(session_id, cwd, name)
         if title:
             self.store.set_title(session_id, title)
         self.store.set_active(chat_id, session_id)
         await self._launch_card(chat_id, session_id, previous, resumed=bool(resume))
+        # "Send the forwarded messages to a new session" ends here: the
+        # session exists now, so the batch that was waiting for one goes in.
         await self._deliver_after_launch(chat_id, session_id)
         return session_id
 
@@ -1545,7 +1346,6 @@ class CCBot:
         mgd = self.store.get(session_id)
         if mgd is None:
             return
-        wid = mgd.window_id
         tail = [_("🟢 Text now goes to <b>{name}</b>").format(
             name=html.escape(mgd.full_label))]
         prev = self.store.get(previous) if previous and previous != session_id \
@@ -1556,11 +1356,6 @@ class CCBot:
                       "reply to one of its messages.").format(
                           name=html.escape(mgd.full_label),
                           previous=html.escape(prev.full_label))]
-        if mgd.is_sdk:
-            tail.append(_("🧪 Runs through the Agent SDK (session host)."))
-        else:
-            tail.append(_("Locally: <code>{command}</code>").format(
-                command=tmux.attach_hint(wid)))
         note = " · " + (_("resumed") if resumed else _("new"))
         card = await self._session_card(mgd, note)
         if card is None:
@@ -1575,851 +1370,78 @@ class CCBot:
             parse_mode="HTML", reply_markup=kb)
         self.store.remember_message(msg.message_id, session_id)
 
-    async def _restore_one(self, chat_id: int, o: Orphan) -> bool:
-        """Put one stopped session back: a new window, `claude --resume`.
-
-        `_create` is the single launch path, so the restore card, the history
-        list and «new session» all bring a session up the same way — and it
-        is `Store.add` inside it that takes the row off the restore list,
-        which is what makes a session resumed straight from 🕘 history stop
-        being offered here too. Only the title has to be carried over by
-        hand: a resumed row starts with none, and the chat would call the
-        session by its launch name until the watcher dug the opening prompt
-        out of the transcript again.
-        """
-        return await self._create(chat_id, o.cwd, resume=o.session_id,
-                                  title=o.title) is not None
-
-    async def _restore_all(self, chat_id: int, msg: Message | None) -> None:
-        """Bring every stopped session back, one at a time.
-
-        Sequentially, and each one is waited for: nine `claude` processes
-        started at once are nine node processes fighting over the same CPU,
-        and a directory Claude Code has not seen before stops on "Is this a
-        project you trust?" — a screen the next launch must not bury.
-        """
-        for o in self.store.orphans():
-            if not await self._restore_one(chat_id, o):
-                continue
-            mgd = self.store.get(o.session_id)
-            if mgd is not None:
-                await self._wait_ready(mgd, timeout=_RESTORE_READY)
-        await self._redraw_restore(msg)
-
-    async def _redraw_restore(self, msg: Message | None) -> None:
-        """Update the card to what is still waiting, or close it."""
-        if msg is None:
-            return
-        left = self.store.orphans()
-        if not left:
-            with contextlib.suppress(Exception):
-                await self._safe_edit(
-                    msg, _("✅ Every stopped session is back."),
-                    reply_markup=None)
-            return
-        with contextlib.suppress(Exception):
-            await self._safe_edit(msg, sess.restore_text(left),
-                                  parse_mode="HTML",
-                                  reply_markup=restore_kb(left))
-
-    async def _restore_callback(self, c: CallbackQuery, msg: Message,
-                                chat_id: int, arg: str) -> None:
-        """The 🔌 card — which of the stopped sessions come back.
-
-        Every button answers with something visible: a restore prints the
-        session's own card (`_launch_card`), and the list of what is left is
-        redrawn under it.
-        """
-        if arg == "show":
-            left = self.store.orphans()
-            await c.answer()
-            if not left:
-                await self._safe_edit(
-                    msg, _("✅ Nothing is waiting to be restored."),
-                    reply_markup=None)
-                return
-            await self._safe_edit(msg, sess.restore_text(left),
-                                  parse_mode="HTML",
-                                  reply_markup=restore_kb(left))
-            return
-        if arg == "drop":
-            self.store.drop_orphans()
-            await c.answer(_("Forgotten"))
-            await self._safe_edit(
-                msg, _("🗑 The stopped sessions are off the list — their "
-                       "transcripts are still in 🕘 history."),
-                reply_markup=None)
-            return
-        if arg == "all":
-            await c.answer(_("Bringing them up…"))
-            await self._restore_all(chat_id, msg)
-            return
-        if arg.startswith("one:"):
-            o = self.store.find_orphan(arg[4:])
-            if o is None:
-                await c.answer(_("That one is already back"), show_alert=True)
-                await self._redraw_restore(msg)
-                return
-            await c.answer(_("Bringing it up…"))
-            await self._restore_one(chat_id, o)
-            await self._redraw_restore(msg)
-            return
-        await c.answer()
-
-    async def _close(self, session_id: str, graceful: bool = True) -> bool:
-        """End a session and drop its window.
-
-        `/exit` lets Claude shut down on its own terms (Ctrl+D is ignored by the
-        TUI, so it is not an option); only then is the window removed. Killing
-        the window outright would cut the process off mid-write.
-        """
+    async def _close(self, session_id: str) -> bool:
+        """End a session: the host shuts its Claude down; False if it did not."""
         mgd = self.store.get(session_id)
         if not mgd:
             return True
-        log.info("session closing id=%s name=%s graceful=%s",
-                 session_id[:8], mgd.full_label, graceful)
-        if mgd.is_sdk:
-            try:
-                await self.bridge.close(mgd)
-            except HostError as exc:
-                # The row stays: the process may well still be running, and a
-                # session the chat no longer knows would ask into the void.
-                log.warning("sdk close failed id=%s: %s", session_id[:8], exc)
-                return False
-            self.store.remove(session_id)
-            return True
-        if graceful and await tmux.window_exists(mgd.window_id):
-            try:
-                await tmux.send_keys(mgd.window_id, "Escape")
-                await asyncio.sleep(0.3)
-                await self._send_prompt(mgd, "/exit")
-                for _tick in range(int(_EXIT_TIMEOUT / 0.5)):
-                    await asyncio.sleep(0.5)
-                    if not await tmux.claude_running(mgd.window_id):
-                        break
-            except tmux.TmuxError:
-                pass
-        await tmux.kill_window(mgd.window_id)
+        log.info("session closing id=%s name=%s", session_id[:8], mgd.full_label)
+        try:
+            await self.bridge.close(mgd)
+        except HostError as exc:
+            # The row stays: the process may well still be running, and a
+            # session the chat no longer knows would ask into the void.
+            log.warning("close failed id=%s: %s", session_id[:8], exc)
+            return False
         self.store.remove(session_id)
-        self.watcher.forget(session_id)
         return True
 
     # --------------------------------------------------- claude code updates
-    async def _await_claude(self, window_id: str, want: bool,
-                            timeout: float) -> bool:
-        """Wait for `claude` to be gone from a window, or to be back in it."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if await tmux.claude_running(window_id) is want:
-                return True
-            await asyncio.sleep(0.5)
-        return await tmux.claude_running(window_id) is want
-
-    @staticmethod
-    async def _await_version(session_id: str, want: str) -> str:
-        """Read the restarted session's version, once it says what it is."""
-        deadline = time.monotonic() + _RESTART_VERSION_WAIT
-        seen = ""
-        while time.monotonic() < deadline:
-            seen = updates.running(session_id)
-            if seen == want:
-                return seen
-            await asyncio.sleep(1.0)
-        return seen
-
-    async def _await_exit(self, mgd, tasks: bool = True) -> str:
-        """Wait for `/exit` to take: "gone", "drafts" or "tasks" (asked
-        first), or "" when it did not.
-
-        *tasks* False once the tasks question has been answered: the process
-        takes seconds to stop them, and the question stays drawn meanwhile —
-        read as asked again, the resume was typed into the dying `claude`.
-        """
-        deadline = time.monotonic() + _RESTART_EXIT_TIMEOUT
-        while time.monotonic() < deadline:
-            if not await tmux.claude_running(mgd.window_id):
-                return "gone"
-            dialog = await self._dialog_now(mgd)
-            if dialog is not None and dialog.kind == "drafts":
-                return "drafts"
-            if tasks and screenmod.is_exit_tasks(dialog):
-                return "tasks"
-            await asyncio.sleep(0.5)
-        return "" if await tmux.claude_running(mgd.window_id) else "gone"
-
-    async def _drafts_open(self, mgd) -> bool:
-        """Whether the session stands on the feedback-drafts question."""
-        dialog = await self._dialog_now(mgd)
-        return dialog is not None and dialog.kind == "drafts"
-
-    def _resume_when_gone(self, chat_id: int, mgd) -> None:
-        """Bring the session back once the drafts question lets Claude exit."""
-        if mgd.session_id in self.resuming:
-            return
-        self.resuming.add(mgd.session_id)
-        task = asyncio.create_task(self._resume_after_exit(chat_id, mgd))
-        self.expiries.add(task)
-        task.add_done_callback(self.expiries.discard)
-
-    async def _resume_after_exit(self, chat_id: int, mgd) -> None:
-        """Wait for `claude` to leave the window, then resume it there.
-
-        The drafts question is the last thing `/exit` asks, and the window
-        is left at a shell once it is answered. Reviewing the drafts can
-        take a while, hence the long wait; a session closed meanwhile (its
-        row gone) is left alone.
-        """
-        sid = mgd.session_id
-        try:
-            deadline = time.monotonic() + _PARKED_TTL
-            while time.monotonic() < deadline:
-                await asyncio.sleep(1.0)
-                if self.store.get(sid) is None:
-                    return
-                if not await tmux.window_exists(mgd.window_id):
-                    return
-                if not await tmux.claude_running(mgd.window_id):
-                    break
-            else:
-                log.info("drafts resume gave up: %s still running", sid[:8])
-                return
-            log.info("drafts answered, resuming %s", sid[:8])
-            if sid in self.moving:
-                self.moving.discard(sid)
-                res = await self._relaunch_sdk(mgd)
-            else:
-                res = await self._relaunch(mgd)
-            msg = await self.bot.send_message(
-                chat_id, self._restart_text(mgd, res), parse_mode="HTML")
-            if msg:
-                self.store.remember_message(msg.message_id, sid)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("drafts resume failed: %s", sid[:8])
-            with contextlib.suppress(Exception):
-                await self.bot.send_message(
-                    chat_id, _("❌ Could not pass that on — see /log"))
-        finally:
-            self.resuming.discard(sid)
-
-    async def _drafts_callback(self, c: CallbackQuery, msg: Message,
-                               chat_id: int, arg: str) -> None:
-        """📨 Review and send = Enter, 🗑 Discard and exit = Esc."""
-        short, _sep, what = arg.partition(":")
-        mgd = self._resolve(short)
-        if not mgd:
-            await c.answer(_("That session is gone"), show_alert=True)
-            return
-        key = "Enter" if what == "send" else "Escape"
-        self._typed(mgd)
-        try:
-            pressed = await tmux.press_if(mgd.window_id, key, _drafts_on_screen)
-        except tmux.TmuxError:
-            pressed = False      # the window went with a closing session
-        if not pressed:
-            await c.answer(_("That question is no longer open"),
-                           show_alert=True)
-            await self._mark(msg, _("⏹ Question closed"))
-            return
-        self.watcher.release_dialog(mgd.session_id)
-        await c.answer()
-        await self._mark(msg, _("📨 Review and send") if what == "send"
-                         else _("🗑 Discard and exit"))
-
-    async def _trust_callback(self, c: CallbackQuery, msg: Message,
-                              chat_id: int, arg: str) -> None:
-        """✅ Yes / 🚪 No on "Is this a project you trust?".
-
-        The rows have no digits: the cursor is walked onto the chosen one and
-        Enter goes in only while it stands there, every key re-checked under
-        the input lock. A press that did not land keeps the card's buttons
-        unless the question is really gone. «No» makes `claude` leave the
-        window, so the session is then closed the way 🚪 closes one.
-        """
-        short, _sep, what = arg.partition(":")
-        mgd = self._resolve(short)
-        if not mgd:
-            await c.answer(_("That session is gone"), show_alert=True)
-            return
-        answer = "yes" if what == "yes" else "no"
-        try:
-            pressed = await self._press_trust(mgd, answer)
-        except tmux.TmuxError:
-            pressed = False
-        if not pressed:
-            dialog = await self._dialog_now(mgd)
-            if dialog is not None and dialog.kind == "trust":
-                await c.answer(_("Could not press it — try again or open "
-                                 "🖥 Screen"), show_alert=True)
-                return
-            await c.answer(_("That question is no longer open"),
-                           show_alert=True)
-            await self._mark(msg, _("⏹ Question closed"))
-            return
-        self.watcher.release_dialog(mgd.session_id)
-        await c.answer()
-        if answer == "yes":
-            await self._mark(msg, _("✅ Yes, I trust this folder"))
-            if self._focus(chat_id, mgd):
-                await self._say_focused(msg, mgd)
-            return
-        if await self._await_claude(mgd.window_id, False, _EXIT_TIMEOUT):
-            await self._close(mgd.session_id, graceful=False)
-            await self._mark(msg, _("🚪 No, exit — the session is closed"))
-        else:
-            await self._mark(msg, _("🚪 No, exit"))
-
-    async def _press_trust(self, mgd, answer: str) -> bool:
-        """Walk the trust question's cursor to *answer*'s row and press Enter.
-
-        After each move the screen is waited on until the cursor has moved:
-        a slow redraw read as "not there yet" would send a second press past
-        the row.
-        """
-        for _step in range(4):
-            dialog = await self._dialog_now(mgd)
-            if dialog is None or dialog.kind != "trust":
-                return False
-            target = screenmod.trust_row(dialog, answer)
-            cursor = dialog.cursor_index
-            if target is None or cursor is None:
-                return False
-            self._typed(mgd)
-            if cursor == target:
-                def on_target(raw: str, target=target) -> bool:
-                    d = screenmod.find_dialog(raw)
-                    return (d is not None and d.kind == "trust"
-                            and d.cursor_index == target)
-                return await tmux.press_if(mgd.window_id, "Enter", on_target)
-            key = "Down" if target > cursor else "Up"
-            if not await tmux.press_if(mgd.window_id, key, _trust_on_screen):
-                return False
-            deadline = time.monotonic() + _TRUST_MOVE_WAIT
-            while time.monotonic() < deadline:
-                await asyncio.sleep(0.2)
-                now = await self._dialog_now(mgd)
-                if now is None or now.cursor_index != cursor:
-                    break
-        return False
-
-    async def _side_callback(self, c: CallbackQuery, msg: Message,
-                             arg: str) -> None:
-        """The card of a `/btw` answer the bot could not copy.
-
-        Every key goes in only while the overlay is still up: closed in the
-        terminal meanwhile, an Esc would interrupt the turn and an arrow
-        would walk the input history.
-        """
-        short, _sep, what = arg.partition(":")
-        mgd = self._resolve(short)
-        if not mgd:
-            await c.answer(_("That session is gone"), show_alert=True)
-            return
-        if what == "copy":
-            if screenmod.side_answer(await tmux.capture(mgd.window_id)) is None:
-                await c.answer(_("That answer is no longer open"), show_alert=True)
-                return
-            self.watcher.retry_side(mgd.session_id)
-            await c.answer(_("Copying again…"))
-            return
-        key = _SIDE_KEYS.get(what)
-        if key is None:
-            await c.answer()
-            return
-        self._typed(mgd)
-        try:
-            pressed = await tmux.press_if(mgd.window_id, key, _side_on_screen)
-        except tmux.TmuxError:
-            pressed = False
-        if not pressed:
-            await c.answer(_("That answer is no longer open"), show_alert=True)
-            await self._mark(msg, _("⏹ Answer closed"))
-            return
-        if what == "close":
-            await c.answer()
-            await self._mark(msg, _("✖️ Closed"))
-            return
-        # An arrow redraws the overlay: the card shows the new frame in
-        # place, so walking a long answer does not post a screen per press.
-        await c.answer()
-        await asyncio.sleep(0.4)
-        raw = await tmux.capture(mgd.window_id)
-        side = screenmod.side_answer(raw)
-        if side is None or not await rich.edit(
-                self.bot, msg.chat.id, msg.message_id,
-                blocks=self.watcher.side_blocks(mgd.full_label, raw),
-                reply_markup=side_kb(mgd.session_id, side.browse)):
-            await self.watcher.send_screen(mgd.window_id, mgd.full_label,
-                                           mgd.session_id)
-
     # ----------------------------------------------------------------- login
-    async def _start_login(self, m: Message, mgd, note: str,
-                           force: bool = False) -> None:
-        """`/login` in the session, and its first choice made: the subscription.
-
-        Everything after that is the watcher's: it reads each step of the
-        panel off the screen and sends its card (`Watcher._tick_login`).
-        """
-        name = html.escape(mgd.full_label)
-        if mgd.is_sdk:
-            await self._start_auth_login(m, mgd)
-            return
-        try:
-            raw = await tmux.capture(mgd.window_id)
-        except tmux.TmuxError:
-            await self._ack(m, _("Its tmux window is gone"), mgd)
-            return
-        if screenmod.login_open(raw):
-            # Its card again, and no key: a menu open in the terminal may be
-            # on its way to another method.
-            self.watcher.repost_login(mgd.session_id)
-            await self._ack(m, _("🔑 <b>{name}</b> is already logging in: its "
-                                 "card comes next.").format(name=name), mgd)
-            return
-        reason = "" if force else await self._busy_reason(mgd)
-        if reason:
-            await self._ack(m, self._busy_text(mgd, reason, "login"), mgd,
-                            reply_markup=anyway_kb(mgd.session_id, "login"))
-            return
-        await self._ack(m, _("🔑 Logging in on <b>{name}</b>{note}: the sign-in "
-                             "link comes in a moment.").format(name=name, note=note),
-                        mgd)
-        self._typed(mgd)
-        if await loginmod.start(mgd.window_id):
-            log.info("login started id=%s", mgd.session_id[:8])
-            return
-        log.warning("login did not start id=%s", mgd.session_id[:8])
-        await self._ack(m, _("⚠️ <b>{name}</b> did not open the login. Here is "
-                             "its screen:").format(name=name), mgd)
-        await self.watcher.send_screen(mgd.window_id, mgd.full_label,
-                                       mgd.session_id)
-
-    async def _signing_in(self, mgd) -> bool:
-        if mgd.is_sdk:
-            return False
-        try:
-            return screenmod.login_open(await tmux.capture(mgd.window_id))
-        except tmux.TmuxError:
-            return False
-
     async def _enter_login_code(self, m: Message, code: str, lone: bool) -> bool:
-        """A sign-in code from the chat, typed into the panel that waits for it.
+        """A sign-in code from the chat, for the login the bot runs.
 
-        It never takes the road ordinary text takes: the inbox would hold it
-        for the open "question" the panel looks like, and the session it
-        belongs to is the one showing a link — not necessarily the active
-        one. A message that is nothing but a code is answered even with
-        nowhere to go, not sent to Claude as a prompt; one with words around
-        it is taken only by a session that waits (False: not handled). A
-        handled message is deleted on every path: the code is a credential
-        until it is used, and the reply says what became of it.
+        It never takes the road ordinary text takes: it is a credential, not
+        a prompt. A message that is nothing but a code is answered even with
+        no login waiting, not sent to Claude; one with words around it is
+        taken only while a login waits (False: not handled).
         """
         replied_to = getattr(m, "reply_to_message", None)
         replied_sid = (self.store.session_of_message(replied_to.message_id)
                        if replied_to else None)
         replied_mgd = self.store.get(replied_sid) if replied_sid else None
-        if self.auth.waiting and (replied_mgd is None or replied_mgd.is_sdk):
-            # A login the bot runs itself (`claude auth login`, for SDK
-            # sessions) takes the code — unless it answers a tmux panel's link.
+        if self.auth.waiting:
             await self._enter_auth_code(m, code, replied_mgd)
             return True
-        waiting = []
-        for mgd in self.store.all_managed(backend="tmux"):
-            try:
-                ls = screenmod.login_screen(await tmux.capture(mgd.window_id))
-            except tmux.TmuxError:
-                continue
-            if ls is not None and ls.state == "code":
-                waiting.append((mgd, ls))
-        replied = getattr(m, "reply_to_message", None)
-        named = self.store.session_of_message(replied.message_id) if replied else None
-        active = self.store.get_active(m.chat.id)
-        pick = (next((w for w in waiting if w[0].session_id == named), None)
-                or (waiting[0] if len(waiting) == 1 else None)
-                or next((w for w in waiting if w[0].session_id == active), None))
-        if not waiting and not lone:
+        if not lone:
             return False
         await self._delete_quietly(m.chat.id, m.message_id)
-        if pick is None:
-            await m.answer(_(
-                "🔑 Several sessions are waiting for a sign-in code: send it "
-                "as a reply to the link of the right one.") if waiting else _(
-                "🔑 That looks like a sign-in code, and no session is waiting "
-                "for one, so I have not sent it anywhere. /login starts a "
-                "login."))
-            return True
-        mgd, ls = pick
-        name = html.escape(mgd.full_label)
-        if ls.entered:
-            await self._ack(m, _("🔑 <b>{name}</b> already has a code entered: "
-                                 "Claude is checking it.").format(name=name), mgd)
-            return True
-        self._typed(mgd)
-        try:
-            await loginmod.paste_code(mgd.window_id, code)
-        except tmux.Refused:
-            await self._ack(m, _("⚠️ The login on <b>{name}</b> moved on before "
-                                 "the code went in, so it was not entered.")
-                            .format(name=name), mgd)
-            return True
-        log.info("login code entered id=%s chars=%d", mgd.session_id[:8], len(code))
-        await self._ack(m, _("🔑 Code entered on <b>{name}</b>: Claude is "
-                             "checking it…").format(name=name), mgd)
+        await m.answer(_(
+            "🔑 That looks like a sign-in code, and no session is waiting "
+            "for one, so I have not sent it anywhere. /login starts a "
+            "login."))
         return True
 
-    async def _login_callback(self, c: CallbackQuery, msg: Message,
-                              chat_id: int, arg: str) -> None:
-        """The buttons of the login cards.
+    async def _restart_session(self, mgd) -> _Restart:
+        """The session onto the CLI on disk, once at a time per session.
 
-        Every key goes in only while the panel shows the step its card was
-        about (`login.py`): a digit or an Enter that outlived its step would
-        type into whatever stands there now.
+        The host leaves the client and resumes the same id, so the context
+        comes back with it.
         """
-        short, _sep, what = arg.partition(":")
-        legacy = what in ("rall", "rfr") or what.startswith("r:")
-        mgd = self._resolve(short)
-        if not mgd:
-            await c.answer(_("That session is gone"), show_alert=True)
-            if legacy:
-                with contextlib.suppress(Exception):
-                    await msg.edit_reply_markup(reply_markup=None)
-            return
-        if legacy:
-            # A card from before sessions were known to follow a login on
-            # their own: redraw it without its restart buttons, and say why
-            # when a restart was what the button asked for.
-            if what == "rfr":
-                await c.answer()
-            else:
-                await c.answer(_("No restart is needed: the sessions switch "
-                                 "to the new account with their next request"),
-                               show_alert=True)
-            text, _kb = await self.watcher.login_done_card(mgd.session_id)
-            await self._safe_edit(msg, text, reply_markup=None, parse_mode="HTML")
-            return
-        self._typed(mgd)
-        pressed, answered = False, False
-        try:
-            if what.isdigit():
-                pressed = await loginmod.choose(mgd.window_id, int(what))
-                label = next((b.text for row in (msg.reply_markup.inline_keyboard
-                                                 if msg.reply_markup else [])
-                              for b in row if b.callback_data == c.data), what)
-                done = f"▶️ {label}"
-            elif what == "retry":
-                # Up to eight seconds for the menu: the tap is answered first.
-                await c.answer(_("Getting a new link…"))
-                answered = True
-                pressed = await loginmod.retry(mgd.window_id)
-                done = _("🔁 Tried again")
-            elif what == "esc":
-                pressed = await loginmod.cancel(mgd.window_id)
-                done = _("✖️ Login cancelled")
-            elif what == "enter":
-                pressed = await loginmod.proceed(mgd.window_id)
-                done = _("⏎ Continued")
-            else:
-                await c.answer()
-                return
-        except tmux.TmuxError:
-            pressed, done = False, ""
-        if pressed:
-            if not answered:
-                await c.answer()
-            self.watcher.release_login(mgd.session_id)
-            await self._mark(msg, done)
-            return
-        # The step this card was about has gone: the login moved on (its
-        # next card is below) or was closed.
-        if await self._signing_in(mgd):
-            gone, mark = _("That step of the login has passed: its next "
-                           "card is below."), _("⏭ Step passed")
-        else:
-            gone, mark = _("That login is no longer open."), _("⏹ Login closed")
-        if answered:
-            with contextlib.suppress(Exception):
-                msg2 = await self.bot.send_message(chat_id, gone)
-                self.store.remember_message(msg2.message_id, mgd.session_id)
-        else:
-            await c.answer(gone, show_alert=True)
-        await self._mark(msg, mark)
-
-    async def _launch_resume(self, mgd) -> bool:
-        """Start `claude --resume` in the session's window; True if it came up."""
-        await tmux.run_in_window(
-            mgd.window_id,
-            f"claude --resume {shlex.quote(mgd.session_id)} "
-            f"-n {shlex.quote(mgd.name)}",
-        )
-        return await self._await_claude(mgd.window_id, True,
-                                        _RESTART_START_TIMEOUT)
-
-    @staticmethod
-    def _behind_reason(behind: str, what: str) -> str:
-        """Why a free-looking prompt is not restarted, naming the work."""
-        if behind == "limit":
-            return _("it is waiting for the usage limit to reset, and /exit "
-                     "would cancel the automatic continuation")
-        if what:
-            return _("background tasks are still running in it ({what}), and "
-                     "/exit would stop them").format(what=html.escape(what))
-        return _("background tasks are still running in it, and /exit would "
-                 "stop them")
-
-    def _busy_refusal(self, raw: str) -> _Restart:
-        """The refusal for a session the agent list calls busy.
-
-        One decision for the restart and for the version card, so the card
-        never offers «Restart anyway» for a state the forced restart refuses.
-        """
-        behind, what = screenmod.background_state(raw)
-        if not behind:
-            return _Restart(False, _("it is working right now"))
-        return _Restart(False, self._behind_reason(behind, ", ".join(what)),
-                        forceable=behind)
-
-    async def _restart_session(self, mgd, force: bool = False,
-                               to_sdk: bool = False) -> _Restart:
-        """`_restart_in_place`, once at a time per session."""
         sid = mgd.session_id
         if sid in self.restarting:
             return _Restart(False, _("a restart of it is already under way"))
         self.restarting.add(sid)
         try:
-            if mgd.is_sdk:
-                return await self._restart_sdk(mgd, force)
-            return await self._restart_in_place(mgd, force, to_sdk)
-        finally:
-            self.restarting.discard(sid)
-
-    async def _restart_sdk(self, mgd, force: bool) -> _Restart:
-        """An SDK session onto the CLI on disk: the host leaves the client and
-        resumes the same id, so the context comes back with it."""
-        try:
             data = await self.bridge.link.call("restart", timeout=180, name=mgd.name,
-                                               force=force)
+                                               force=False)
         except HostError as exc:
             if exc.code == "busy":
-                # Not offered "anyway": what would stop is the turn itself, or
-                # the question it waits on — not background work.
                 return _Restart(False, _("it is working or waiting for an answer"))
-            log.warning("sdk restart failed id=%s: %s", mgd.session_id[:8], exc)
+            log.warning("restart failed id=%s: %s", mgd.session_id[:8], exc)
             return _Restart(False, html.escape((exc.message or exc.code)[:300]))
+        finally:
+            self.restarting.discard(sid)
         return _Restart(True, version=str((data.get("info") or {}).get("version") or ""))
 
-    async def _restart_in_place(self, mgd, force: bool, to_sdk: bool = False) -> _Restart:
-        """Relaunch a session's `claude` in place, context and all.
+    def _stale(self, mgd, disk: str) -> str:
+        """The version *mgd* runs if a restart would bring a newer one, else "".
 
-        `/exit`, then `claude --resume <id> -n <name>` in the same window. The
-        session id survives a resume, so the transcript keeps growing in the
-        same file and the reader's offset stays valid — nothing is replayed
-        into the chat. The launch name has to come back exactly as it was: it
-        is the only thread back to a session that is later cleared.
-
-        Unlike `_close`, this never kills the window. A restart that goes
-        wrong must leave the session where it stood, not take it down.
-
-        *force* goes past background tasks and a usage-limit wait — the work
-        /exit stops — and nothing else: a turn in progress or an open
-        question still refuses.
+        A resting session runs nothing: it wakes on the build on disk.
         """
-        if not await tmux.window_exists(mgd.window_id):
-            return _Restart(False, _("its tmux window is gone"))
-        # force: the cached answer is up to five seconds old, and a session
-        # that has just finished would be refused on the strength of a reading
-        # taken while it was still working.
-        agents = await sess.live_agents(force=True)
-        status = next((a.get("status", "") for a in agents
-                       if a.get("sessionId") == mgd.session_id), "")
-        if status == "busy":
-            # The list says "busy" for background work and for a turn parked
-            # on a usage limit too, while the prompt itself is free; /exit
-            # would end either, so the refusal names the work and leaves the
-            # call to the user (a subagent that died can sit in the panel for
-            # days — 0585ce76, 2026-11-10).
-            try:
-                raw = await tmux.capture(mgd.window_id)
-            except tmux.TmuxError:
-                raw = ""
-            refusal = self._busy_refusal(raw)
-            if not refusal.forceable or not force:
-                return refusal
-        if await self._drafts_open(mgd):
-            # An earlier /exit stopped at the feedback-drafts question: the
-            # restart is half done, and the answer is what lets it finish.
-            return self._wait_drafts(mgd)
-        if status == "waiting":
-            return _Restart(False, _("it is waiting for an answer"))
-        # The agent list is not enough on its own: a session that has just been
-        # relaunched is missing from it for a few seconds, and a second restart
-        # would then walk straight over whatever it had been asked meanwhile.
-        # The screen answers immediately and needs nothing to be registered.
-        try:
-            raw = await tmux.capture(mgd.window_id)
-        except tmux.TmuxError:
-            raw = ""
-        if screenmod.is_busy(raw):
-            return _Restart(False, _("it is working right now"))
-        if screenmod.find_dialog(raw) is not None:
-            return _Restart(False, _("it is waiting for an answer"))
-
-        # Nothing is shut down unless there is something to start again with.
-        # The self-update swaps the binary in place, and a session stopped
-        # while it is missing has nothing to come back to.
-        exe = sess.claude_bin()
-        if not exe or not Path(exe).exists():
-            log.warning("restart refused: claude CLI is not on disk (%s)", exe)
-            return _Restart(False, _("the claude CLI is not on disk this "
-                                     "second — it is updating itself; try "
-                                     "again in a minute"))
-
-        if to_sdk and not self.bridge.link.online:
-            return _Restart(False, _("the session host is not answering"))
-        log.info("restarting session id=%s name=%s window=%s status=%s",
-                 mgd.session_id[:8], mgd.name, mgd.window_id, status or "-")
-        updates.note_restarted(mgd.session_id)
-        self._typed(mgd)
-        if await tmux.claude_running(mgd.window_id):
-            await tmux.send_keys(mgd.window_id, "Escape")
-            await asyncio.sleep(0.3)
-            await self._send_prompt(mgd, "/exit")
-            gone = await self._await_exit(mgd)
-            if gone == "tasks":
-                gone = await self._exit_tasks(mgd, force)
-                if isinstance(gone, _Restart):
-                    return gone
-            if gone == "drafts":
-                if to_sdk:
-                    self.moving.add(mgd.session_id)
-                return self._wait_drafts(mgd)
-            if gone != "gone":
-                updates.forget(mgd.session_id)
-                log.warning("restart aborted: %s did not exit", mgd.session_id[:8])
-                return _Restart(False, _("it did not shut down within {n} s")
-                                .format(n=int(_RESTART_EXIT_TIMEOUT)))
-        if to_sdk:
-            return await self._relaunch_sdk(mgd)
-        return await self._relaunch(mgd)
-
-    async def _relaunch_sdk(self, mgd) -> _Restart:
-        """Carry on a tmux session in the session host: same id, same name.
-
-        `claude` has left the window by now. The host resumes the transcript;
-        only then does the row change backend and the window go. If the host
-        will not take it, the session is resumed in its window again — it is
-        never left with nothing running.
-        """
-        probe = Managed(session_id=mgd.session_id, window_id="", cwd=mgd.cwd,
-                        name=mgd.name, created_at=mgd.created_at, offset=0,
-                        title=mgd.title, custom_name=mgd.custom_name, backend="sdk")
-        try:
-            data = await self.bridge.create(probe, resume=True)
-        except HostError as exc:
-            log.warning("move to sdk failed id=%s: %s", mgd.session_id[:8], exc)
-            if exc.code in ("timeout", "disconnected", "offline"):
-                # The host may still be resuming it: its copy goes first, or
-                # two `claude` processes would write one transcript.
-                try:
-                    await self.bridge.link.call("close", timeout=60, name=mgd.name)
-                except HostError as again:
-                    log.warning("move to sdk: host copy not closed: %s", again)
-                    return _Restart(False, _("the session host did not answer, and its "
-                                             "copy could not be stopped — open the "
-                                             "session's card in a minute"))
-            back = await self._relaunch(mgd)
-            detail = html.escape((exc.message or exc.code)[:200])
-            if back.ok:
-                return _Restart(False, _("the session host did not take it ({detail}); "
-                                         "it carries on in tmux as before").format(detail=detail))
-            return _Restart(False, _("the session host did not take it ({detail}), and "
-                                     "resuming it in tmux failed too — {reason}").format(
-                                         detail=detail, reason=back.reason))
-        self.store.set_backend(mgd.session_id, "sdk", "")
-        self.watcher.forget(mgd.session_id)
-        await tmux.kill_window(mgd.window_id)
-        log.info("session moved to sdk id=%s name=%s", mgd.session_id[:8], mgd.name)
-        return _Restart(True, version=str((data.get("info") or {}).get("version") or ""))
-
-    async def _exit_tasks(self, mgd, force: bool) -> str | _Restart:
-        """Answer `/exit`'s "the following will stop" question.
-
-        Forced: "Exit and stop tasks", then the wait goes on. Otherwise the
-        question is cancelled (Esc is its own "Stay") and the refusal names
-        what would have stopped — the agent list said idle, yet a shell was
-        running, so the user is the one to decide.
-        """
-        dialog = await self._dialog_now(mgd)
-        if not screenmod.is_exit_tasks(dialog):
-            # Gone meanwhile (or unreadable): the exit is under way or not,
-            # and the wait says which; no key goes in blind.
-            return await self._await_exit(mgd, tasks=False)
-        num = screenmod.exit_tasks_option(dialog)
-
-        def standing(raw: str) -> bool:
-            return screenmod.is_exit_tasks(screenmod.find_dialog(raw))
-
-        if not force or not num:
-            await tmux.press_if(mgd.window_id, "Escape", standing)
-            updates.forget(mgd.session_id)
-            if force:
-                log.warning("restart: no 'Exit and stop tasks' row in %r",
-                            [o.label for o in dialog.options] if dialog else [])
-                return _Restart(False, _(
-                    "/exit asked about its background tasks in a way I do not "
-                    "recognise, so I answered «Stay»"))
-            return _Restart(False, self._behind_reason(
-                "background", screenmod.exit_tasks_named(dialog)),
-                forceable="background")
-        log.info("restart stops background tasks id=%s: %s",
-                 mgd.session_id[:8], screenmod.exit_tasks_named(dialog))
-        self._typed(mgd)
-        await tmux.press_if(mgd.window_id, str(num), standing)
-        return await self._await_exit(mgd, tasks=False)
-
-    def _wait_drafts(self, mgd) -> _Restart:
-        """The restart waits for the feedback-drafts answer, then finishes.
-
-        What to do with the drafts is the user's call, made on the card the
-        watcher sends; whatever answers it lets Claude exit, and
-        `_resume_after_exit` brings the session back then.
-        """
-        log.info("restart waits for the drafts answer: %s", mgd.session_id[:8])
-        self._resume_when_gone(self.cfg.owner, mgd)
-        return _Restart(False, _(
-            "Claude Code asks what to do with its unsent feedback drafts "
-            "first — answer on its card, and the session comes back by itself"))
-
-    async def _relaunch(self, mgd) -> _Restart:
-        """`claude --resume` in a window `claude` has left, and its version."""
-        updates.note_restarted(mgd.session_id)
-        if not await self._launch_resume(mgd):
-            # Claude Code replaces its own binary in place while updating, and
-            # for a second or two `claude` is missing — or half-written, which
-            # bash reports as "Exec format error". A session shut down inside
-            # that window came back to a shell prompt (2026-08-30), so the
-            # launch is attempted once more before giving up.
-            log.warning("restart: %s did not come back, trying once more",
-                        mgd.session_id[:8])
-            await updates.installed(force=True)
-            if not await self._launch_resume(mgd):
-                log.error("restart failed: %s did not come back",
-                          mgd.session_id[:8])
-                return _Restart(False, _(
-                    "it did not come back. Its window is untouched, so "
-                    "pressing again resumes it"))
-        self._typed(mgd)
-        # A resume reads the credentials on disk; its transcript says so only
-        # with the next request, and until then the login card would offer
-        # the same restart again.
-        account.note_login(mgd.session_id, account.current_login())
-        version = await self._await_version(mgd.session_id,
-                                            await updates.installed())
-        if version:
-            updates.settled(mgd.session_id)
-        log.info("session restarted id=%s version=%s",
-                 mgd.session_id[:8], version or "unknown")
-        return _Restart(True, version=version)
+        if self.bridge.state(mgd) in ("dormant", "offline", "closed"):
+            return ""
+        return updates.stale(mgd.session_id, disk)
 
     async def _outdated(self) -> tuple[str, list[tuple]]:
         """The disk version, and (session, status, its version) for each one."""
@@ -2428,10 +1450,7 @@ class CCBot:
         rows = []
         for m in self.store.all_managed():
             view = views.get(m.session_id)
-            # A resting SDK session runs nothing: it wakes on the build on disk.
-            resting = m.is_sdk and self.bridge.state(m) in ("dormant", "offline", "closed")
-            rows.append((m, view.status if view else "",
-                         not resting and updates.stale(m.session_id, disk)))
+            rows.append((m, view.status if view else "", self._stale(m, disk)))
         return disk, rows
 
     async def _update_text(self, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -2446,7 +1465,6 @@ class CCBot:
         one = next((m for m in idle
                     if active and m.session_id == active.session_id), None)
         lines = [_("⬆️ <b>Claude Code</b>"), ""]
-        forceable: list[tuple[str, str, str]] = []
         if disk:
             lines.append(_("On disk: <code>{version}</code> — what a session "
                            "gets the moment it is started again.").format(
@@ -2474,34 +1492,25 @@ class CCBot:
                                    len(behind)).format(count=len(behind))]
             if skipped:
                 lines.append(_("Left alone by «Restart all»:"))
-            reasons = await asyncio.gather(
-                *(self._skip_reason(m, st) for m, st in skipped))
+            reasons = [self._skip_reason(st) for _m, st in skipped]
             for (m, _st), r in zip(skipped, reasons, strict=True):
-                lines.append(f"• <b>{html.escape(m.full_label)}</b> — {r.reason}")
-                if r.forceable:
-                    forceable.append((m.session_id, m.full_label, r.forceable))
+                lines.append(f"• <b>{html.escape(m.full_label)}</b> — {r}")
             lines += ["", _(
-                "A restart is <code>/exit</code> followed by "
-                "<code>claude --resume</code> in the same window: the session "
-                "id, the transcript and the context all survive. What does not: "
-                "anything half-typed into its input line, and the prompt cache — "
-                "so the first reply after a restart takes a little longer.")]
+                "A restart resumes the same session on the build on disk: the "
+                "session id, the transcript and the context all survive. What "
+                "does not: the prompt cache — so the first reply after a "
+                "restart takes a little longer.")]
         return "\n".join(lines), update_kb(
-            one.session_id if one else None, len(idle), forceable)
+            one.session_id if one else None, len(idle))
 
-    async def _skip_reason(self, mgd, status: str) -> _Restart:
-        """Why «Restart all» passes a session by, and whether to offer it anyway."""
+    @staticmethod
+    def _skip_reason(status: str) -> str:
+        """Why «Restart all» passes a session by."""
         if status == "waiting":
-            return _Restart(False, _("it is waiting for an answer"))
+            return _("it is waiting for an answer")
         if status != "busy":
-            return _Restart(False, _("its state could not be read"))
-        if mgd.is_sdk:
-            return _Restart(False, _("it is working or waiting for an answer"))
-        try:
-            raw = await tmux.capture(mgd.window_id)
-        except tmux.TmuxError:
-            raw = ""
-        return self._busy_refusal(raw)
+            return _("its state could not be read")
+        return _("it is working or waiting for an answer")
 
     async def _show_update(self, target: Message | CallbackQuery) -> None:
         here = _editable(target)
@@ -2514,52 +1523,16 @@ class CCBot:
         else:
             await here.answer(text, reply_markup=kb, parse_mode="HTML")
 
-    async def _move_to_sdk(self, chat_id: int, mgd, force: bool = False,
-                           card: Message | None = None) -> None:
-        """«↗️ Move to SDK»: the same session, carried on by the session host.
-
-        From a /sessions card (*card*) the progress and the result take that
-        card's place and lead back to the list, so the whole list can be
-        walked without a message per session piling up below it.
-        """
-        waiting = _("⏳ Moving <b>{name}</b> to the Agent SDK — /exit in tmux, then "
-                    "the session host resumes it…").format(name=html.escape(mgd.full_label))
-        note = card
-        if note is not None:
-            with contextlib.suppress(Exception):
-                await self._safe_edit(note, waiting, parse_mode="HTML", reply_markup=None)
-        else:
-            note = await self.bot.send_message(chat_id, waiting, parse_mode="HTML")
-        self.store.remember_message(note.message_id, mgd.session_id)
-        res = await self._restart_session(mgd, force=force, to_sdk=True)
-        kb = move_anyway_kb(mgd.session_id, in_list=card is not None) \
-            if res.forceable and not res.ok else None
-        if card is not None:
-            kb = back_to_list_kb(kb)
-        if res.ok:
-            text = _("✅ <b>{name}</b> now runs through the Agent SDK — the same session, "
-                     "context and all.").format(name=html.escape(mgd.full_label))
-        else:
-            text = _("⚠️ <b>{name}</b> was not moved — {reason}.").format(
-                name=html.escape(mgd.full_label), reason=res.reason)
-        with contextlib.suppress(Exception):
-            await note.edit_text(text, parse_mode="HTML", reply_markup=kb)
-
-    async def _restart_one(self, chat_id: int, mgd, force: bool = False) -> None:
+    async def _restart_one(self, chat_id: int, mgd) -> None:
         """Restart a single session, saying so before, during and after."""
         note = await self.bot.send_message(
             chat_id,
-            _("⏳ Restarting <b>{name}</b> — /exit, then resume…").format(
-                name=html.escape(mgd.full_label)),
+            _("⏳ Restarting <b>{name}</b>…").format(name=html.escape(mgd.full_label)),
             parse_mode="HTML")
         self.store.remember_message(note.message_id, mgd.session_id)
-        res = await self._restart_session(mgd, force=force)
-        kb = (restart_anyway_kb([(mgd.session_id, mgd.full_label,
-                                  res.forceable)])
-              if res.forceable else None)
+        res = await self._restart_session(mgd)
         with contextlib.suppress(Exception):
-            await note.edit_text(self._restart_text(mgd, res),
-                                 reply_markup=kb, parse_mode="HTML")
+            await note.edit_text(self._restart_text(mgd, res), parse_mode="HTML")
 
     @staticmethod
     def _restart_text(mgd, res: _Restart) -> str:
@@ -2621,12 +1594,8 @@ class CCBot:
             lines.append(_("⚠️ Left as they were:"))
             lines += [f"• <b>{html.escape(m.full_label)}</b> — {r.reason}"
                       for m, r in failed]
-        forceable = [(m.session_id, m.full_label, r.forceable)
-                     for m, r in failed if r.forceable]
         with contextlib.suppress(Exception):
-            await note.edit_text(
-                "\n".join(lines), parse_mode="HTML",
-                reply_markup=restart_anyway_kb(forceable) if forceable else None)
+            await note.edit_text("\n".join(lines), parse_mode="HTML")
 
     async def _show_news(self, chat_id: int) -> None:
         """Release notes between the oldest session and what is on disk.
@@ -2698,7 +1667,7 @@ class CCBot:
         """Models or effort levels of an SDK session, from Claude Code's own data.
 
         `get_server_info()` lists the models with their effort levels — the
-        list the TUI picker draws, so nothing is written down in the bot.
+        list Claude Code's own picker draws, so nothing is written down in the bot.
         A pick applies to this session only.
         """
         try:
@@ -2794,7 +1763,7 @@ class CCBot:
             return
         try:
             await self._send_prompt(mgd, item[1], guard=True)
-        except tmux.Refused:
+        except Refused:
             self.bridge.again[n] = item
             await c.answer(_("It has a question open — answer it first."), show_alert=True)
             return
@@ -2876,7 +1845,7 @@ class CCBot:
         await self._start_auth_login(msg)
 
     async def _send_recap(self, chat_id: int, mgd) -> None:
-        """«📜 Where it stopped»: the SDK session's stand-in for a screen.
+        """«📜 Where it stopped»: the session's stand-in for a screen.
 
         Its state, the last task, the steps since and the last answer, read
         from the transcript — no tokens spent, and true after any restart.
@@ -2934,15 +1903,6 @@ class CCBot:
         if isinstance(m, Message):
             await self._ack(m, text, mgd)
 
-    def _typed(self, mgd) -> None:
-        """Tell the watcher the bot has just typed into this session.
-
-        Input takes effect on the screen at once and in `claude agents --json`
-        seconds later. In between, a session that has just been answered looks
-        like one waiting on an unparsed question — see Watcher.note_input.
-        """
-        self.watcher.note_input(mgd.session_id)
-
     def _focus(self, chat_id: int, mgd) -> bool:
         """Make *mgd* the session plain text goes to; True if that moved it.
 
@@ -2971,15 +1931,13 @@ class CCBot:
                 parse_mode="HTML")
 
     async def _send_prompt(self, mgd, text: str, guard: bool = False) -> None:
-        """Type *text* into the session and press Enter.
+        """Send *text* to the session as a prompt.
 
-        *guard* refuses (`tmux.Refused`) when a dialog stands on the screen,
-        checked under the input lock. Only the dialog's own free-text row
-        and the bot's own shutdown `/exit` may type over a question.
+        *guard* refuses (`Refused`) when the session has a question open —
+        checked by the host, so nothing can slip in between.
         """
-        self._typed(mgd)
         log.info("prompt -> %s (%s): %r", mgd.full_label, mgd.session_id[:8], text[:120])
-        if mgd.is_sdk and text.split(maxsplit=1)[:1] == ["/btw"]:
+        if text.split(maxsplit=1)[:1] == ["/btw"]:
             # Not available through the SDK as a command: the bot asks a fork.
             parts = text.split(maxsplit=1)
             question = parts[1].strip() if len(parts) > 1 else ""
@@ -2989,18 +1947,12 @@ class CCBot:
                 await self.bot.send_message(self.cfg.owner, _(
                     "/btw needs the question after it, in the same message."))
             return
-        if mgd.is_sdk:
-            try:
-                await self.bridge.send(mgd, text, guard=guard)
-            except HostError as exc:
-                if exc.code == "request_open":
-                    raise tmux.Refused(text) from exc
-                raise
-            return
-        await tmux.submit_text(
-            mgd.window_id, text,
-            refuse_if=_question_or_unready if guard else None,
-            hold_if=_dialog_on_screen if guard else None)
+        try:
+            await self.bridge.send(mgd, text, guard=guard)
+        except HostError as exc:
+            if exc.code == "request_open":
+                raise Refused(text) from exc
+            raise
 
     # ----------------------------------------------------------------- inbox
     def _inbox_of(self, chat_id: int) -> _Inbox:
@@ -3130,10 +2082,6 @@ class CCBot:
         paths = [p for i in items for p in i.paths]
         prompt = _batch_text(items)
         await self._send_prompt(mgd, prompt, guard=guard)
-        if not mgd.is_sdk and prompt.split(maxsplit=1)[:1] in (["/context"], ["/compact"]):
-            # Typed rather than pressed: these print on the terminal only,
-            # so the result comes back as a screen, as from the card.
-            self.watcher.screen_when_idle(mgd.session_id)
         parts = []
         if len(items) > 1:
             parts.append(ngettext("{count} message", "{count} messages",
@@ -3172,33 +2120,16 @@ class CCBot:
         log.error("ack given up: %r", text[:120])
 
     # ------------------------------------------------- held for an open question
-    async def _question_open(self, mgd) -> tuple[bool, screenmod.Dialog | None]:
-        """Whether the session cannot take a prompt, and the dialog, if parsed.
-
-        A pane without the ordinary bottom takes no prompt either: an
-        unparsed question covers it. Nor does a window `claude` has left — the
-        one a drafts answer leaves behind, where a paste runs as a shell
-        command; its old status line is still on the pane, so the screen
-        alone reads it as ready.
-        """
-        if mgd.is_sdk:
-            return self.bridge.question_open(mgd), None
-        try:
-            raw = await tmux.capture(mgd.window_id)
-            running = await tmux.claude_running(mgd.window_id)
-        except tmux.TmuxError:
-            return False, None
-        if not running:
-            return True, None
-        dialog = screenmod.find_dialog(raw)
-        return dialog is not None or not screenmod.is_ready(raw), dialog
+    def _question_open(self, mgd) -> bool:
+        """Whether the session has a question open, so it takes no prompt."""
+        return self.bridge.question_open(mgd)
 
     async def _dispatch(self, chat_id: int, items: list[_Item], mgd,
                         note: str = "") -> None:
         """Send a batch, or hold it while the session has a question open.
 
-        The only road user text takes into a session: pasted into a dialog it
-        is swallowed, and its Enter picks the option under the cursor.
+        The only road user text takes into a session: sent while a question
+        stands, it would land beside the question nobody has answered.
         """
         held = self._held_of(mgd.session_id)
         if held is not None:
@@ -3209,26 +2140,24 @@ class CCBot:
         await self._hold_for_dialog(chat_id, mgd, items)
 
     async def _try_send(self, items: list[_Item], mgd, note: str = "") -> bool:
-        """Send unless a question is open — checked before, and under the lock."""
-        blocked, _dialog = await self._question_open(mgd)
-        if blocked:
+        """Send unless a question is open — checked here, and again by the host."""
+        if self._question_open(mgd):
             return False
         try:
             await self._send_batch(items, mgd, note, guard=True)
-        except tmux.Refused:
-            log.info("held: paste refused, a dialog appeared id=%s",
+        except Refused:
+            log.info("held: send refused, a question appeared id=%s",
                      mgd.session_id[:8])
             return False
         return True
 
     async def _send_command(self, mgd, command: str) -> bool:
         """A Claude command from a button, refused while a question is open."""
-        blocked, _dialog = await self._question_open(mgd)
-        if blocked:
+        if self._question_open(mgd):
             return False
         try:
             await self._send_prompt(mgd, command, guard=True)
-        except tmux.Refused:
+        except Refused:
             return False
         return True
 
@@ -3321,36 +2250,12 @@ class CCBot:
             if held.waiting:
                 text = self._held_waiting_text(held, mgd)
                 kb = held_wait_kb(held.session_id)
-            elif await self._signing_in(mgd):
-                # Esc would cancel the login, and the code is not typed
-                # through here: the text waits for the panel to close.
-                held.question_sig = ""
-                text = ngettext(
-                    "🔑 <b>{name}</b> is logging in. Your message has not been "
-                    "sent yet: it would land in the login.",
-                    "🔑 <b>{name}</b> is logging in. Your {count} messages "
-                    "have not been sent yet: they would land in the login.",
-                    held.count).format(count=held.count,
-                                       name=html.escape(mgd.full_label))
-                kb = held_kb(held.session_id, free_text=False, closable=False)
             else:
-                _blocked, dialog = await self._question_open(mgd)
-                held.question_sig = self._dialog_sig(dialog)
-                free = (dialog is not None and dialog.kind == "choice"
-                        and dialog.allows_free_text
-                        and len(held.batches) == 1
+                # A question takes a typed answer for its current part.
+                asked = self.bridge.open_question(mgd)
+                held.question_sig = f"{asked.rid}:{asked.index}" if asked else ""
+                free = (asked is not None and len(held.batches) == 1
                         and not _is_command(held.batches[0]))
-                if mgd.is_sdk:
-                    # Any SDK question takes a typed answer for its current part.
-                    asked = self.bridge.open_question(mgd)
-                    held.question_sig = f"{asked.rid}:{asked.index}" if asked else ""
-                    free = (asked is not None and len(held.batches) == 1
-                            and not _is_command(held.batches[0]))
-                # Esc on the feedback-drafts question throws the drafts away
-                # and exits, and on the trust question it exits too: not
-                # something to do on the way to sending text.
-                closable = dialog is None or dialog.kind not in ("drafts",
-                                                                 "trust")
                 text = ngettext(
                     "❓ <b>{name}</b> has an open question (it is above — you "
                     "may have missed it). Your message has not been sent yet, "
@@ -3360,7 +2265,7 @@ class CCBot:
                     "sent yet, so that they do not pick an option for you.",
                     held.count).format(count=held.count,
                                        name=html.escape(mgd.full_label))
-                kb = held_kb(held.session_id, free, closable)
+                kb = held_kb(held.session_id, free)
             try:
                 msg = await self.bot.send_message(
                     held.chat_id, text, parse_mode="HTML", reply_markup=kb)
@@ -3477,20 +2382,10 @@ class CCBot:
             log.info("held batch waits for the answer: id=%s items=%d",
                      held.session_id[:8], count)
         elif action == "esc":
-            if await self._drafts_open(mgd):
-                self._rehold(held)
-                await c.answer(_("The question has changed — it is above"),
-                               show_alert=True)
-                await self._ask_held(held, mgd)
-                return
             await c.answer(_("Closing the question…"))
-            self._typed(mgd)
-            if mgd.is_sdk:
-                await self.bridge.dismiss(mgd, "The user closed this question "
-                                               "to send a message instead.")
-            else:
-                await tmux.press_if(mgd.window_id, "Escape", _question_or_unready)
-            if not await self._wait_clear(mgd, _ESC_CLEAR):
+            await self.bridge.dismiss(mgd, "The user closed this question "
+                                           "to send a message instead.")
+            if self._question_open(mgd):
                 log.warning("held: Esc did not close the question id=%s",
                             held.session_id[:8])
                 self._rehold(held)
@@ -3505,7 +2400,7 @@ class CCBot:
                 await self._settle(msg, _(
                     "💬 Question in <b>{name}</b> closed, message sent").format(
                         name=name), held.session_id)
-        elif action == "ans" and mgd.is_sdk:
+        elif action == "ans":
             asked = self.bridge.open_question(mgd)
             if asked is None and not self.bridge.question_open(mgd):
                 # Answered meanwhile from its card: the text goes as it is.
@@ -3538,35 +2433,6 @@ class CCBot:
             await self._settle(msg, html.escape(note), held.session_id)
             if status == "done" and answered is not None and self._focus(chat_id, answered):
                 await self._say_focused(msg, answered)
-        elif action == "ans":
-            blocked, dialog = await self._question_open(mgd)
-            if not blocked:
-                await c.answer()
-                if await self._held_deliver_or_rehold(held, mgd):
-                    await self._settle(msg, _(
-                        "➡️ The question had closed — sent to <b>{name}</b> "
-                        "as an ordinary message").format(name=name),
-                        held.session_id)
-                return
-            free = next((o for o in dialog.options if o.is_free_text),
-                        None) if dialog is not None else None
-            if (free is None or len(held.batches) != 1
-                    or self._dialog_sig(dialog) != held.question_sig):
-                self._rehold(held)
-                await c.answer(_("The question has changed — it is above"),
-                               show_alert=True)
-                await self._ask_held(held, mgd)
-                return
-            await c.answer()
-            rt = self.watcher.runtimes.get(mgd.session_id)
-            await self._answer_free_text(
-                chat_id, mgd, free.number, _batch_text(held.batches[0]),
-                rt.dialog_msg_id if rt else None, held.batches[0][-1].message)
-            log.info("held batch typed as the answer: id=%s items=%d",
-                     held.session_id[:8], count)
-            await self._settle(msg, _(
-                "✏️ Sent to <b>{name}</b> as the answer to its question").format(
-                    name=name), held.session_id)
         else:
             self._rehold(held)
             await c.answer()
@@ -3594,26 +2460,6 @@ class CCBot:
         log.info("held batch delivered: id=%s items=%d",
                  held.session_id[:8], held.count)
         return []
-
-    async def _wait_clear(self, mgd, timeout: float) -> bool:
-        """Wait for the pane to stand without a question, two reads running."""
-        if mgd.is_sdk:
-            return not self.bridge.question_open(mgd)
-        deadline = time.monotonic() + timeout
-        clear = 0
-        while time.monotonic() < deadline:
-            await asyncio.sleep(0.3)
-            try:
-                raw = await tmux.capture(mgd.window_id)
-            except tmux.TmuxError:
-                return False
-            if _question_or_unready(raw):
-                clear = 0
-                continue
-            clear += 1
-            if clear >= 2:
-                return True
-        return False
 
     async def _held_loop(self, session_id: str) -> None:
         """Send the held text once the question is gone, for long enough.
@@ -3652,7 +2498,7 @@ class CCBot:
                                     count=held.count),
                             chat_id=held.chat_id, message_id=held.ask_id)
                     return
-                blocked, _dialog = await self._question_open(mgd)
+                blocked = self._question_open(mgd)
                 now = time.monotonic()
                 if blocked:
                     clear_since = 0.0
@@ -3829,109 +2675,20 @@ class CCBot:
     async def _deliver_after_launch(self, chat_id: int, session_id: str) -> None:
         """Hand the held batch to a session that has just been launched.
 
-        `tmux paste-buffer` does not care whether Claude is up yet: for the
-        first seconds the window still shows a shell prompt, and a prompt
-        pasted there would be run as a command. So the TUI is waited for, and
-        if it never appears the batch stays parked with the question asked
-        again — by then the new session is the active one, so "Current" is the
-        single tap that finishes the job.
+        The host answers a create once the session is up, so the batch can go
+        at once. A session started from /sessions rather than from the
+        question gets the question again, under its own card, with «▶️
+        Current» naming it.
         """
         mgd = self.store.get(session_id)
         parked = self._parked_of(chat_id)
         if mgd is None or parked is None:
             return
         if not parked.await_new:
-            # Started from /sessions rather than from the question: the card
-            # above still offers the sessions as they were, without this one.
-            # It is asked again under the new session's card, with «▶️
-            # Current» naming it — but only once the TUI is up, or that
-            # button pressed in the first seconds pastes the batch into a
-            # shell.
-            task = asyncio.create_task(self._reask_when_ready(chat_id, mgd))
-            self.expiries.add(task)
-            task.add_done_callback(self.expiries.discard)
-            return
-        if not await self._wait_ready(mgd):
-            # The usual reason is not slowness but a question: a directory
-            # Claude Code has not seen before is met with "Is this a project
-            # you trust?", which no amount of waiting answers. So the screen
-            # is sent along — that question has to be dealt with first — and
-            # the batch stays parked, with the new session now the active one,
-            # so «▶️ Current» is the single tap that finishes the job.
-            log.warning("launched session not ready for the parked batch: %s",
-                        session_id[:8])
-            parked.await_new = False
-            button = _("▶️ Current: {name}").format(name=mgd.full_label)
-            raw = ""
-            with contextlib.suppress(tmux.TmuxError):
-                raw = await tmux.capture(mgd.window_id)
-            if _trust_on_screen(raw):
-                # The watcher posts that question as a card with its own
-                # buttons; a bare screen of it here offered nothing to press
-                # (2026-11-12).
-                with contextlib.suppress(Exception):
-                    await self.bot.send_message(chat_id, _(
-                        "📁 <b>{name}</b> is in a folder Claude Code has not "
-                        "opened before, and it asks first whether you trust "
-                        "it — answer on its card with the buttons, then "
-                        "press «{button}».").format(
-                            name=html.escape(mgd.full_label),
-                            button=html.escape(button)),
-                        parse_mode="HTML")
-            else:
-                with contextlib.suppress(Exception):
-                    await self.bot.send_message(chat_id, _(
-                        "⏳ <b>{name}</b> is not taking text yet — it has "
-                        "just started, or it is asking something first. Here "
-                        "is its screen: deal with that, then press "
-                        "«{button}».").format(
-                            name=html.escape(mgd.full_label),
-                            button=html.escape(button)),
-                        parse_mode="HTML")
-                with contextlib.suppress(Exception):
-                    await self.watcher.send_screen(
-                        mgd.window_id, mgd.full_label, mgd.session_id)
             await self._ask_route(chat_id)
             return
         parked.await_new = False
         await self._deliver_parked(chat_id, mgd)
-
-    async def _reask_when_ready(self, chat_id: int, mgd) -> None:
-        """Move the question under a session started past it, once it is up.
-
-        Not ready in time means the window is asking something first (a new
-        directory is); the old card stays, and the next message re-asks.
-        This runs outside a handler, so a failure says so itself.
-        """
-        try:
-            if not await self._wait_ready(mgd):
-                log.info("no re-ask: %s not ready", mgd.session_id[:8])
-                return
-            parked = self._parked_of(chat_id)
-            if parked is not None and not parked.await_new:
-                await self._ask_route(chat_id)
-        except Exception:
-            log.exception("re-ask after launch failed: chat=%s", chat_id)
-            with contextlib.suppress(Exception):
-                await self.bot.send_message(
-                    chat_id, _("❌ Could not pass that on — see /log"))
-
-    async def _wait_ready(self, mgd, timeout: float = _LAUNCH_READY) -> bool:
-        """Wait until the window shows Claude Code's input box.
-
-        A dialog covers the bottom of the pane, so this is False while one is
-        open — which is right: a session with a question on the screen would
-        read a pasted prompt as the answer to it.
-        """
-        if mgd.is_sdk:
-            return True         # the host answers a create once it is up
-        deadline = time.monotonic() + timeout
-        while True:
-            if screenmod.is_ready(await tmux.capture(mgd.window_id)):
-                return True
-            if time.monotonic() >= deadline:
-                return False
-            await asyncio.sleep(0.5)
 
     async def _route_callback(self, c: CallbackQuery, msg: Message,
                               chat_id: int, arg: str) -> None:
@@ -4019,7 +2776,7 @@ class CCBot:
                  if parked is None or parked.forwarded
                  else _("📋 <b>Where should the messages go?</b>"))
         text = title + "\n\n" + _(
-            "A session in tmux takes them straight away. ➕ starts a new one "
+            "A running session takes them straight away. ➕ starts a new one "
             "in a directory you pick, 🕘 brings a closed one back — either "
             "way they are sent as soon as it is up.")
         await self._safe_edit(msg, text, parse_mode="HTML",
@@ -4133,11 +2890,11 @@ class CCBot:
             "text chat=%s pending=%s active=%s reply_to=%s text=%r",
             chat_id, pend_kind, (active or "—")[:8],
             getattr(getattr(m, "reply_to_message", None), "message_id", None),
-            loginmod.mask(text)[:120],
+            authlogin.mask(text)[:120],
         )
-        code = loginmod.code_in(text) if m.forward_origin is None else ""
+        code = authlogin.code_in(text) if m.forward_origin is None else ""
         if code and await self._enter_login_code(
-                m, code, lone=bool(loginmod.code_of(text))):
+                m, code, lone=bool(authlogin.code_of(text))):
             return
 
         pend = self.pending.pop(chat_id, None)
@@ -4221,23 +2978,6 @@ class CCBot:
                 else:
                     self.prompt_cards.pop(chat_id, None)
                 return
-        elif pend and pend[0] == "dialog":
-            _kind, session_id, number, card_id, _ts = pend
-            mgd = self.store.get(self.store.follow(session_id))
-            if not mgd:
-                await m.answer(_("That session is gone"))
-                return
-            await self._answer_free_text(m.chat.id, mgd, number, text,
-                                         card_id, m)
-            return
-        elif pend and pend[0] == "note":
-            _kind, session_id, card_id, sig, _ts = pend
-            mgd = self.store.get(self.store.follow(session_id))
-            if not mgd:
-                await m.answer(_("That session is gone"))
-                return
-            await self._answer_note(m.chat.id, mgd, text, card_id, sig, m)
-            return
 
         if text.startswith("/"):
             cmd = text[1:].split()[0].split("@")[0].lower()
@@ -4268,7 +3008,7 @@ class CCBot:
         chat_id = msg.chat.id
         # Pressing anything else abandons a half-finished prompt, so a later
         # message is not swallowed as a directory path.
-        if not data.startswith(("nd:manual", "dt:", "dn:", "hfind", "done")):
+        if not data.startswith(("nd:manual", "hfind", "done")):
             self.pending.pop(chat_id, None)
             # Not deleted: the button pressed may have turned one of them
             # into its own card («Cancel» on a rename opens the session).
@@ -4278,22 +3018,6 @@ class CCBot:
             # The marker left on a settled card: it answers, it does nothing.
             await c.answer(_("Already answered — the button only shows what "
                              "was chosen"))
-            return
-
-        if data.startswith("grp:"):
-            # A divider row still has to answer a tap: it says what the group
-            # below it is, which is exactly what the icons cannot say alone.
-            if data == "grp:term":
-                await c.answer(_(
-                    "Sessions from your own terminal. The bot can only watch "
-                    "them — their input is out of reach. «Move into tmux» "
-                    "restarts one under the bot, context and all."),
-                    show_alert=True)
-            else:
-                await c.answer(_(
-                    "Sessions the bot started in tmux windows. Full control "
-                    "from the chat: text, dialog buttons, Esc, /clear."),
-                    show_alert=True)
             return
 
         if data == "ls":
@@ -4317,21 +3041,16 @@ class CCBot:
                 await c.answer(_("Restarting…"))
                 await self._restart_all(chat_id)
                 await self._show_update(c)
-            elif action.startswith(("one:", "force:")):
-                kind, short = action.split(":", 1)
-                mgd = self._resolve(short)
+            elif action.startswith("one:"):
+                mgd = self._resolve(action[4:])
                 if not mgd:
                     await c.answer(_stale_card("/update"), show_alert=True)
                     return
                 await c.answer(_("Restarting…"))
-                await self._restart_one(chat_id, mgd, force=kind == "force")
+                await self._restart_one(chat_id, mgd)
                 await self._show_update(c)
             else:
                 await c.answer()
-            return
-
-        if data.startswith("orph:"):
-            await self._restore_callback(c, msg, chat_id, data[5:])
             return
 
         if data.startswith("hold:"):
@@ -4383,21 +3102,6 @@ class CCBot:
                 return
             await c.answer(_("Looking…"))
             await self._show_search(msg, query, page=int(data[3:] or 0))
-            return
-
-        if data == "foreign":   # legacy entry point, kept harmless
-            await c.answer()
-            views = await sess.foreign_views(self.store)
-            lines = [_("🔒 <b>Terminal sessions</b> (driven only from the "
-                       "computer)"), ""]
-            for v in views:
-                extra = f" — {v.waiting_for}" if v.waiting_for else ""
-                lines.append(f"• <b>{v.name}</b> [{v.status}{extra}]\n  <code>{v.short_cwd}</code>")
-            lines.append("")
-            lines.append(_("To drive a session from a phone, start it with "
-                           "{button}.").format(button=_("➕ New session")))
-            await msg.edit_text("\n".join(lines), parse_mode="HTML",
-                                      reply_markup=sessions_kb([], views))
             return
 
         if data == "adddir":
@@ -4505,8 +3209,7 @@ class CCBot:
                 msg,
                 await self._managed_details(mgd), parse_mode="HTML",
                 reply_markup=confirm_kb(
-                    mgd.session_id, "managed", asking=self._asking(mgd),
-                    movable=not mgd.is_sdk and self.settings.sdk != "off"),
+                    mgd.session_id, "managed", asking=self._asking(mgd)),
             )
             # The list became this session's card: a reply to it now means
             # this session, not whichever one happens to be active.
@@ -4536,480 +3239,26 @@ class CCBot:
             await self._show_session_card(c, mgd)
             return
 
-        if data.startswith("dc:"):
-            # "Chat about this": press it and stop there. The row rejects the
-            # question with "start by asking them what they would like to
-            # clarify", so Claude asks first and anything sent along with the
-            # press is read only after that — collecting the text here is what
-            # made the same message have to be typed twice.
-            _kind, short, num = data.split(":", 2)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            label = self._option_label(
-                screenmod.find_dialog(await tmux.capture(mgd.window_id)),
-                int(num))
-            self._typed(mgd)
-            await tmux.send_keys(mgd.window_id, str(int(num)))
-            await self._question_dropped(c, msg, chat_id, mgd, label)
-            return
-
-        if data.startswith("dx:"):
-            # A row with no digit ("Chat about this" under a list whose
-            # options carry previews): walk the cursor onto it, then Enter.
-            _kind, short, idx, tag = data.split(":", 3)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            moved = self._focus(chat_id, mgd)
-            label = await self._press_extra(mgd, int(idx), tag)
-            if label is None:
-                await c.answer(_("It did not go through"))
-                await msg.answer(
-                    _("⚠️ That row did not go through — the question is "
-                      "still open in <b>{name}</b>, and the buttons still "
-                      "work.").format(name=html.escape(mgd.full_label)),
-                    parse_mode="HTML")
-                return
-            if screenmod.is_chat_label(label):
-                await self._question_dropped(c, msg, chat_id, mgd, label)
-                return
-            if label[:1] in ("▸", "▾"):
-                # The /model list folded in or out: nothing was picked, the
-                # same picker comes back below as a card with the new list.
-                await c.answer()
-                self.watcher.release_dialog(mgd.session_id)
-                await self._mark(msg, _("⬇️ The new list is below"))
-                if moved:
-                    await self._say_focused(msg, mgd)
-                return
-            await c.answer(_("Picked"))
-            if moved:
-                await self._say_focused(msg, mgd)
-            self.watcher.release_dialog(mgd.session_id)
-            await self._mark(msg, f"✅ {label}")
-            return
-
-        if data.startswith("tab:"):
-            # The parts of a multi-part question are tabs; ←/→ walk them and
-            # stop at either end, so a press that changed nothing says so
-            # instead of retiring a card whose question is still there.
-            _kind, short, way = data.split(":", 2)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            moved = self._focus(chat_id, mgd)
-            before = await self._dialog_now(mgd)
-            if before is None or not before.sections:
-                await c.answer(_("The question has already closed"))
-                return
-            self._typed(mgd)
-            if any(o.selected and o.is_free_text for o in before.options):
-                # On the input row ←/→ move the caret, not the part
-                # (measured on 2.1.310); one row up they switch again.
-                await tmux.send_keys(mgd.window_id, "Up")
-                await asyncio.sleep(_NAV_SETTLE)
-            await tmux.send_keys(mgd.window_id,
-                                 "Left" if way == "prev" else "Right")
-            await asyncio.sleep(_NAV_SETTLE)
-            ok, after = await self._read_dialog(mgd)
-            if not ok or after is None:
-                # No part of a question is ever without a dialog, so this is
-                # a frame mid-redraw or a failed read: the card stays.
-                await c.answer(_("It did not go through"))
-                return
-            if self._dialog_sig(after) == self._dialog_sig(before):
-                await c.answer(_("This is the first part") if way == "prev"
-                               else _("This is the last part"))
-                return
-            await c.answer()
-            if moved:
-                await self._say_focused(msg, mgd)
-            self.watcher.release_dialog(mgd.session_id)
-            await self._mark(msg, _("⬅️ Went to the previous part")
-                             if way == "prev"
-                             else _("➡️ Went to the next part"))
-            return
-
-        if data.startswith("dn:"):
-            # "n to add notes": the note is the answer, so it is collected
-            # first and typed into the note field in one go.
-            mgd = self._resolve(data[3:])
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            dialog = await self._dialog_now(mgd)
-            if dialog is None or not dialog.notes:
-                await c.answer(_("The question has already closed"))
-                return
-            moved = self._focus(chat_id, mgd)
-            # The question is remembered too: a note typed for this part must
-            # not land in the next one, which takes notes just the same.
-            self.pending[chat_id] = ("note", mgd.session_id, msg.message_id,
-                                     self._dialog_sig(dialog), time.time())
-            await c.answer()
-            if moved:
-                await self._say_focused(msg, mgd)
-            await msg.answer(_("📝 Write the note — it answers this question "
-                               "in <b>{name}</b> instead of an option.").format(
-                                   name=html.escape(mgd.full_label)),
-                             parse_mode="HTML")
-            return
-
-        if data.startswith("dm:"):
-            # A checkbox of a multi-select question: ticking is not answering,
-            # so the card stays and the tick is drawn back onto its button —
-            # a press with nothing visible after it is the bug this fixes.
-            _kind, short, num = data.split(":", 2)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            moved = self._focus(chat_id, mgd)
-            await self._answer_dialog(mgd, int(num), confirm=False)
-            await asyncio.sleep(_NAV_SETTLE)
-            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            opt = next((o for o in (dialog.options if dialog else [])
-                        if o.number == int(num)), None)
-            if moved:
-                await self._say_focused(msg, mgd)
-            if opt is None:
-                await c.answer(_("Ticked {n}").format(n=num))
-            else:
-                await c.answer(f"{'☑' if opt.checked else '☐'} {opt.label}")
-            if dialog is not None:
-                try:
-                    await msg.edit_reply_markup(
-                        reply_markup=dialog_kb(
-                            mgd.session_id, dialog,
-                            self.watcher.settings_scope.get(mgd.session_id, "s")))
-                except Exception:
-                    log.debug("tick redraw skipped", exc_info=True)
-            return
-
-        if data.startswith("mdl:") or data.startswith("eff:"):
-            _kind, short, num, scope = data.split(":", 3)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            want = "model" if data.startswith("mdl:") else "effort"
-            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            if dialog is None or dialog.kind != want:
-                await c.answer(_("That dialog has left the screen"),
-                               show_alert=True)
-                return
-            opt = next((o for o in dialog.options if o.number == int(num)), None)
-            if opt is None:
-                await c.answer(_("That option has left the screen"),
-                               show_alert=True)
-                return
-            if dialog.session_only:
-                # With Ultracode armed Enter keeps the pick to this session,
-                # and there is no other way to commit it.
-                scope = "s"
-            # Answering from a card is working inside that session, so what
-            # the user types next belongs to it.
-            self._focus(chat_id, mgd)
-            await c.answer(_("Switching to {label}…").format(label=opt.label))
-            picked = (await self._pick_model(mgd, opt.number, scope)
-                      if want == "model"
-                      else await self._pick_effort(mgd, opt.number, scope))
-            # The card is this message from here on: the watcher must not
-            # redraw the list over the answer.
-            self.watcher.forget_dialog(mgd.session_id)
-            title = (_("🧠 Model") if want == "model"
-                     else _("◉ Reasoning effort"))
-            if not picked:
-                await msg.answer(
-                    _("⚠️ Could not set {title} to <b>{label}</b>. Open "
-                      "🖥 Screen and pick it by hand.").format(
-                          title=title, label=html.escape(opt.label)),
-                    parse_mode="HTML")
-                return
-            # A conversation with history is asked once more ("Switch model?"
-            # — the cache is lost). The pick has not happened yet, so saying
-            # it has would be a lie; the question reaches the chat as a card
-            # of its own from the watcher.
-            await asyncio.sleep(_NAV_SETTLE)
-            after = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            if after is not None and after.kind == "choice":
-                log.info("%s pick awaits confirmation id=%s", want,
-                         mgd.session_id[:8])
-                text = _("{title} of <b>{name}</b> → <b>{label}</b>?\n"
-                         "Claude Code asks to confirm the switch — answer on "
-                         "the card below.").format(
-                             title=title, name=html.escape(mgd.full_label),
-                             label=html.escape(opt.label))
-                try:
-                    await msg.edit_text(text, parse_mode="HTML")
-                except Exception:
-                    await msg.answer(text, parse_mode="HTML")
-                return
-            body = (_("{title} of <b>{name}</b> → <b>{label}</b>\n"
-                      "Only for this session; new sessions keep their default.")
-                    if scope == "s" else
-                    _("{title} of <b>{name}</b> → <b>{label}</b>\n"
-                      "Saved as the default for new sessions too."))
-            text = body.format(title=title, name=html.escape(mgd.full_label),
-                               label=html.escape(opt.label))
-            try:
-                await msg.edit_text(text, parse_mode="HTML")
-            except Exception:
-                await msg.answer(text, parse_mode="HTML")
-            return
-
-        if data.startswith("etg:"):
-            # The switch beside the /effort scale (Ultracode, 2.1.330). Tab
-            # only arms it — a level button commits it — and the card follows
-            # the screen on the watcher's next tick. The button carries the
-            # state it was drawn with: a second tap, or a tap on a card the
-            # screen has moved past, must not flip it back.
-            _kind, short, drawn = data.split(":", 2)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            was_on = drawn == "1"
-
-            def armed_as_drawn(raw: str) -> bool:
-                d = screenmod.find_dialog(raw)
-                return (d is not None and d.kind == "effort"
-                        and bool(d.toggle) and d.toggle_on == was_on)
-
-            moved = self._focus(chat_id, mgd)
-            self._typed(mgd)
-            if not await tmux.press_if(mgd.window_id, "Tab", armed_as_drawn):
-                now = await self._dialog_now(mgd)
-                if now is not None and now.kind == "effort" and now.toggle:
-                    # A second tap, or a card the screen has moved past.
-                    await c.answer(
-                        (_("{name} is already on") if now.toggle_on
-                         else _("{name} is already off")).format(
-                             name=now.toggle))
-                    return
-                await c.answer(_("That dialog has left the screen"),
-                               show_alert=True)
-                return
-            after = None
-            deadline = time.monotonic() + _TRUST_MOVE_WAIT
-            while time.monotonic() < deadline:
-                await asyncio.sleep(0.2)
-                after = await self._dialog_now(mgd)
-                if (after is not None and after.kind == "effort"
-                        and after.toggle_on != was_on):
-                    break
-            else:
-                # The Tab went in under the check, so it did land: a slow
-                # redraw is not a failure, and a second Tab would undo it.
-                await c.answer(_("Pressed — the card follows once the "
-                                 "screen redraws"))
-                return
-            await c.answer(
-                (_("{name} on — now pick a level") if after.toggle_on
-                 else _("{name} off — now pick a level")).format(
-                     name=after.toggle))
-            if moved:
-                await self._say_focused(msg, mgd)
-            return
-
-        if data.startswith("dsc:"):
-            # The scope switch on a settings card. Nothing is typed into the
-            # terminal here, so the dialog stays exactly as it was and only
-            # the keyboard is redrawn.
-            _kind, short, scope = data.split(":", 2)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            if dialog is None or dialog.kind not in ("model", "effort"):
-                await c.answer(_("That dialog has left the screen"),
-                               show_alert=True)
-                return
-            self.watcher.settings_scope[mgd.session_id] = scope
-            await c.answer(_("Only this session") if scope == "s"
-                           else _("This session and new ones"))
-            with contextlib.suppress(Exception):
-                await msg.edit_reply_markup(
-                    reply_markup=settings_kb(mgd.session_id, dialog, scope))
-            return
-
-        if data.startswith("sub:"):
-            mgd = self._resolve(data[4:])
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            if dialog is None or dialog.submit_index is None:
-                await c.answer(_("That question has left the screen"),
-                               show_alert=True)
-                return
-            if dialog.multi_select and not dialog.checked:
-                await c.answer(_("Tick at least one option first"),
-                               show_alert=True)
-                return
-            picked = ", ".join(o.label for o in dialog.checked)
-            more = dialog.submit_label.lower() == "next"
-            moved = self._focus(chat_id, mgd)
-            await c.answer(_("Sending…"))
-            if not await self._submit_dialog(mgd):
-                await msg.answer(_("⚠️ Could not press <b>{label}</b>. Open "
-                                   "🖥 Screen and press it by hand.").format(
-                                       label=html.escape(dialog.submit_label)),
-                                 parse_mode="HTML")
-                return
-            self.watcher.release_dialog(mgd.session_id)
-            await self._mark(msg, f"✅ {picked or dialog.submit_label}")
-            if more:
-                # The next section arrives as its own question from the
-                # watcher; this only says the press landed.
-                await msg.answer(_("➡️ Moving on to the next question"))
-            elif moved:
-                await self._say_focused(msg, mgd)
-            else:
-                await msg.answer(
-                    _("✅ Answer sent: <b>{picked}</b>").format(
-                        picked=html.escape(picked)) if picked
-                    else _("✅ Answer sent"),
-                    parse_mode="HTML")
-            return
-
-        if data.startswith("d:") or data.startswith("dt:"):
-            free = data.startswith("dt:")
-            _kind, short, num = data.split(":", 2)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            moved = self._focus(chat_id, mgd)
-            if free:
-                self.pending[chat_id] = ("dialog", mgd.session_id, int(num),
-                                         msg.message_id, time.time())
-                await c.answer()
-                await msg.answer(_("Write your own answer — it goes to "
-                                   "<b>{name}</b>").format(
-                                       name=html.escape(mgd.full_label)),
-                                 parse_mode="HTML")
-                return
-            label = self._option_label(
-                screenmod.find_dialog(await tmux.capture(mgd.window_id)),
-                int(num))
-            landed = await self._answer_dialog(mgd, int(num))
-            await c.answer(_("Picked {n}").format(n=num) if landed
-                           else _("It did not go through"))
-            if moved:
-                await self._say_focused(msg, mgd)
-            if not landed:
-                # The question is still standing, so the card keeps its
-                # buttons: retiring them here is what left a session waiting
-                # with no way back to it from the chat.
-                await msg.answer(
-                    _("⚠️ Option <b>{n}</b> did not go through — the question "
-                      "is still open in <b>{name}</b>. The buttons still "
-                      "work: press it again, or walk the list with ⬆️⬇️ and "
-                      "confirm with ✅.").format(
-                          n=num, name=html.escape(mgd.full_label)),
-                    parse_mode="HTML")
-                return
-            self.watcher.release_dialog(mgd.session_id)
-            await self._mark(msg, f"✅ {num}. {label}")
-            return
-
-        if data.startswith("f:"):
-            v = await self._find_foreign(data[2:])
-            if not v:
-                await c.answer(_("Session not found"), show_alert=True)
-                return
-            await c.answer()
-            await account.fill([v])
-            await self._safe_edit(
-                msg,
-                self._foreign_details(v), parse_mode="HTML",
-                reply_markup=confirm_kb(v.session_id, "foreign"),
-            )
-            return
-
-        if data.startswith("grab:"):
-            v = await self._find_foreign(data[5:])
-            if not v:
-                await c.answer(_("Session not found"), show_alert=True)
-                return
-            await c.answer(_("Moving it over…"))
-            if await self._adopt_foreign(chat_id, v):
-                await self._settle(msg, _(
-                    "🔗 Moving <b>{name}</b> into tmux").format(
-                        name=html.escape(v.name)), v.session_id)
-            return
-
-        if data.startswith("fx:"):
-            v = await self._find_foreign(data[3:])
-            if not v:
-                await c.answer(_("Session not found"), show_alert=True)
-                return
-            await c.answer(_("Ending it…"))
-            if await self._end_foreign(chat_id, v):
-                await self._show_sessions(c)
-            return
-
-        if data.startswith("rsa:"):
-            # "Restart anyway" under a refusal that named background work.
-            mgd = self._resolve(data[4:])
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            await c.answer(_("Restarting…"))
-            await self._drop_button(msg, data, _("🔁 Restarting anyway"))
-            await self._restart_one(chat_id, mgd, force=True)
-            return
-
-        if data.startswith("anyway:"):
-            # The way past a "busy" refusal the bot may have got wrong.
-            _kind, short, what = data.split(":", 2)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            if what == "login":
-                await c.answer()
-                await self._mark(msg, _("📤 /{command} sent").format(command=what))
-                await self._start_login(msg, mgd, "", force=True)
-            elif what in ("model", "effort") and await self._open_picker(
-                    c, mgd, what, force=True):
-                await self._mark(msg, _("📤 /{command} sent").format(command=what))
-            elif what not in ("model", "effort"):
-                await c.answer()
-            return
-
         if data.startswith("cfg:"):
             _kind, short, kind = data.split(":", 2)
             mgd = self._resolve(short)
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
-            if kind in ("model", "effort") and mgd.is_sdk:
+            if kind in ("model", "effort"):
+                # The list is Claude Code's own (`get_server_info()`): a
+                # table in the bot went stale the day Fable 5.1 shipped.
                 await self._sdk_picker(c, msg, mgd, kind)
                 return
-            if kind in ("model", "effort"):
-                # The list is Claude Code's own: /model and /effort are asked
-                # in the session and their dialog becomes the card (the
-                # watcher renders it). A table in the bot went stale the day
-                # Fable 5.1 shipped — it offered "Fable 5" and no way to
-                # reach ultracode at all.
-                await self._open_picker(c, mgd, kind)
-                return
-            st = await self._status(mgd)
+            mode = self.bridge.mode(mgd)
             await c.answer()
             await msg.edit_text(
                 _("{title} for <b>{name}</b>\nCurrently: <code>{value}</code>"
                   ).format(title=_("🔐 Permission mode"),
                            name=html.escape(mgd.full_label),
-                           value=st.mode or "—"),
+                           value=mode or "—"),
                 parse_mode="HTML",
-                reply_markup=choice_kb(mgd.session_id, kind, st.mode),
+                reply_markup=choice_kb(mgd.session_id, kind, mode),
             )
             return
 
@@ -5033,33 +3282,6 @@ class CCBot:
             await self._show_session_card(c, mgd)
             return
 
-        if data.startswith("pic:"):
-            mgd = self._resolve(data[4:])
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            await c.answer(_("Drawing…"))
-            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            if dialog and dialog.preview:
-                await self.watcher.send_preview(mgd.session_id, dialog)
-            else:
-                await msg.answer(_("The diagram has left the screen"))
-            return
-
-        if data.startswith("nav:"):
-            _kind, short, direction = data.split(":", 2)
-            mgd = self._resolve(short)
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            key = {"up": "Up", "down": "Down", "enter": "Enter"}[direction]
-            self._focus(chat_id, mgd)
-            self._typed(mgd)
-            await tmux.send_keys(mgd.window_id, key)
-            await c.answer("⬆️" if key == "Up" else
-                           ("⬇️" if key == "Down" else _("Selected")))
-            return
-
         if data.startswith("svc:"):
             action = data[4:]
             if action == "show":
@@ -5079,13 +3301,8 @@ class CCBot:
             elif action == "go":
                 await c.answer(_("Restarting…"))
                 await self._do_restart(chat_id)
-            elif action.startswith("sdk:") and not self.settings.sdk_locked:
-                self.settings.sdk = action[4:]
-                log.info("sdk switch -> %s", self.settings.sdk)
-                await c.answer(_("New sessions: {mode}").format(
-                    mode=sdk_label(self.settings.sdk)))
-                await self._safe_edit(msg, await self._service_text(),
-                                      parse_mode="HTML", reply_markup=self._service_kb())
+            else:
+                await c.answer()
             return
 
         if data.startswith("ren:"):
@@ -5102,22 +3319,6 @@ class CCBot:
 
         if data.startswith("lang:"):
             await self._set_language(c, data[5:])
-            return
-
-        if data.startswith("dr:"):
-            await self._drafts_callback(c, msg, chat_id, data[3:])
-            return
-
-        if data.startswith("tr:"):
-            await self._trust_callback(c, msg, chat_id, data[3:])
-            return
-
-        if data.startswith("bw:"):
-            await self._side_callback(c, msg, data[3:])
-            return
-
-        if data.startswith("lg:"):
-            await self._login_callback(c, msg, chat_id, data[3:])
             return
 
         if data.startswith("rq:"):
@@ -5138,16 +3339,6 @@ class CCBot:
             await self._send_again(c, msg, chat_id, data[6:])
             return
 
-        if data.startswith("nds:"):
-            await c.answer(_("Starting…"))
-            idx = int(data[4:]) if data[4:].isdigit() else -1
-            if 0 <= idx < len(self.dir_choices):
-                sid = await self._create(chat_id, self.dir_choices[idx], backend="sdk")
-                if sid:
-                    await self._settle(
-                        msg, self._dir_picked(self.dir_choices[idx]), sid)
-            return
-
         if data.startswith("k:"):
             _kind, short, action = data.split(":", 2)
             mgd = self._resolve(short)
@@ -5157,7 +3348,9 @@ class CCBot:
             await self._session_action(c, mgd, action)
             return
 
-        await c.answer()
+        # A button of a card from an older build whose action is gone: said,
+        # not swallowed.
+        await c.answer(_stale_card("/sessions"), show_alert=True)
 
     async def _show_langs(self, target: Message | CallbackQuery) -> None:
         """Offer the languages that are actually compiled and installed."""
@@ -5201,111 +3394,6 @@ class CCBot:
             # rewritten — otherwise the "/" menu keeps the old language.
             await self._publish_menu()
             await self._show_langs(c)
-
-    async def _find_foreign(self, short: str):
-        for v in await sess.foreign_views(self.store):
-            if v.session_id.startswith(short):
-                return v
-        return None
-
-    def _foreign_details(self, v) -> str:
-        lines = [f"🔗 <b>{html.escape(v.name)}</b>", ""]
-        if v.work_dir:
-            lines.append(_("📁 Working in <code>{path}</code>").format(
-                path=html.escape(v.work_dir)))
-            lines.append(_("🚀 Launched from <code>{path}</code>").format(
-                path=html.escape(v.cwd)))
-        else:
-            lines.append(f"📁 <code>{html.escape(v.cwd)}</code>")
-        status = sess.status_label(v.status) + (
-            f" — {v.waiting_for}" if v.waiting_for else "")
-        lines.append(_("📊 Status: <b>{status}</b>").format(status=status))
-        if v.account:
-            lines.append(account_line(v.account))
-        if v.started_at:
-            started = datetime.fromtimestamp(v.started_at)
-            lines.append(_("🕘 Started: {when}").format(
-                when=started.strftime(_("%d.%m %H:%M"))))
-        if v.pid:
-            lines.append(f"⚙️ PID: <code>{v.pid}</code>")
-        lines.append(f"🔑 <code>{v.session_id}</code>")
-        lines.append("")
-        lines.append(_("⚠️ This session belongs to your terminal — it cannot "
-                       "be driven from here."))
-        lines.append(_(
-            "{button} sends the process a <b>termination signal</b> (SIGTERM) "
-            "and brings <code>claude --resume</code> up in a tmux window — from "
-            "the directory the session started in, so the project context stays "
-            "the same. The terminal window goes dark, the history survives.\n"
-            "A terminal session's stdin cannot be reached from outside, so a "
-            "clean <code>/exit</code> is impossible here — which is exactly why "
-            "the signal is needed."
-        ).format(button="«" + _("🔗 Move into tmux") + "»"))
-        if v.status == "busy":
-            lines.append("")
-            lines.append(_("🔴 The session is <b>working</b> right now — better "
-                           "to wait until it finishes."))
-        return "\n".join(lines)
-
-    async def _stop_foreign(self, chat_id: int, v) -> Message | None:
-        """SIGTERM a session running in somebody else's terminal.
-
-        Returns the progress message, for the caller to say in it what happens
-        next; None when the process is still there, and then the reason is
-        already in the chat.
-        """
-        if not v.pid:
-            await self.bot.send_message(
-                chat_id, _("❌ Unknown PID — I cannot stop this one"))
-            return None
-        note = await self.bot.send_message(
-            chat_id,
-            _("⏳ Stopping {name} (PID {pid})…").format(name=v.name, pid=v.pid))
-        try:
-            os.kill(v.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            await note.edit_text(_("❌ Not allowed to stop that process"))
-            return None
-        for _tick in range(int(_EXIT_TIMEOUT / 0.5)):
-            await asyncio.sleep(0.5)
-            if not _pid_alive(v.pid):
-                break
-        if _pid_alive(v.pid):
-            await note.edit_text(
-                _("⚠️ Process {pid} did not exit within {seconds} s. End the "
-                  "session in the terminal and try again.").format(
-                      pid=v.pid, seconds=f"{_EXIT_TIMEOUT:.0f}")
-            )
-            return None
-        return note
-
-    async def _adopt_foreign(self, chat_id: int, v) -> bool:
-        """Stop a terminal session and bring it back up inside tmux."""
-        note = await self._stop_foreign(chat_id, v)
-        if note is None:
-            return False
-        await note.edit_text(_("✅ {name} stopped — bringing it up in tmux…"
-                              ).format(name=v.name))
-        return await self._create(chat_id, v.cwd, resume=v.session_id) is not None
-
-    async def _end_foreign(self, chat_id: int, v) -> bool:
-        """Stop a terminal session and leave it stopped.
-
-        The way out that "move into tmux" is not: ending a session from the
-        card would otherwise mean bringing it up again first, only to close it.
-        """
-        note = await self._stop_foreign(chat_id, v)
-        if note is None:
-            return False
-        await note.edit_text(
-            _("❌ Session <b>{name}</b> has ended.\n"
-              "The transcript stays — it can be brought back from 🕘 in "
-              "the list.").format(name=html.escape(v.name)),
-            parse_mode="HTML",
-        )
-        return True
 
     async def _find_closed(self, short: str):
         return await sess.closed_view(self.store, short, roots=self.roots)
@@ -5420,38 +3508,21 @@ class CCBot:
         )
 
     def _asking(self, mgd) -> bool:
-        """Does a card stand that «🔔 Show the question» could post again?
-
-        Read off the watcher's cards, not the agent list: its "waiting" also
-        covers a /btw overlay and lags behind an answer.
-        """
-        if mgd.is_sdk:
-            return self.bridge.question_open(mgd)
-        rt = self.watcher.runtimes.get(mgd.session_id)
-        return rt is not None and any((
-            rt.dialog_msg_id, rt.blocked_msg_id, rt.login_msg_id))
+        """Does a card stand that «🔔 Show the question» could post again?"""
+        return self.bridge.question_open(mgd)
 
     def _show_question(self, mgd) -> bool:
         """Have the card this session waits on posted again at the bottom.
 
-        An SDK session's cards are the bridge's, posted again by its tick.
-
-        False when no card stands, i.e. the session is not waiting on a
-        choice. The login card keeps its buttons (they are guarded by its
-        step); a question or a screen moves, see `Watcher.request_repost`.
+        The cards are the bridge's, posted again by its tick. False when no
+        card stands, i.e. the session is not waiting on a choice.
         """
-        if mgd.is_sdk:
-            return self.bridge.request_repost(mgd)
-        rt = self.watcher.runtimes.get(mgd.session_id)
-        if rt is not None and rt.login_msg_id is not None:
-            self.watcher.repost_login(mgd.session_id)
-            return True
-        return self.watcher.request_repost(mgd.session_id)
+        return self.bridge.request_repost(mgd)
 
     async def _managed_details(self, mgd) -> str:
         views = await sess.managed_views(self.store)
         view = next((v for v in views if v.session_id == mgd.session_id), None)
-        st = await self._status(mgd)
+        mode = self.bridge.mode(mgd)
         u = status_feed.read(mgd.session_id)
 
         lines = [f"▶️ <b>{html.escape(mgd.full_label)}</b>", ""]
@@ -5463,12 +3534,11 @@ class CCBot:
             await account.fill([view])
             if view.account:
                 lines.append(account_line(view.account))
-        model = (u.model if u else "") or st.model
-        bits = [b for b in (model, f"◉ {u.effort}" if u and u.effort else st.effort,
-                            f"🔐 {st.mode_label}" if st.mode else "") if b]
+        bits = [b for b in (u.model if u else "", f"◉ {u.effort}" if u and u.effort else "",
+                            f"🔐 {_mode_label(mode)}" if mode else "") if b]
         if bits:
             lines.append("🧠 " + " · ".join(bits))
-        behind = updates.stale(mgd.session_id, await updates.installed())
+        behind = self._stale(mgd, await updates.installed())
         if behind:
             lines.append(_("⬆️ Claude Code <code>{old}</code> — "
                            "<code>{new}</code> is on disk; /update restarts it "
@@ -5493,10 +3563,6 @@ class CCBot:
         started = datetime.fromtimestamp(mgd.created_at)
         lines.append(_("🕘 Created: {when}").format(
             when=started.strftime(_("%d.%m %H:%M"))))
-        if mgd.is_sdk:
-            lines.append(_("🧪 Runs through the Agent SDK (session host)."))
-        else:
-            lines.append(f"🖥 tmux: <code>{mgd.window_id}</code>")
         lines.append(f"🔑 <code>{mgd.session_id}</code>")
         return "\n".join(lines)
 
@@ -5524,25 +3590,15 @@ class CCBot:
                 _("📦 Transcript: {size} KB").format(size=f"{v.size / 1024:.0f}"))
         lines.append(f"🔑 <code>{v.session_id}</code>")
         lines.append("")
-        lines.append(_("{button} runs <code>claude --resume</code> in a new "
-                       "tmux window — the session picks up all of its "
-                       "context.").format(button="«" + _("▶️ Resume") + "»"))
+        lines.append(_("{button} brings the session back through the session "
+                       "host — it picks up all of its context.").format(
+                           button="«" + _("▶️ Resume") + "»"))
         return "\n".join(lines)
 
     async def _account_of(self, mgd) -> str:
         """The account this managed session runs under, "" when not known."""
         return await account.email_for(
             mgd.session_id, since=await sess.started_at(mgd.session_id))
-
-    async def _status(self, mgd):
-        """Model / effort / permission mode as shown in the status line."""
-        if mgd.is_sdk:
-            # No screen: the mode is what the host last reported for it.
-            return screenmod.Status(mode=self.bridge.mode(mgd))
-        try:
-            return screenmod.read_status(await tmux.capture(mgd.window_id))
-        except tmux.TmuxError:
-            return screenmod.Status()
 
     async def _session_card(
         self, mgd, note: str = "",
@@ -5557,23 +3613,21 @@ class CCBot:
         view = next((v for v in views if v.session_id == mgd.session_id), None)
         if not view:
             return None
-        st = await self._status(mgd)
-        # Permission mode lives only on screen; everything else is exact.
+        mode = self.bridge.mode(mgd)
         u = status_feed.read(mgd.session_id)
         bits = []
-        model = (u.model if u else "") or st.model
-        effort = (u.effort if u else "") or st.effort
-        ctx = f"{u.ctx_pct}%" if u and u.ctx_pct is not None else (
-            f"{st.context_pct}%" if st.context_pct else "")
+        model = u.model if u else ""
+        effort = u.effort if u else ""
+        ctx = f"{u.ctx_pct}%" if u and u.ctx_pct is not None else ""
         if model:
             bits.append(f"🧠 {model}")
         if effort:
             bits.append(f"◉ {effort}")
-        if st.mode:
-            bits.append(f"🔐 {st.mode_label}")
+        if mode:
+            bits.append(f"🔐 {_mode_label(mode)}")
         if ctx:
             bits.append(f"ctx {ctx}")
-        behind = updates.stale(mgd.session_id, await updates.installed())
+        behind = self._stale(mgd, await updates.installed())
         if behind:
             bits.append(f"⬆️ {behind} → {updates.cached_installed()}")
         text = (_("▶️ Active session: <b>{name}</b>").format(
@@ -5586,8 +3640,7 @@ class CCBot:
         await account.fill([view])
         if view.account:
             text += "\n" + account_line(view.account)
-        return text, session_kb(view, self._asking(mgd), sdk=mgd.is_sdk,
-                                movable=not mgd.is_sdk and self.settings.sdk != "off")
+        return text, session_kb(view, self._asking(mgd))
 
     async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
         msg = _editable(c)
@@ -5623,550 +3676,24 @@ class CCBot:
         if msg:
             self.store.remember_message(msg.message_id, mgd.session_id)
 
-    async def _open_picker(self, c: CallbackQuery, mgd, kind: str,
-                           force: bool = False) -> bool:
-        """Ask the session for its own /model or /effort dialog.
-
-        The card is not built here: the dialog is a dialog like any other, so
-        the watcher renders it a tick later, with the buttons that belong to
-        it. That is also what makes a `/model` the user types by hand come out
-        as a card rather than as "a screen I do not understand".
-        """
-        if mgd.is_sdk:
-            await c.answer(_sdk_not_yet(), show_alert=True)
-            return False
-        raw = await tmux.capture(mgd.window_id)
-        open_now = screenmod.find_dialog(raw)
-        if open_now is not None and open_now.kind == kind:
-            # Already on screen, so its card is already in the chat: asking
-            # again would type "/model" into the dialog itself.
-            await c.answer(_("It is already open — scroll down to its card"))
-            return False
-        if open_now is not None and open_now.kind in ("model", "effort"):
-            # The other settings dialog: close it rather than refusing, so
-            # moving from the model list to the effort slider takes one tap.
-            self._typed(mgd)
-            await tmux.send_keys(mgd.window_id, "Escape")
-            await asyncio.sleep(_NAV_SETTLE)
-        elif not force:
-            busy = await self._busy_reason(mgd)
-            if busy:
-                # A card, not an alert: the reading can be wrong (a background
-                # monitor once passed for work, 2026-11-09), and the card
-                # carries the way past it.
-                await c.answer()
-                here = _editable(c)
-                if here is not None:
-                    await self._ack(here, self._busy_text(mgd, busy, kind), mgd,
-                                    reply_markup=anyway_kb(mgd.session_id, kind))
-                return False
-        try:
-            # Forced or not, never typed over a question: there "/model"
-            # would be swallowed and its Enter would pick an option.
-            await self._send_prompt(mgd, f"/{kind}", guard=True)
-        except tmux.Refused:
-            await c.answer(_("It is waiting for an answer — deal with that "
-                             "first"), show_alert=True)
-            return False
-        await c.answer(_("Asking Claude Code…"))
-        return True
-
-    @staticmethod
-    def _busy_text(mgd, reason: str, command: str) -> str:
-        """A refusal that names the session and says the bot may be wrong."""
-        return _("⏳ <b>{name}</b>: {reason}.\nIf the bot misreads the "
-                 "session, send /{command} anyway.").format(
-                     name=html.escape(mgd.full_label), reason=reason,
-                     command=command)
-
-    async def _busy_reason(self, mgd) -> str:
-        """Why the session cannot be asked a question right now, if it cannot.
-
-        Both sources are needed, as in `_restart_session`: the agent list
-        knows about dialogs the parser cannot read, the screen knows about
-        work the list has not caught up with.
-        """
-        agents = await sess.live_agents(force=True)
-        status = next((a.get("status", "") for a in agents
-                       if a.get("sessionId") == mgd.session_id), "")
-        try:
-            raw = await tmux.capture(mgd.window_id)
-        except tmux.TmuxError:
-            if status == "busy":
-                return _("It is working right now — press ⏸ Esc or wait")
-            return _("Its tmux window is gone")
-        if screenmod.is_busy(raw):
-            return _("It is working right now — press ⏸ Esc or wait")
-        if screenmod.find_dialog(raw) is not None or status == "waiting":
-            return _("It is waiting for an answer — deal with that first")
-        # The list says "busy" for background shells and subagents, and for a
-        # turn parked on a usage limit, while the input line takes commands —
-        # /login is wanted exactly then (2026-11-05, 0585ce76).
-        if status == "busy" and not screenmod.busy_behind(raw):
-            return _("It is working right now — press ⏸ Esc or wait")
-        return ""
-
-    async def _pick_model(self, mgd, number: int, scope: str) -> bool:
-        """Commit option *number* of the /model picker.
-
-        Enter saves the pick as the default for new sessions; "s" keeps it to
-        this session. Both act on the row under the cursor, so the cursor is
-        walked there first, re-reading the screen after each move — a key on
-        the wrong row switches the wrong model. A digit is no shortcut: the
-        expanded list ("More models", 2.1.330) runs to 14, and "1" of "14"
-        would commit the first row.
-        """
-        def position(d: screenmod.Dialog) -> int | None:
-            if d.kind != "model":
-                return None
-            return screenmod.model_nav_index(d, number)
-
-        if await self._walk_to(mgd, position) is None:
-            log.warning("could not reach model option %d id=%s",
-                        number, mgd.session_id[:8])
-            return False
-        self._typed(mgd)
-        if scope == "d":
-            await tmux.send_keys(mgd.window_id, "Enter")
-        else:
-            await tmux.send_literal(mgd.window_id, "s")
-        log.info("model set id=%s option=%d scope=%s",
-                 mgd.session_id[:8], number, scope)
-        return True
-
-    async def _pick_effort(self, mgd, number: int, scope: str) -> bool:
-        """Walk the /effort slider to level *number* and commit it.
-
-        The slider has no digits at all: ←/→ move a marker between the level
-        names and Enter ("s" for this session) takes it. It stops at the ends
-        rather than wrapping, so the distance is honest — but the screen is
-        re-read after every move anyway, because committing one level off is
-        indistinguishable from success afterwards.
-        """
-        for _attempt in range(8):
-            dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-            if dialog is None or dialog.kind != "effort":
-                return False
-            at = next((i for i, o in enumerate(dialog.options) if o.current),
-                      None)
-            target = next((i for i, o in enumerate(dialog.options)
-                           if o.number == number), None)
-            if at is None or target is None:
-                return False
-            delta = target - at
-            self._typed(mgd)
-            if delta == 0:
-                if scope == "d" or dialog.session_only:
-                    await tmux.send_keys(mgd.window_id, "Enter")
-                else:
-                    await tmux.send_literal(mgd.window_id, "s")
-                log.info("effort set id=%s level=%d scope=%s",
-                         mgd.session_id[:8], number, scope)
-                return True
-            key = "Right" if delta > 0 else "Left"
-            for _step in range(abs(delta)):
-                await tmux.send_keys(mgd.window_id, key)
-            await asyncio.sleep(_NAV_SETTLE)
-        log.warning("could not reach effort level %d id=%s",
-                    number, mgd.session_id[:8])
-        return False
-
     async def _apply_setting(self, mgd, kind: str, value: str) -> bool:
-        if mgd.is_sdk:
-            # The SDK switches the mode directly; "manual" is its "default".
-            try:
-                await self.bridge.link.call("set_mode", name=mgd.name,
-                                            mode="default" if value == "manual" else value)
-            except HostError as exc:
-                log.warning("sdk set_mode failed id=%s: %s", mgd.session_id[:8], exc)
-                return False
-            return True
-        return await self._apply_tmux_setting(mgd, kind, value)
-
-    async def _apply_tmux_setting(self, mgd, kind: str, value: str) -> bool:
-        # Only the permission mode comes through here: the model and the
-        # effort level are picked in Claude Code's own dialogs, which is the
-        # only way to choose between "this session" and "the default too".
-        # Permission mode has no slash command — Shift+Tab cycles
-        # auto → manual → accept edits → plan, so press until it matches.
-        for _press in range(len(_MODE_CYCLE) + 1):
-            st = await self._status(mgd)
-            if st.mode == value:
-                return True
-            self._typed(mgd)
-            await tmux.send_keys(mgd.window_id, "BTab")
-            await asyncio.sleep(0.7)
-        return (await self._status(mgd)).mode == value
-
-    async def _answer_dialog(self, mgd, number: int,
-                             confirm: bool = True) -> bool:
-        """Pick option *number*, and report whether the question actually went.
-
-        Digits select directly, which is immune to where the cursor happens to
-        be. Beyond 9 there is no digit shortcut, so walk the list explicitly.
-
-        🔴 A digit does not answer every question. When the options carry a
-        preview, the digit only walks the cursor onto that row so the drawing
-        beside it can be read, and the question stays open — measured on the
-        live TUI, 2.1.278, whose footer says `Enter to select · ↑/↓ to
-        navigate · n to add notes · Esc to cancel` and promises no digits at
-        all. Pressing it and calling that an answer left the session sitting
-        on the question with the card's buttons already retired: on
-        2026-09-22 the press at 15:47 reached the transcript at 15:56, typed
-        by hand, and the two presses before it went the same way.
-
-        So the screen is read back. Gone, or showing a different question,
-        means the answer landed; still showing this one with the cursor on
-        the row means the row is only highlighted and wants its Enter.
-        `confirm=False` is for the callers whose digit is not meant to close
-        anything — a checkbox tick, the /model picker's default.
-        """
-        before = await self._dialog_now(mgd)
-        self._typed(mgd)
-        if 1 <= number <= 9:
-            await tmux.send_keys(mgd.window_id, str(number))
-        else:
-            for _step in range(30):
-                await tmux.send_keys(mgd.window_id, "Up")
-            for _step in range(number - 1):
-                await tmux.send_keys(mgd.window_id, "Down")
-            await tmux.send_keys(mgd.window_id, "Enter")
-        if not confirm:
-            return True
-        return await self._confirm_pick(mgd, number, before)
-
-    async def _dialog_now(self, mgd):
-        """The dialog on the screen right now, or None if the read failed."""
-        if mgd.is_sdk:
-            return None
+        """The permission mode, switched by the host; "manual" is its "default"."""
         try:
-            return screenmod.find_dialog(await tmux.capture(mgd.window_id))
-        except tmux.TmuxError:
-            return None
-
-    @staticmethod
-    def _dialog_sig(dialog) -> str:
-        """Which question this is — the watcher's signature, same rule."""
-        if dialog is None:
-            return ""
-        return dialog.question + "|" + "|".join(o.label for o in dialog.options)
-
-    async def _confirm_pick(self, mgd, number: int, before) -> bool:
-        """Make sure the digit answered, and press Enter for it when it did not.
-
-        Comparing the question, not merely "is a dialog there", is what keeps
-        the extra Enter off the *next* question: a multi-part AskUserQuestion
-        draws its following section the moment the previous one is answered,
-        and an Enter meant for the old row would answer the new one blind.
-        A checkbox list is left alone for the same reason — its digits tick
-        rather than answer, and Enter there is `_submit_dialog`'s business.
-        """
-        sig = self._dialog_sig(before)
-        for _attempt in range(3):
-            await asyncio.sleep(_NAV_SETTLE)
-            dialog = await self._dialog_now(mgd)
-            if dialog is None or self._dialog_sig(dialog) != sig:
-                return True
-            if dialog.multi_select:
-                return True
-            opt = next((o for o in dialog.options if o.number == number), None)
-            if opt is not None and opt.checked is not None:
-                return True          # a checkbox: ticking is not answering
-            if opt is None or not opt.selected:
-                # The digit moved nothing: this list does not take digits and
-                # the cursor is elsewhere. Walking it there is `nav:`'s job.
-                log.warning("digit %d did not reach its row id=%s",
-                            number, mgd.session_id[:8])
-                return False
-            self._typed(mgd)
-            await tmux.send_keys(mgd.window_id, "Enter")
-        log.warning("option %d would not commit id=%s", number,
-                    mgd.session_id[:8])
-        return False
-
-    async def _answer_free_text(self, chat_id: int, mgd, number: int,
-                                text: str, card_id: int | None,
-                                reply_to: Message) -> None:
-        """Type *text* into the dialog's free-text row as the answer.
-
-        The one input that may type over a question: it is meant for it.
-        """
-        self._typed(mgd)
-        now = await self._dialog_now(mgd)
-        row = next((o for o in (now.options if now else [])
-                    if o.number == number), None)
-        if row is None or not row.selected:
-            # With the cursor already on the input row the digit is not a
-            # shortcut but a character, and it opened the answer ("3ab").
-            await tmux.send_keys(mgd.window_id, str(number))
-            await asyncio.sleep(_NAV_SETTLE)
-        # "Type something" is a line inside the dialog: the digit only
-        # moves the cursor onto it, and what follows is typed into the row,
-        # so Enter answers the question itself. If the dialog has gone the
-        # row was not an input line and the text travels as a prompt.
-        before = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-        await self._send_prompt(mgd, text)
-        if before is not None and before.multi_select:
-            # A multi-select list keeps standing: the typed row is filled
-            # in, and Submit is still what sends the set. Only that list —
-            # an ordinary question answered by the Enter draws its next
-            # section at once, and a Submit pressed there would send that
-            # section's set unchosen (2026-11-21, d2032fff: "could not reach
-            # Submit" right after a typed answer).
-            await asyncio.sleep(_NAV_SETTLE)
-            after = await self._dialog_now(mgd)
-            if (after is not None and after.multi_select
-                    and after.question == before.question):
-                await self._tick_typed_row(mgd, before.question, number)
-                await self._submit_dialog(mgd)
-        self.watcher.release_dialog(mgd.session_id)
-        if card_id is not None:
-            with contextlib.suppress(Exception):
-                await self.bot.edit_message_reply_markup(
-                    chat_id=chat_id, message_id=card_id,
-                    reply_markup=done_kb(f"✏️ {text}"))
-        self._focus(chat_id, mgd)
-        await self._ack(reply_to, _("✏️ Answer sent to <b>{name}</b> · it is "
-                                    "the active session now").format(
-            name=html.escape(mgd.full_label)), mgd)
-
-    async def _tick_typed_row(self, mgd, question: str, number: int) -> None:
-        """Tick the free-text row of a multi-select list once text is in it.
-
-        The digit ticks the row, and the Enter that follows the typed text
-        unticks it again: the text stays, the box is empty, and Submit sent
-        the set without it — the review page then said "Some questions are
-        unanswered" (2.1.330, measured 2026-11-21). Enter on the row ticks
-        it, and is pressed only while that very row stands unticked under
-        the cursor.
-        """
-        def unticked(raw: str) -> bool:
-            d = screenmod.find_dialog(raw)
-            if d is None or d.question != question:
-                return False
-            row = next((o for o in d.options if o.number == number), None)
-            return row is not None and row.checked is False and row.selected
-
-        def row_of(d: screenmod.Dialog) -> int | None:
-            # Options come first in navigation order, so the index is the
-            # position; a changed question has no such row.
-            if d.question != question:
-                return None
-            return next((i for i, o in enumerate(d.options)
-                         if o.number == number), None)
-
-        now = await self._dialog_now(mgd)
-        row = next((o for o in (now.options if now else [])
-                    if o.number == number), None)
-        if row is None or row.checked is not False:
-            return
-        if not row.selected and await self._walk_to(mgd, row_of) is None:
-            log.warning("typed row left unticked id=%s option=%d",
-                        mgd.session_id[:8], number)
-            return
-        self._typed(mgd)
-        if await tmux.press_if(mgd.window_id, "Enter", unticked):
-            log.info("ticked the typed row id=%s option=%d",
-                     mgd.session_id[:8], number)
-            await asyncio.sleep(_NAV_SETTLE)
-        else:
-            log.warning("typed row left unticked id=%s option=%d",
-                        mgd.session_id[:8], number)
-
-    async def _submit_dialog(self, mgd) -> bool:
-        """Press the unnumbered Submit (or Next) row of a multi-select question.
-
-        The digits of such a list *tick* boxes, and no digit reaches that row —
-        it is only navigable, which is why answering one from the chat used to
-        dead-end with the boxes ticked and nothing sent. The cursor and the
-        row are both known in navigation order (`Dialog.cursor_index` /
-        `submit_index`), so their distance is the number of presses; the screen
-        is re-read after every move because Enter on the wrong row would answer
-        the question with that single option instead of the ticked set.
-        """
-        if await self._walk_to(mgd, lambda d: d.submit_index) is None:
-            log.warning("could not reach Submit id=%s", mgd.session_id[:8])
+            await self.bridge.link.call("set_mode", name=mgd.name,
+                                        mode="default" if value == "manual" else value)
+        except HostError as exc:
+            log.warning("set_mode failed id=%s: %s", mgd.session_id[:8], exc)
             return False
-        self._typed(mgd)
-        await tmux.send_keys(mgd.window_id, "Enter")
-        await asyncio.sleep(_NAV_SETTLE)
-        await self._confirm_review(mgd)
-        log.info("submitted a multi-select dialog id=%s", mgd.session_id[:8])
         return True
-
-    async def _walk_to(self, mgd, index_of: Callable[[screenmod.Dialog], int | None]
-                       ) -> screenmod.Dialog | None:
-        """Put the cursor on the row *index_of* names, in navigation order.
-
-        For the rows no digit reaches. The screen is re-read after every
-        move, because an Enter on the wrong row answers the question with
-        it. Returns the dialog with the cursor in place, or None when the
-        row is not there (the question changed, or it never had one).
-        """
-        for _attempt in range(4):
-            dialog = await self._dialog_now(mgd)
-            target = index_of(dialog) if dialog is not None else None
-            if dialog is None or target is None:
-                return None
-            if dialog.cursor_index is None:
-                # Nothing highlighted: one press puts the cursor on the list.
-                self._typed(mgd)
-                await tmux.send_keys(mgd.window_id, "Down")
-                await asyncio.sleep(_NAV_SETTLE)
-                continue
-            delta = target - dialog.cursor_index
-            if delta == 0:
-                return dialog
-            key = "Down" if delta > 0 else "Up"
-            self._typed(mgd)
-            for _step in range(abs(delta)):
-                await tmux.send_keys(mgd.window_id, key)
-            await asyncio.sleep(_NAV_SETTLE)
-        return None
-
-    async def _press_extra(self, mgd, index: int, tag: str) -> str | None:
-        """Press the unnumbered row *index* (`Dialog.extras`); its label or None.
-
-        The row is held to the label the card was drawn with (*tag*, see
-        `row_tag`), so a question that changed since — or under the walk — is
-        not answered with whatever row now sits at that position.
-        """
-        before = await self._dialog_now(mgd)
-        if (before is None or index >= len(before.extras)
-                or row_tag(before.extras[index]) != tag):
-            return None
-        label = before.extras[index]
-
-        def position(d: screenmod.Dialog) -> int | None:
-            if index < len(d.extras) and d.extras[index] == label:
-                return d.extra_indexes[index]
-            return None
-
-        if await self._walk_to(mgd, position) is None:
-            log.warning("could not reach row %r id=%s", label,
-                        mgd.session_id[:8])
-            return None
-        self._typed(mgd)
-        await tmux.send_keys(mgd.window_id, "Enter")
-        # A row that redraws the list ("More models") can take longer than
-        # one settle, so the change is waited for, not judged once.
-        deadline = time.monotonic() + _TRUST_MOVE_WAIT
-        while True:
-            await asyncio.sleep(_NAV_SETTLE)
-            ok, after = await self._read_dialog(mgd)
-            if (not ok or after is None or time.monotonic() >= deadline
-                    or self._dialog_sig(after) != self._dialog_sig(before)):
-                break
-        if not ok or (after is not None
-                      and self._dialog_sig(after) == self._dialog_sig(before)):
-            log.warning("row %r would not commit id=%s", label,
-                        mgd.session_id[:8])
-            return None
-        return label
-
-    async def _read_dialog(self, mgd) -> tuple[bool, screenmod.Dialog | None]:
-        """The dialog on the screen, and whether the screen could be read.
-
-        For the checks after a press, where "no dialog" means the question
-        left — which a failed capture must not pass for.
-        """
-        try:
-            return True, screenmod.find_dialog(await tmux.capture(mgd.window_id))
-        except tmux.TmuxError:
-            return False, None
-
-    async def _question_dropped(self, c: CallbackQuery, msg: Message,
-                                chat_id: int, mgd, label: str) -> None:
-        """Say that "Chat about this" was pressed and where the next text goes."""
-        self._focus(chat_id, mgd)
-        await c.answer(_("Question dropped"))
-        self.watcher.release_dialog(mgd.session_id)
-        await self._mark(msg, f"💬 {label}")
-        await msg.answer(
-            _("💬 Question dropped in <b>{name}</b>. It is the active "
-              "session now — write what you want to clarify and it goes "
-              "there.").format(name=html.escape(mgd.full_label)),
-            parse_mode="HTML")
-
-    async def _answer_note(self, chat_id: int, mgd, text: str,
-                           card_id: int | None, sig: str,
-                           reply_to: Message) -> None:
-        """Answer the question with a note: `n`, the text, Enter.
-
-        Measured on 2.1.310: `n` opens a note field under the preview, and
-        Enter there answers the question with the note alone — the
-        transcript reads "(no option selected) notes: …".
-        """
-        before = await self._dialog_now(mgd)
-        if before is None or not before.notes or self._dialog_sig(before) != sig:
-            await self._ack(reply_to, _(
-                "⚠️ The question in <b>{name}</b> has already closed — the "
-                "note was not sent.").format(name=html.escape(mgd.full_label)),
-                mgd)
-            return
-        self._typed(mgd)
-        await tmux.send_keys(mgd.window_id, "n")
-        await asyncio.sleep(_NAV_SETTLE)
-        await self._send_prompt(mgd, text)
-        await asyncio.sleep(_NAV_SETTLE)
-        ok, after = await self._read_dialog(mgd)
-        if not ok or (after is not None and self._dialog_sig(after) == sig):
-            if ok:
-                # The field is still open with the text in it: Esc alone
-                # closes it and keeps the text, which would ride along with
-                # the next answer, and a digit would be typed into it.
-                self._typed(mgd)
-                await tmux.send_keys(mgd.window_id, "C-u")
-                await tmux.send_keys(mgd.window_id, "Escape")
-            await self._ack(reply_to, _(
-                "⚠️ The note did not go through — the question is still open "
-                "in <b>{name}</b>.").format(name=html.escape(mgd.full_label)),
-                mgd)
-            return
-        self.watcher.release_dialog(mgd.session_id)
-        if card_id is not None:
-            with contextlib.suppress(Exception):
-                await self.bot.edit_message_reply_markup(
-                    chat_id=chat_id, message_id=card_id,
-                    reply_markup=done_kb(f"📝 {text}"))
-        self._focus(chat_id, mgd)
-        await self._ack(reply_to, _("📝 Note sent to <b>{name}</b> · it is "
-                                    "the active session now").format(
-            name=html.escape(mgd.full_label)), mgd)
-
-    async def _confirm_review(self, mgd) -> None:
-        """Answer the review page that Submit leads to.
-
-        "Review your answers" asks for exactly what the chat has
-        just confirmed, so leaving it to the user would make one answer cost
-        two taps. Only that page is answered on its own — it is recognised by
-        its marker (`screen.is_review`), never by an option merely captioned
-        "Submit".
-        """
-        dialog = screenmod.find_dialog(await tmux.capture(mgd.window_id))
-        if dialog is None or not screenmod.is_review(dialog):
-            return
-        opt = screenmod.submit_option(dialog)
-        if opt is None:
-            return
-        await self._answer_dialog(mgd, opt.number)
 
     async def _session_action(self, c: CallbackQuery, mgd, action: str) -> None:
-        if mgd.is_sdk and action not in _SDK_ACTIONS:
-            await c.answer(_sdk_not_yet(), show_alert=True)
-            return
-        if mgd.is_sdk and action == "recap":
+        if action == "recap":
             await c.answer()
             await self._send_recap(c.message.chat.id if c.message else self.cfg.owner, mgd)
             return
-        if mgd.is_sdk and action == "esc":
+        if action == "esc":
             await c.answer(_("Interrupting…"))
             await self._interrupt_sdk(_editable(c), mgd, "")
-            return
-        if action == "esc":
-            self._typed(mgd)
-            await tmux.send_keys(mgd.window_id, "Escape")
-            await c.answer(_("Esc sent"))
         elif action == "ask":
             if not self._show_question(mgd):
                 await c.answer(_("It is not asking anything right now"),
@@ -6174,14 +3701,14 @@ class CCBot:
                 return
             await c.answer(_("The question is below"))
         elif action == "screen":
-            await c.answer(_("Taking a snapshot…"))
-            await self.watcher.send_screen(mgd.window_id, mgd.full_label, mgd.session_id)
+            # A card from before the recap took the screen's place.
+            await c.answer()
+            await self._send_recap(c.message.chat.id if c.message else self.cfg.owner, mgd)
         elif action == "usage":
             await c.answer()
             await self.bot.send_message(
                 c.message.chat.id if c.message else self.cfg.owner,
                 usage_report(mgd.full_label, status_feed.read(mgd.session_id),
-                             await self._status(mgd),
                              await self._account_of(mgd)),
                 parse_mode="HTML",
             )
@@ -6190,36 +3717,21 @@ class CCBot:
                 await c.answer(_("It is waiting for an answer — deal with "
                                  "that first"), show_alert=True)
                 return
-            self.watcher.screen_when_idle(mgd.session_id)
-            await c.answer(_("/context sent — the breakdown comes back as a "
-                             "screen"))
-        elif action in ("tosdk", "tosdkf", "tosdkl", "tosdklf"):
-            await c.answer(_("Moving it…"))
-            here = _editable(c)
-            in_list = action.startswith("tosdkl")
-            await self._move_to_sdk(here.chat.id if here else self.cfg.owner, mgd,
-                                    force=action.endswith("f"),
-                                    card=here if in_list else None)
+            await c.answer(_("/context sent — the breakdown comes in a moment"))
         elif action == "restart":
-            # Answered first: /exit and the resume take seconds, and a button
-            # that seems to do nothing gets pressed again.
+            # Answered first: the resume takes seconds, and a button that
+            # seems to do nothing gets pressed again.
             await c.answer(_("Restarting…"))
             await self._restart_one(
                 c.message.chat.id if c.message else self.cfg.owner, mgd)
         elif action == "compact":
             # Claude Code's own /compact: it summarises the context in place
-            # and keeps the session id, so nothing has to be rebound — and it
-            # says so on the terminal only, hence the promised screen.
+            # and keeps the session id, so nothing has to be rebound.
             if not await self._send_command(mgd, "/compact"):
                 await c.answer(_("It is waiting for an answer — deal with "
                                  "that first"), show_alert=True)
                 return
-            if mgd.is_sdk:
-                await c.answer(_("/compact sent — the chat is told when it is done"))
-                return
-            self.watcher.screen_when_idle(mgd.session_id)
-            await c.answer(_("/compact sent — the result comes back as a "
-                             "screen when it finishes"))
+            await c.answer(_("/compact sent — the chat is told when it is done"))
         elif action == "clear":
             if not await self._send_command(mgd, "/clear"):
                 await c.answer(_("It is waiting for an answer — deal with "
@@ -6231,11 +3743,11 @@ class CCBot:
             await c.answer()
             here = _editable(c)
             if here is not None:
-                await self._start_login(here, mgd, "")
+                await self._start_auth_login(here, mgd)
         elif action == "close":
-            # Answered first: `/exit` and the wait for it can outlast
-            # Telegram's patience with an unanswered callback, and a button
-            # that does nothing for eight seconds gets pressed again.
+            # Answered first: the host's shutdown can outlast Telegram's
+            # patience with an unanswered callback, and a button that does
+            # nothing for eight seconds gets pressed again.
             await c.answer(_("Ending it…"))
             name = mgd.full_label
             if not await self._close(mgd.session_id):
@@ -6252,7 +3764,7 @@ class CCBot:
                 parse_mode="HTML",
             )
         else:
-            await c.answer()
+            await c.answer(_stale_card("/sessions"), show_alert=True)
 
     # ------------------------------------------------------------------- run
     # Shown in Telegram's "/" menu, so the commands are discoverable.
@@ -6263,7 +3775,7 @@ class CCBot:
         ("menu", N_("Controls of the session you are talking to")),
         ("new", N_("New session in a chosen directory")),
         ("usage", N_("Quota and context, without asking Claude")),
-        ("screen", N_("Terminal snapshot, or where an SDK session stopped")),
+        ("screen", N_("Where the session stopped")),
         ("esc", N_("Interrupt what Claude is doing")),
         ("clear", N_("Clear the active session's context")),
         ("rename", N_("Give a session your own name")),
@@ -6352,24 +3864,16 @@ class CCBot:
         if not sess.claude_bin():
             await self.bot.send_message(
                 self.cfg.owner,
-                _("⚠️ I could not find the <code>claude</code> executable. "
-                  "Lists of live sessions will be empty.\n"
+                _("⚠️ I could not find the <code>claude</code> executable: "
+                  "the Claude Code version on disk cannot be read, and the "
+                  "session host most likely cannot start sessions either.\n"
                   "Set the path in .env: "
                   "<code>CCBOT_CLAUDE_BIN=/path/to/claude</code>"),
                 parse_mode="HTML",
             )
-        await tmux.ensure_session()
-        if not status_feed.available():
-            log.warning(
-                "statusline tee is not active — metrics will be scraped off "
-                "the screen; see the README section on exact metrics"
-            )
         dropped = media.cleanup()
         if dropped:
             log.info("removed %d stale attachments", dropped)
-        stale = status_feed.cleanup()
-        if stale:
-            log.info("removed %d stale status payloads", stale)
         self.watcher.start()
         self.bridge.start()
         log.info("polling started")

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: claude-tg-bot 1.0\n"
 "Report-Msgid-Bugs-To: https://github.com/\n"
-"POT-Creation-Date: 2026-11-24 19:45+0000\n"
+"POT-Creation-Date: 2026-11-24 20:29+0000\n"
 "PO-Revision-Date: 2026-08-24 20:08+0000\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -19,35 +19,22 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: ccbot/bot.py:192
+#: ccbot/bot.py:164
 msgid ""
 "🔄 <b>Restart the bot?</b>\n"
 "\n"
-"Claude's sessions are unaffected: they live in tmux, and the unit is set up "
-"to stop the bot alone (<code>KillMode=process</code>). Once it is back, the "
-"watcher picks the transcripts up where it left off.\n"
+"Claude's sessions are unaffected: they live in the session host, a "
+"service of their own. Once the bot is back, it picks up the host's events"
+" where it left off.\n"
 "\n"
-"Only what is in the process's memory is lost: a half-finished request («send"
-" me a path», «send me a name»), attachments waiting for a caption, and the "
-"note that says «this question has already been shown» — an open dialog may "
-"arrive in the chat a second time.\n"
+"Only what is in the process's memory is lost: a half-finished request "
+"(«send me a path», «send me a name») and attachments waiting for a "
+"caption.\n"
 "\n"
 "It usually takes 5–10 seconds."
 msgstr ""
-"🔄 <b>Restart the bot?</b>\n"
-"\n"
-"Claude's sessions are unaffected: they live in tmux, and the unit is set up "
-"to stop the bot alone (<code>KillMode=process</code>). Once it is back, the "
-"watcher picks the transcripts up where it left off.\n"
-"\n"
-"Only what is in the process's memory is lost: a half-finished request («send"
-" me a path», «send me a name»), attachments waiting for a caption, and the "
-"note that says «this question has already been shown» — an open dialog may "
-"arrive in the chat a second time.\n"
-"\n"
-"It usually takes 5–10 seconds."
 
-#: ccbot/bot.py:207
+#: ccbot/bot.py:177
 msgid ""
 "⚠️ The bot was started by hand rather than by systemd — once it exits "
 "nothing will bring it back, and there will be nothing left to drive the "
@@ -73,7 +60,7 @@ msgstr ""
 "\n"
 "After that <code>/restart</code> will work."
 
-#: ccbot/bot.py:220
+#: ccbot/bot.py:190
 msgid ""
 "🤖 <b>Claude Code session dispatcher</b>\n"
 "\n"
@@ -94,35 +81,32 @@ msgid ""
 "\n"
 "<b>Acting on a session</b>\n"
 "/usage — how much of the 5-hour and 7-day quota is spent, and\n"
-"   how full this session's context is. Read off the status line,\n"
-"   so it is instant, costs no tokens and does not disturb the\n"
-"   session. Not to be confused with <code>/context</code>: that is\n"
-"   Claude Code's own breakdown of which files, tools and messages\n"
-"   the context is spent on, drawn in the session.\n"
+"   how full this session's context is. Taken from what the\n"
+"   session last reported, so it is instant, costs no tokens and\n"
+"   does not disturb the session. Not to be confused with\n"
+"   <code>/context</code>: that is Claude Code's own breakdown of\n"
+"   which files, tools and messages the context is spent on.\n"
 "   «🗜 /compact» on the card sums the conversation up and carries\n"
 "   on with the summary instead of the history: the session, its\n"
-"   name and its id all stay, and the screen with the result\n"
-"   arrives once it is done.\n"
+"   name and its id all stay.\n"
 "   «🔁 Restart» next to it relaunches the session with its\n"
-"   context (<code>/exit</code>, then resume). If background tasks\n"
-"   are running in it, it says which and asks before stopping them.\n"
-"/screen — a text snapshot of the terminal (an SDK session: where it stopped)"
-"\n"
-"/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
+"   context.\n"
+"/screen — where the session stopped: its last request and answer\n"
+"/esc — <b>interrupt what Claude is doing</b>.\n"
 "   The session stays alive and its context is untouched.\n"
 "/clear — clear the session's context. The session lives on,\n"
 "   its history is gone.\n"
-"/rename <i>name</i> — your own name instead of <code>project-1a2b</code>.\n"
+"/rename <i>name</i> — your own name instead of <code>project-1a2b</code>."
+"\n"
 "   Sent bare, from the \"/\" menu, it asks for the name and takes\n"
 "   your next message as it. (<code>/rename -</code> gives the\n"
 "   automatic one back.) Until you name it, the list shows the\n"
 "   topic Claude came up with itself.\n"
-"/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
-"   the tmux window closes. The transcript stays — the session can\n"
-"   be brought back from 🕘 in the list.\n"
+"/exit — <b>end the session</b>: Claude shuts down. The transcript\n"
+"   stays — the session can be brought back from 🕘 in the list.\n"
 "\n"
-"Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,"
-"\n"
+"Any other <code>/command</code> (<code>/model</code>, "
+"<code>/compact</code>,\n"
 "<code>/cost</code>…) is passed to Claude as it is.\n"
 "\n"
 "<b>The bot itself</b>\n"
@@ -134,7 +118,7 @@ msgid ""
 "   this one run out). The sign-in link comes here, the code from\n"
 "   the page goes back as a message. The other sessions switch to\n"
 "   the new account with their next request, without a restart.\n"
-"/service — uptime, code version, tmux state, restart button\n"
+"/service — uptime, code version, session host state, restart button\n"
 "/restart — restart the bot (Claude's sessions are unaffected)\n"
 "/log — the last lines of the journal\n"
 "/dirs — directories offered when starting a session\n"
@@ -152,7 +136,7 @@ msgid ""
 "\n"
 "↪️ <b>Forwarded</b> messages ask where they should go, instead of\n"
 "going to the active session: «▶️ Current», «📋 Another session»\n"
-"(the sessions in tmux, ➕ a new one, 🕘 a closed one to bring\n"
+"(the running sessions, ➕ a new one, 🕘 a closed one to bring\n"
 "back) or «🗑 Discard». Anything you send while the question is\n"
 "open joins the same batch, so the words that explain a forward\n"
 "travel with it. Forwarding as a reply to a session's message\n"
@@ -161,141 +145,112 @@ msgid ""
 "When Claude asks a question, buttons with the options arrive."
 msgstr ""
 
-#: ccbot/bot.py:359
+#: ccbot/bot.py:325
 #, python-brace-format
-msgid "📋 <b>Sessions</b> — {count} managed"
-msgid_plural "📋 <b>Sessions</b> — {count} managed"
-msgstr[0] "📋 <b>Sessions</b> — {count} managed"
-msgstr[1] "📋 <b>Sessions</b> — {count} managed"
+msgid "📋 <b>Sessions</b> — {count} running"
+msgid_plural "📋 <b>Sessions</b> — {count} running"
+msgstr[0] ""
+msgstr[1] ""
 
-#: ccbot/bot.py:363
+#: ccbot/bot.py:329
 #, python-brace-format
 msgid ", {count} waiting for you"
 msgid_plural ", {count} waiting for you"
 msgstr[0] ", {count} waiting for you"
 msgstr[1] ", {count} waiting for you"
 
-#: ccbot/bot.py:366
-msgid "🖥 <b>In tmux</b> — started by the bot, driven from here"
-msgstr ""
-
-#: ccbot/bot.py:369
+#: ccbot/bot.py:335
 #, python-brace-format
 msgid "🟢 active: <b>{name}</b> — plain text goes here"
 msgstr ""
 
-#: ccbot/bot.py:375
+#: ccbot/bot.py:341
 #, python-brace-format
 msgid "⬆️ {count} session runs an older Claude Code — /update"
 msgid_plural "⬆️ {count} sessions run an older Claude Code — /update"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:380
+#: ccbot/bot.py:346
 #, python-brace-format
 msgid ""
 "📋 <b>Sessions</b>\n"
 "\n"
-"The bot manages none in tmux yet — start one with {button}."
+"No session is running yet — start one with {button}."
 msgstr ""
 
-#: ccbot/bot.py:382 ccbot/bot.py:1396 ccbot/bot.py:4398 ccbot/keyboards.py:117
-#: ccbot/keyboards.py:499
+#: ccbot/bot.py:348 ccbot/bot.py:1233 ccbot/keyboards.py:85
+#: ccbot/keyboards.py:200
 msgid "➕ New session"
 msgstr "➕ New session"
 
-#: ccbot/bot.py:384
+#: ccbot/bot.py:351
 #, python-brace-format
 msgid ""
-"🔗 <b>In your own terminal</b> — the bot only shows them; «{button}» on the "
-"card takes one over."
+"<b>{button}</b> — sessions closed earlier; resuming brings the context "
+"back."
 msgstr ""
 
-#: ccbot/bot.py:386 ccbot/bot.py:5243 ccbot/keyboards.py:145
-msgid "🔗 Move into tmux"
-msgstr "🔗 Move into tmux"
-
-#: ccbot/bot.py:391
-#, python-brace-format
-msgid "⏸ waiting for you at the keyboard: {names}"
-msgstr ""
-
-#: ccbot/bot.py:398
-#, python-brace-format
-msgid "<b>{button}</b> — sessions closed earlier; resuming brings the context back."
-msgstr ""
-
-#: ccbot/bot.py:399 ccbot/keyboards.py:118 ccbot/keyboards.py:500
+#: ccbot/bot.py:352 ccbot/keyboards.py:86 ccbot/keyboards.py:201
 msgid "🕘 Recent"
 msgstr "🕘 Recent"
 
-#: ccbot/bot.py:402
+#: ccbot/bot.py:355
 msgid ""
-"Tap a session for details — whether to open it is decided there. Replying to"
-" a session's message writes to that session and makes it active; ✏️ on its "
-"card gives it a name of your own."
+"Tap a session for details — whether to open it is decided there. Replying"
+" to a session's message writes to that session and makes it active; ✏️ on"
+" its card gives it a name of your own."
 msgstr ""
 
-#: ccbot/bot.py:415
+#: ccbot/bot.py:364
 msgid ""
-"Not available for SDK sessions yet — it comes with a later stage of the move"
-" to the Agent SDK."
+"❌ The session host is not answering, so the session cannot start. It "
+"restarts by itself — try again in a minute."
 msgstr ""
 
-#: ccbot/bot.py:422
-msgid ""
-"❌ The session host is not answering, so an SDK session cannot start. tmux "
-"sessions work as before."
-msgstr ""
-
-#: ccbot/bot.py:425
+#: ccbot/bot.py:367
 #, python-brace-format
 msgid ""
 "❌ The session host could not start the session:\n"
 "<code>{detail}</code>"
 msgstr ""
 
-#: ccbot/bot.py:430
+#: ccbot/bot.py:372
 msgid "The session host did not answer — try again in a moment."
 msgstr ""
 
-#: ccbot/bot.py:434
+#: ccbot/bot.py:376
 #, python-brace-format
 msgid ""
 "❌ <b>{name}</b> was not ended: the session host is not answering. The "
 "session may still be running — try again in a minute."
 msgstr ""
 
-#: ccbot/bot.py:441
+#: ccbot/bot.py:383
 #, python-brace-format
 msgid "This card is too old — send {command} again"
 msgstr "This card is too old — send {command} again"
 
-#: ccbot/bot.py:479 ccbot/bot.py:485 ccbot/bot.py:486
+#: ccbot/bot.py:413 ccbot/bot.py:419 ccbot/bot.py:420
 msgid "someone"
 msgstr ""
 
-#: ccbot/bot.py:839
-#, python-brace-format
-msgid "⏸ Esc sent to <b>{name}</b>{note}"
-msgstr "⏸ Esc sent to <b>{name}</b>{note}"
-
-#: ccbot/bot.py:903 ccbot/bot.py:2740 ccbot/bot.py:5668 ccbot/bot.py:5701
-#: ccbot/bot.py:6190 ccbot/bot.py:6214 ccbot/bot.py:6225
+#: ccbot/bot.py:788 ccbot/bot.py:1709 ccbot/bot.py:3717 ccbot/bot.py:3731
+#: ccbot/bot.py:3737
 msgid "It is waiting for an answer — deal with that first"
 msgstr ""
 
-#: ccbot/bot.py:906
+#: ccbot/bot.py:791
 #, python-brace-format
 msgid "🧹 /clear sent to <b>{name}</b>{note}"
 msgstr "🧹 /clear sent to <b>{name}</b>{note}"
 
-#: ccbot/bot.py:938
+#: ccbot/bot.py:822
 #, python-brace-format
-msgid "⏳ Ending {name} — sending /exit…"
-msgstr "⏳ Ending {name} — sending /exit…"
+msgid "⏳ Ending {name}…"
+msgstr ""
 
-#: ccbot/bot.py:943 ccbot/bot.py:5303 ccbot/bot.py:6249
+#: ccbot/bot.py:827 ccbot/bot.py:3761
 #, python-brace-format
 msgid ""
 "❌ Session <b>{name}</b> has ended.\n"
@@ -304,7 +259,7 @@ msgstr ""
 "❌ Session <b>{name}</b> has ended.\n"
 "The transcript stays — it can be brought back from 🕘 in the list."
 
-#: ccbot/bot.py:1003
+#: ccbot/bot.py:887
 #, python-brace-format
 msgid ""
 "⚠️ <b>Could not handle this message</b>\n"
@@ -317,117 +272,100 @@ msgstr ""
 "\n"
 "Your sessions are unaffected. Details in /log."
 
-#: ccbot/bot.py:1015
+#: ccbot/bot.py:899
 msgid "Not allowed"
 msgstr "Not allowed"
 
-#: ccbot/bot.py:1024
+#: ccbot/bot.py:908
 #, python-brace-format
 msgid "Error: {error} — see /log"
 msgstr "Error: {error} — see /log"
 
-#: ccbot/bot.py:1102
+#: ccbot/bot.py:986
 msgid "No active session — /sessions"
 msgstr "No active session — /sessions"
 
-#: ccbot/bot.py:1121 ccbot/bot.py:5619
+#: ccbot/bot.py:1005 ccbot/bot.py:3672
 msgid "That session has already ended — see /sessions"
 msgstr "That session has already ended — see /sessions"
 
-#: ccbot/bot.py:1124
+#: ccbot/bot.py:1008
 msgid "in reply"
 msgstr "in reply"
 
-#: ccbot/bot.py:1128
+#: ccbot/bot.py:1012
 msgid "in reply, now active"
 msgstr "in reply, now active"
 
-#: ccbot/bot.py:1156
+#: ccbot/bot.py:1039
 msgid "🤖 <b>Bot service</b>"
 msgstr "🤖 <b>Bot service</b>"
 
-#: ccbot/bot.py:1157
+#: ccbot/bot.py:1040
 #, python-brace-format
 msgid "⏱ Up for {duration} (started at {time})"
 msgstr "⏱ Up for {duration} (started at {time})"
 
-#: ccbot/bot.py:1160
+#: ccbot/bot.py:1043
 #, python-brace-format
 msgid "🧩 Code: <code>{version}</code>"
 msgstr "🧩 Code: <code>{version}</code>"
 
-#: ccbot/bot.py:1167
+#: ccbot/bot.py:1049
 #, python-brace-format
 msgid "🧰 Claude Code on disk: <code>{version}</code>"
 msgstr ""
 
-#: ccbot/bot.py:1171
+#: ccbot/bot.py:1053
 #, python-brace-format
 msgid "{count} session is still on an older one — /update"
 msgid_plural "{count} sessions are still on an older one — /update"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:1177
+#: ccbot/bot.py:1059
 #, python-brace-format
 msgid "⚙️ PID {pid} · systemd <code>{unit}</code> — a crash brings it back in 5 s"
 msgstr "⚙️ PID {pid} · systemd <code>{unit}</code> — a crash brings it back in 5 s"
 
-#: ccbot/bot.py:1181
+#: ccbot/bot.py:1063
 #, python-brace-format
 msgid "⚙️ PID {pid} · started by hand — a crash will not bring it back"
 msgstr "⚙️ PID {pid} · started by hand — a crash will not bring it back"
 
-#: ccbot/bot.py:1185
+#: ccbot/bot.py:1065
 #, python-brace-format
-msgid "🖥 tmux server: PID {pid} — sessions survive a bot restart"
-msgstr "🖥 tmux server: PID {pid} — sessions survive a bot restart"
+msgid "📋 Sessions: {count}"
+msgstr ""
 
-#: ccbot/bot.py:1188
-msgid "🖥 the tmux server is not answering — there are no sessions right now"
-msgstr "🖥 the tmux server is not answering — there are no sessions right now"
-
-#: ccbot/bot.py:1190
-#, python-brace-format
-msgid "📡 Polling every {seconds} s · managed sessions: {count}"
-msgstr "📡 Polling every {seconds} s · managed sessions: {count}"
-
-#: ccbot/bot.py:1192
+#: ccbot/bot.py:1066
 #, python-brace-format
 msgid "📓 Journal: <code>{path}</code> — /log"
 msgstr "📓 Journal: <code>{path}</code> — /log"
 
-#: ccbot/bot.py:1200
-#, python-brace-format
-msgid "🧪 New sessions start in: <b>{mode}</b>{locked}"
+#: ccbot/bot.py:1076
+msgid ""
+"🛰 Session host: not answering — the sessions cannot be reached until it "
+"is back"
 msgstr ""
 
-#: ccbot/bot.py:1202
-msgid " (set in .env)"
-msgstr ""
-
-#: ccbot/bot.py:1207
-#, python-brace-format
-msgid "🛰 Session host: not answering · SDK sessions: {count}"
-msgstr ""
-
-#: ccbot/bot.py:1211
+#: ccbot/bot.py:1079
 #, python-brace-format
 msgid ""
-"🛰 Session host: PID {pid}, up for {duration} · SDK {sdk} · live sessions: "
-"{live}"
+"🛰 Session host: PID {pid}, up for {duration} · SDK {sdk} · live sessions:"
+" {live}"
 msgstr ""
 
-#: ccbot/bot.py:1223
+#: ccbot/bot.py:1090
 msgid "⏳ Restarting — back in a few seconds…"
 msgstr "⏳ Restarting — back in a few seconds…"
 
-#: ccbot/bot.py:1306
+#: ccbot/bot.py:1148
 #, python-brace-format
 msgid "📁 New session in <code>{path}</code>"
 msgstr ""
 
-#: ccbot/bot.py:1319
+#: ccbot/bot.py:1161
 #, python-brace-format
 msgid ""
 "✏️ What should <b>{name}</b> be called?\n"
@@ -438,24 +376,26 @@ msgstr ""
 "Send the name in your next message (up to {limit} characters).\n"
 "<code>-</code> gives the automatic name back."
 
-#: ccbot/bot.py:1331
+#: ccbot/bot.py:1173
 msgid "auto"
 msgstr "auto"
 
-#: ccbot/bot.py:1338
-msgid "❌ There is nothing left of that name once unprintable characters are dropped."
+#: ccbot/bot.py:1180
+msgid ""
+"❌ There is nothing left of that name once unprintable characters are "
+"dropped."
 msgstr ""
 
-#: ccbot/bot.py:1355
+#: ccbot/bot.py:1195
 msgid "your own name is gone — I will show Claude's own topic instead"
 msgstr "your own name is gone — I will show Claude's own topic instead"
 
-#: ccbot/bot.py:1360
+#: ccbot/bot.py:1200
 #, python-brace-format
 msgid "✏️ It is now <b>{name}</b>{note}"
 msgstr "✏️ It is now <b>{name}</b>{note}"
 
-#: ccbot/bot.py:1394
+#: ccbot/bot.py:1231
 #, python-brace-format
 msgid ""
 "📁 <b>Project directories</b>\n"
@@ -466,64 +406,64 @@ msgstr ""
 "\n"
 "These are the directories offered under {button}."
 
-#: ccbot/bot.py:1399
+#: ccbot/bot.py:1236
 msgid ""
-"⚠️ The list comes from <code>CCBOT_DIRS</code> in .env — the buttons below "
-"will not change it."
+"⚠️ The list comes from <code>CCBOT_DIRS</code> in .env — the buttons "
+"below will not change it."
 msgstr ""
-"⚠️ The list comes from <code>CCBOT_DIRS</code> in .env — the buttons below "
-"will not change it."
+"⚠️ The list comes from <code>CCBOT_DIRS</code> in .env — the buttons "
+"below will not change it."
 
-#: ccbot/bot.py:1404
+#: ccbot/bot.py:1241
 msgid ""
 "<code>~</code> counts as well: the home directory cannot be a root — it "
 "would take in every project below it — but sessions started there are "
 "offered and kept in 🕘 history."
 msgstr ""
 
-#: ccbot/bot.py:1408
+#: ccbot/bot.py:1245
 msgid ""
 "📁 <b>Project directories</b>\n"
 "\n"
-"The list is empty — directories are discovered from your own Claude history."
-"\n"
+"The list is empty — directories are discovered from your own Claude "
+"history.\n"
 "Add some if you would rather see only certain projects."
 msgstr ""
 "📁 <b>Project directories</b>\n"
 "\n"
-"The list is empty — directories are discovered from your own Claude history."
-"\n"
+"The list is empty — directories are discovered from your own Claude "
+"history.\n"
 "Add some if you would rather see only certain projects."
 
-#: ccbot/bot.py:1422
+#: ccbot/bot.py:1259
 msgid "📁 Which directory should the session start in?"
 msgstr "📁 Which directory should the session start in?"
 
-#: ccbot/bot.py:1451
+#: ccbot/bot.py:1290
 #, python-brace-format
 msgid ""
 "❌ No such directory:\n"
 "<code>{path}</code>\n"
 "\n"
-"If that was an ordinary message — I was waiting for a path after {button}. "
-"Press /sessions and try again."
+"If that was an ordinary message — I was waiting for a path after "
+"{button}. Press /sessions and try again."
 msgstr ""
 "❌ No such directory:\n"
 "<code>{path}</code>\n"
 "\n"
-"If that was an ordinary message — I was waiting for a path after {button}. "
-"Press /sessions and try again."
+"If that was an ordinary message — I was waiting for a path after "
+"{button}. Press /sessions and try again."
 
-#: ccbot/bot.py:1454 ccbot/keyboards.py:901
+#: ccbot/bot.py:1293 ccbot/keyboards.py:419
 msgid "✏️ Another path"
 msgstr "✏️ Another path"
 
-#: ccbot/bot.py:1549 ccbot/bot.py:2969
+#: ccbot/bot.py:1349 ccbot/bot.py:1929
 #, python-brace-format
 msgid "🟢 Text now goes to <b>{name}</b>"
 msgstr "🟢 Text now goes to <b>{name}</b>"
 
-#: ccbot/bot.py:1554 ccbot/bot.py:4527
+#: ccbot/bot.py:1354 ccbot/bot.py:3230
 #, python-brace-format
 msgid ""
 "🟢 Text now goes to <b>{name}</b>.\n"
@@ -534,411 +474,137 @@ msgstr ""
 "<b>{previous}</b> keeps working — to write to it, reply to one of its "
 "messages."
 
-#: ccbot/bot.py:1560 ccbot/bot.py:5497
-msgid "🧪 Runs through the Agent SDK (session host)."
-msgstr ""
-
-#: ccbot/bot.py:1562
-#, python-brace-format
-msgid "Locally: <code>{command}</code>"
-msgstr "Locally: <code>{command}</code>"
-
-#: ccbot/bot.py:1564
+#: ccbot/bot.py:1359
 msgid "resumed"
 msgstr "resumed"
 
-#: ccbot/bot.py:1564
+#: ccbot/bot.py:1359
 msgid "new"
 msgstr "new"
 
-#: ccbot/bot.py:1567
+#: ccbot/bot.py:1362
 #, python-brace-format
 msgid "✅ Resumed: <b>{name}</b>"
 msgstr "✅ Resumed: <b>{name}</b>"
 
-#: ccbot/bot.py:1568
+#: ccbot/bot.py:1363
 #, python-brace-format
 msgid "✅ Created: <b>{name}</b>"
 msgstr "✅ Created: <b>{name}</b>"
 
-#: ccbot/bot.py:1617
-msgid "✅ Every stopped session is back."
-msgstr ""
-
-#: ccbot/bot.py:1638
-msgid "✅ Nothing is waiting to be restored."
-msgstr ""
-
-#: ccbot/bot.py:1647
-msgid "Forgotten"
-msgstr ""
-
-#: ccbot/bot.py:1649
+#: ccbot/bot.py:1410
 msgid ""
-"🗑 The stopped sessions are off the list — their transcripts are still in 🕘 "
-"history."
+"🔑 That looks like a sign-in code, and no session is waiting for one, so I"
+" have not sent it anywhere. /login starts a login."
 msgstr ""
 
-#: ccbot/bot.py:1654
-msgid "Bringing them up…"
-msgstr ""
-
-#: ccbot/bot.py:1660
-msgid "That one is already back"
-msgstr ""
-
-#: ccbot/bot.py:1663 ccbot/bot.py:4480
-msgid "Bringing it up…"
-msgstr "Bringing it up…"
-
-#: ccbot/bot.py:1802 ccbot/bot.py:3054 ccbot/bot.py:3695 ccbot/bot.py:3917
-msgid "❌ Could not pass that on — see /log"
-msgstr ""
-
-#: ccbot/bot.py:1812 ccbot/bot.py:1843 ccbot/bot.py:1917 ccbot/bot.py:2083
-#: ccbot/bot.py:3454 ccbot/bot.py:3990 ccbot/bot.py:4205 ccbot/bot.py:4228
-#: ccbot/bot.py:4237 ccbot/bot.py:4501 ccbot/bot.py:4519 ccbot/bot.py:4548
-#: ccbot/bot.py:4564 ccbot/bot.py:4602 ccbot/bot.py:4642 ccbot/bot.py:4669
-#: ccbot/bot.py:4697 ccbot/bot.py:4774 ccbot/bot.py:4826 ccbot/bot.py:4844
-#: ccbot/bot.py:4886 ccbot/bot.py:4962 ccbot/bot.py:4974 ccbot/bot.py:4991
-#: ccbot/bot.py:5020 ccbot/bot.py:5029 ccbot/bot.py:5039 ccbot/bot.py:5053
-#: ccbot/bot.py:5094 ccbot/bot.py:5155
-msgid "That session is gone"
-msgstr "That session is gone"
-
-#: ccbot/bot.py:1821 ccbot/bot.py:1856
-msgid "That question is no longer open"
-msgstr ""
-
-#: ccbot/bot.py:1823 ccbot/bot.py:1858 ccbot/bridge.py:359 ccbot/bridge.py:489
-#: ccbot/bridge.py:558 ccbot/bridge.py:903 ccbot/bridge.py:1066
-#: ccbot/watcher.py:1444
-msgid "⏹ Question closed"
-msgstr ""
-
-#: ccbot/bot.py:1827 ccbot/keyboards.py:332
-msgid "📨 Review and send"
-msgstr ""
-
-#: ccbot/bot.py:1828 ccbot/keyboards.py:334
-msgid "🗑 Discard and exit"
-msgstr ""
-
-#: ccbot/bot.py:1853
-msgid "Could not press it — try again or open 🖥 Screen"
-msgstr ""
-
-#: ccbot/bot.py:1863 ccbot/keyboards.py:345
-msgid "✅ Yes, I trust this folder"
-msgstr ""
-
-#: ccbot/bot.py:1869
-msgid "🚪 No, exit — the session is closed"
-msgstr ""
-
-#: ccbot/bot.py:1871 ccbot/keyboards.py:347
-msgid "🚪 No, exit"
-msgstr ""
-
-#: ccbot/bot.py:1921 ccbot/bot.py:1936
-msgid "That answer is no longer open"
-msgstr ""
-
-#: ccbot/bot.py:1924
-msgid "Copying again…"
-msgstr ""
-
-#: ccbot/bot.py:1937
-msgid "⏹ Answer closed"
-msgstr ""
-
-#: ccbot/bot.py:1941
-msgid "✖️ Closed"
-msgstr ""
-
-#: ccbot/bot.py:1971 ccbot/bot.py:5697
-msgid "Its tmux window is gone"
-msgstr ""
-
-#: ccbot/bot.py:1977
-#, python-brace-format
-msgid "🔑 <b>{name}</b> is already logging in: its card comes next."
-msgstr ""
-
-#: ccbot/bot.py:1985
-#, python-brace-format
-msgid "🔑 Logging in on <b>{name}</b>{note}: the sign-in link comes in a moment."
-msgstr ""
-
-#: ccbot/bot.py:1993
-#, python-brace-format
-msgid "⚠️ <b>{name}</b> did not open the login. Here is its screen:"
-msgstr ""
-
-#: ccbot/bot.py:2046
-msgid ""
-"🔑 Several sessions are waiting for a sign-in code: send it as a reply to the"
-" link of the right one."
-msgstr ""
-
-#: ccbot/bot.py:2048
-msgid ""
-"🔑 That looks like a sign-in code, and no session is waiting for one, so I "
-"have not sent it anywhere. /login starts a login."
-msgstr ""
-
-#: ccbot/bot.py:2055
-#, python-brace-format
-msgid "🔑 <b>{name}</b> already has a code entered: Claude is checking it."
-msgstr ""
-
-#: ccbot/bot.py:2062
-#, python-brace-format
-msgid ""
-"⚠️ The login on <b>{name}</b> moved on before the code went in, so it was "
-"not entered."
-msgstr ""
-
-#: ccbot/bot.py:2067
-#, python-brace-format
-msgid "🔑 Code entered on <b>{name}</b>: Claude is checking it…"
-msgstr ""
-
-#: ccbot/bot.py:2095
-msgid ""
-"No restart is needed: the sessions switch to the new account with their next"
-" request"
-msgstr ""
-
-#: ccbot/bot.py:2112
-msgid "Getting a new link…"
-msgstr ""
-
-#: ccbot/bot.py:2115 ccbot/watcher.py:1193
-msgid "🔁 Tried again"
-msgstr ""
-
-#: ccbot/bot.py:2118 ccbot/bot.py:2866 ccbot/bot.py:2871
-msgid "✖️ Login cancelled"
-msgstr ""
-
-#: ccbot/bot.py:2121
-msgid "⏎ Continued"
-msgstr ""
-
-#: ccbot/bot.py:2136
-msgid "That step of the login has passed: its next card is below."
-msgstr ""
-
-#: ccbot/bot.py:2137
-msgid "⏭ Step passed"
-msgstr ""
-
-#: ccbot/bot.py:2139
-msgid "That login is no longer open."
-msgstr ""
-
-#: ccbot/bot.py:2139 ccbot/watcher.py:1195
-msgid "⏹ Login closed"
-msgstr ""
-
-#: ccbot/bot.py:2162
-msgid ""
-"it is waiting for the usage limit to reset, and /exit would cancel the "
-"automatic continuation"
-msgstr ""
-
-#: ccbot/bot.py:2165
-#, python-brace-format
-msgid "background tasks are still running in it ({what}), and /exit would stop them"
-msgstr ""
-
-#: ccbot/bot.py:2167
-msgid "background tasks are still running in it, and /exit would stop them"
-msgstr ""
-
-#: ccbot/bot.py:2178 ccbot/bot.py:2263
-msgid "it is working right now"
-msgstr ""
-
-#: ccbot/bot.py:2187
+#: ccbot/bot.py:1423
 msgid "a restart of it is already under way"
 msgstr ""
 
-#: ccbot/bot.py:2206 ccbot/bot.py:2499
+#: ccbot/bot.py:1430 ccbot/bot.py:1513
 msgid "it is working or waiting for an answer"
 msgstr ""
 
-#: ccbot/bot.py:2228
-msgid "its tmux window is gone"
-msgstr ""
-
-#: ccbot/bot.py:2253 ccbot/bot.py:2265 ccbot/bot.py:2495
-msgid "it is waiting for an answer"
-msgstr ""
-
-#: ccbot/bot.py:2273
-msgid ""
-"the claude CLI is not on disk this second — it is updating itself; try again"
-" in a minute"
-msgstr ""
-
-#: ccbot/bot.py:2278 ccbot/bot.py:2893
-msgid "the session host is not answering"
-msgstr ""
-
-#: ccbot/bot.py:2299
-#, python-brace-format
-msgid "it did not shut down within {n} s"
-msgstr ""
-
-#: ccbot/bot.py:2327
-msgid ""
-"the session host did not answer, and its copy could not be stopped — open "
-"the session's card in a minute"
-msgstr ""
-
-#: ccbot/bot.py:2333
-#, python-brace-format
-msgid "the session host did not take it ({detail}); it carries on in tmux as before"
-msgstr ""
-
-#: ccbot/bot.py:2335
-#, python-brace-format
-msgid ""
-"the session host did not take it ({detail}), and resuming it in tmux failed "
-"too — {reason}"
-msgstr ""
-
-#: ccbot/bot.py:2369
-msgid ""
-"/exit asked about its background tasks in a way I do not recognise, so I "
-"answered «Stay»"
-msgstr ""
-
-#: ccbot/bot.py:2390
-msgid ""
-"Claude Code asks what to do with its unsent feedback drafts first — answer "
-"on its card, and the session comes back by itself"
-msgstr ""
-
-#: ccbot/bot.py:2409
-msgid "it did not come back. Its window is untouched, so pressing again resumes it"
-msgstr ""
-
-#: ccbot/bot.py:2448
+#: ccbot/bot.py:1467
 msgid "⬆️ <b>Claude Code</b>"
 msgstr ""
 
-#: ccbot/bot.py:2451
+#: ccbot/bot.py:1469
 #, python-brace-format
 msgid ""
 "On disk: <code>{version}</code> — what a session gets the moment it is "
 "started again."
 msgstr ""
 
-#: ccbot/bot.py:2455
+#: ccbot/bot.py:1473
 msgid ""
-"The version on disk could not be read — is the <code>claude</code> CLI on "
-"the bot's PATH?"
+"The version on disk could not be read — is the <code>claude</code> CLI on"
+" the bot's PATH?"
 msgstr ""
 
-#: ccbot/bot.py:2467
+#: ccbot/bot.py:1485
 msgid "✅ Every session is already running the version that is on disk."
 msgstr ""
 
-#: ccbot/bot.py:2472
+#: ccbot/bot.py:1490
 #, python-brace-format
 msgid "{count} session is behind."
 msgid_plural "{count} sessions are behind."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:2476
+#: ccbot/bot.py:1494
 msgid "Left alone by «Restart all»:"
 msgstr ""
 
-#: ccbot/bot.py:2484
+#: ccbot/bot.py:1499
 msgid ""
-"A restart is <code>/exit</code> followed by <code>claude --resume</code> in "
-"the same window: the session id, the transcript and the context all survive."
-" What does not: anything half-typed into its input line, and the prompt "
+"A restart resumes the same session on the build on disk: the session id, "
+"the transcript and the context all survive. What does not: the prompt "
 "cache — so the first reply after a restart takes a little longer."
 msgstr ""
 
-#: ccbot/bot.py:2497
+#: ccbot/bot.py:1510
+msgid "it is waiting for an answer"
+msgstr ""
+
+#: ccbot/bot.py:1512
 msgid "its state could not be read"
 msgstr ""
 
-#: ccbot/bot.py:2525
+#: ccbot/bot.py:1530
+#, python-brace-format
+msgid "⏳ Restarting <b>{name}</b>…"
+msgstr ""
+
+#: ccbot/bot.py:1541
 #, python-brace-format
 msgid ""
-"⏳ Moving <b>{name}</b> to the Agent SDK — /exit in tmux, then the session "
-"host resumes it…"
+"✅ <b>{name}</b> now runs <code>{version}</code> — the context came back "
+"with it."
 msgstr ""
 
-#: ccbot/bot.py:2540
+#: ccbot/bot.py:1546
 #, python-brace-format
 msgid ""
-"✅ <b>{name}</b> now runs through the Agent SDK — the same session, context "
-"and all."
+"✅ <b>{name}</b> has been restarted; it has not said which version it is "
+"yet."
 msgstr ""
 
-#: ccbot/bot.py:2543
-#, python-brace-format
-msgid "⚠️ <b>{name}</b> was not moved — {reason}."
-msgstr ""
-
-#: ccbot/bot.py:2552
-#, python-brace-format
-msgid "⏳ Restarting <b>{name}</b> — /exit, then resume…"
-msgstr ""
-
-#: ccbot/bot.py:2568
-#, python-brace-format
-msgid ""
-"✅ <b>{name}</b> now runs <code>{version}</code> — the context came back with"
-" it."
-msgstr ""
-
-#: ccbot/bot.py:2573
-#, python-brace-format
-msgid "✅ <b>{name}</b> has been restarted; it has not said which version it is yet."
-msgstr ""
-
-#: ccbot/bot.py:2576
+#: ccbot/bot.py:1549
 #, python-brace-format
 msgid "⚠️ <b>{name}</b> was not restarted — {reason}. Nothing was changed."
 msgstr ""
 
-#: ccbot/bot.py:2591
+#: ccbot/bot.py:1564
 msgid "Nothing to restart: no idle session is behind."
 msgstr ""
 
-#: ccbot/bot.py:2598
+#: ccbot/bot.py:1571
 #, python-brace-format
 msgid "⏳ Restarting {count} session…"
 msgid_plural "⏳ Restarting {count} sessions…"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:2604
+#: ccbot/bot.py:1577
 #, python-brace-format
 msgid "⏳ {index}/{total}: <b>{name}</b>…"
 msgstr ""
 
-#: ccbot/bot.py:2615
+#: ccbot/bot.py:1588
 #, python-brace-format
 msgid "✅ Restarted {count} session:"
 msgid_plural "✅ Restarted {count} sessions:"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:2621
+#: ccbot/bot.py:1594
 msgid "⚠️ Left as they were:"
 msgstr ""
 
-#: ccbot/bot.py:2640
+#: ccbot/bot.py:1609
 msgid ""
 "I have no local copy of the release notes "
 "(<code>~/.claude/cache/changelog.md</code>). They are at "
@@ -946,344 +612,346 @@ msgid ""
 "them inside a session."
 msgstr ""
 
-#: ccbot/bot.py:2654
+#: ccbot/bot.py:1623
 msgid "Nothing new: every session already runs what is on disk."
 msgstr ""
 
-#: ccbot/bot.py:2658
+#: ccbot/bot.py:1627
 #, python-brace-format
 msgid "🆕 **Claude Code {since} → {disk}** — {count} release"
 msgid_plural "🆕 **Claude Code {since} → {disk}** — {count} releases"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:2662
+#: ccbot/bot.py:1631
 #, python-brace-format
 msgid "🆕 **Claude Code {disk}** — the newest release notes"
 msgstr ""
 
-#: ccbot/bot.py:2667
+#: ccbot/bot.py:1636
 #, python-brace-format
 msgid "…and {count} older release, at code.claude.com/docs/en/changelog"
 msgid_plural "…and {count} older releases, at code.claude.com/docs/en/changelog"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:2680
+#: ccbot/bot.py:1649
 msgid "🔄 Running <code>claude update</code> — this can take a minute…"
 msgstr ""
 
-#: ccbot/bot.py:2685
+#: ccbot/bot.py:1654
 #, python-brace-format
 msgid ""
 "⚠️ <code>claude update</code> failed:\n"
 "<code>{output}</code>"
 msgstr ""
 
-#: ccbot/bot.py:2688
+#: ccbot/bot.py:1657
 #, python-brace-format
 msgid ""
 "⬆️ Updated: <code>{before}</code> → <code>{after}</code>. Restart the "
 "sessions to put it to work — /update."
 msgstr ""
 
-#: ccbot/bot.py:2692
+#: ccbot/bot.py:1661
 #, python-brace-format
 msgid "✅ Already on the latest release: <code>{version}</code>."
 msgstr ""
 
-#: ccbot/bot.py:2715
+#: ccbot/bot.py:1684
 #, python-brace-format
 msgid "🧠 Model for <b>{name}</b> — this session only"
 msgstr ""
 
-#: ccbot/bot.py:2725
+#: ccbot/bot.py:1694
 #, python-brace-format
 msgid "◉ Reasoning effort for <b>{name}</b> — this session only"
 msgstr ""
 
-#: ccbot/bot.py:2728
+#: ccbot/bot.py:1697
 msgid "This model takes no effort level."
 msgstr ""
 
-#: ccbot/bot.py:2755
+#: ccbot/bot.py:1724
 #, python-brace-format
 msgid "Model: {value}"
 msgstr ""
 
-#: ccbot/bot.py:2756
+#: ccbot/bot.py:1725
 #, python-brace-format
 msgid "Effort: {value}"
 msgstr ""
 
-#: ccbot/bot.py:2764 ccbot/bridge.py:899
+#: ccbot/bot.py:1733 ccbot/bridge.py:895
 msgid "This question is no longer open"
 msgstr ""
 
-#: ccbot/bot.py:2767 ccbot/bridge.py:948
+#: ccbot/bot.py:1736 ccbot/bridge.py:944
 msgid "The card was out of date — it is shown again"
 msgstr ""
 
-#: ccbot/bot.py:2771
+#: ccbot/bot.py:1740
 msgid "✏️ Write what to change in the plan — one message."
 msgstr ""
 
-#: ccbot/bot.py:2772
+#: ccbot/bot.py:1741
 msgid "✏️ Write why — one message; Claude gets it with the refusal."
 msgstr ""
 
-#: ccbot/bot.py:2773
+#: ccbot/bot.py:1742
 msgid "✏️ Write your answer — one message."
 msgstr ""
 
-#: ccbot/bot.py:2792
+#: ccbot/bot.py:1761
 msgid "I no longer keep that text — copy it from the card."
 msgstr ""
 
-#: ccbot/bot.py:2799
+#: ccbot/bot.py:1768
 msgid "It has a question open — answer it first."
 msgstr ""
 
-#: ccbot/bot.py:2806
+#: ccbot/bot.py:1775
 msgid "Sent again"
 msgstr ""
 
-#: ccbot/bot.py:2807
+#: ccbot/bot.py:1776
 #, python-brace-format
 msgid "🔁 Sent again to <b>{name}</b>"
 msgstr ""
 
-#: ccbot/bot.py:2822
+#: ccbot/bot.py:1791
 #, python-brace-format
 msgid "❌ Could not start the login: <code>{detail}</code>"
 msgstr ""
 
-#: ccbot/bot.py:2828
+#: ccbot/bot.py:1797
 msgid ""
 "🔑 <b>Sign in to Claude</b> — for every session of this machine.\n"
 "\n"
-"1. Open the page with the button below and sign in with the account you want"
-" this machine to use.\n"
+"1. Open the page with the button below and sign in with the account you "
+"want this machine to use.\n"
 "2. The page shows a code: copy all of it, the part after # included.\n"
 "3. Send it here as a message, and I will enter it."
 msgstr ""
 
-#: ccbot/bot.py:2841
+#: ccbot/bot.py:1810
 msgid "⏳ Entering the code…"
 msgstr ""
 
-#: ccbot/bot.py:2850
+#: ccbot/bot.py:1819
 #, python-brace-format
 msgid "✅ Logged in as <b>{email}</b>."
 msgstr ""
 
-#: ccbot/bot.py:2851
+#: ccbot/bot.py:1820
 msgid "✅ Logged in."
 msgstr ""
 
-#: ccbot/bot.py:2855
+#: ccbot/bot.py:1824
 msgid "❌ Claude did not accept the code."
 msgstr ""
 
-#: ccbot/bot.py:2864 ccbot/bot.py:2869
+#: ccbot/bot.py:1833 ccbot/bot.py:1838
 msgid "Login cancelled"
 msgstr ""
 
-#: ccbot/bot.py:2889
+#: ccbot/bot.py:1835 ccbot/bot.py:1840
+msgid "✖️ Login cancelled"
+msgstr ""
+
+#: ccbot/bot.py:1858
 #, python-brace-format
 msgid "working for {minutes} min"
 msgstr ""
 
-#: ccbot/bot.py:2891 ccbot/sessions.py:50
+#: ccbot/bot.py:1860 ccbot/sessions.py:48
 msgid "working"
 msgstr "working"
 
-#: ccbot/bot.py:2891
+#: ccbot/bot.py:1860
 msgid "waiting for your answer"
 msgstr ""
 
-#: ccbot/bot.py:2892
+#: ccbot/bot.py:1861
 msgid "free"
 msgstr ""
 
-#: ccbot/bot.py:2892
+#: ccbot/bot.py:1861
 msgid "resting — your next message wakes it"
 msgstr ""
 
-#: ccbot/bot.py:2894
+#: ccbot/bot.py:1862
+msgid "the session host is not answering"
+msgstr ""
+
+#: ccbot/bot.py:1863
 #, python-brace-format
 msgid "**📜 {name}: where it stopped**"
 msgstr ""
 
-#: ccbot/bot.py:2895
+#: ccbot/bot.py:1864
 #, python-brace-format
 msgid "📊 State: {state}"
 msgstr ""
 
-#: ccbot/bot.py:2898
+#: ccbot/bot.py:1867
 msgid "**✍️ Your last task:**"
 msgstr ""
 
-#: ccbot/bot.py:2901
+#: ccbot/bot.py:1870
 msgid "**🔧 Last steps:**"
 msgstr ""
 
-#: ccbot/bot.py:2904
+#: ccbot/bot.py:1873
 msgid "**💬 Last answer:**"
 msgstr ""
 
-#: ccbot/bot.py:2906
+#: ccbot/bot.py:1875
 msgid "The transcript has nothing yet."
 msgstr ""
 
-#: ccbot/bot.py:2925
+#: ccbot/bot.py:1894
 #, python-brace-format
 msgid "⏸ Interrupted <b>{name}</b>{note}"
 msgstr ""
 
-#: ccbot/bot.py:2930
+#: ccbot/bot.py:1899
 #, python-brace-format
 msgid "💤 <b>{name}</b> is resting — there is nothing to interrupt."
 msgstr ""
 
-#: ccbot/bot.py:2990
+#: ccbot/bot.py:1948
 msgid "/btw needs the question after it, in the same message."
 msgstr ""
 
-#: ccbot/bot.py:3072
+#: ccbot/bot.py:2006 ccbot/bot.py:2541
+msgid "❌ Could not pass that on — see /log"
+msgstr ""
+
+#: ccbot/bot.py:2024
 #, python-brace-format
 msgid "📎 Saved {count} file. Write something and I will send them together."
 msgid_plural "📎 Saved {count} files. Write something and I will send them together."
 msgstr[0] "📎 Saved {count} file. Write something and I will send them together."
 msgstr[1] "📎 Saved {count} files. Write something and I will send them together."
 
-#: ccbot/bot.py:3139
+#: ccbot/bot.py:2087
 #, python-brace-format
 msgid "{count} message"
 msgid_plural "{count} messages"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3142
+#: ccbot/bot.py:2090
 #, python-brace-format
 msgid "{count} attachment"
 msgid_plural "{count} attachments"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3144
+#: ccbot/bot.py:2092
 #, python-brace-format
 msgid "➡️ Sent to <b>{name}</b>{extra}{note}"
 msgstr "➡️ Sent to <b>{name}</b>{extra}{note}"
 
-#: ccbot/bot.py:3303
+#: ccbot/bot.py:2232
 #, python-brace-format
 msgid "⏳ Your message goes to <b>{name}</b> once its question is answered."
 msgid_plural "⏳ Your {count} messages go to <b>{name}</b> once its question is answered."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3329
+#: ccbot/bot.py:2260
 #, python-brace-format
 msgid ""
-"🔑 <b>{name}</b> is logging in. Your message has not been sent yet: it would "
-"land in the login."
-msgid_plural ""
-"🔑 <b>{name}</b> is logging in. Your {count} messages have not been sent yet:"
-" they would land in the login."
-msgstr[0] ""
-msgstr[1] ""
-
-#: ccbot/bot.py:3355
-#, python-brace-format
-msgid ""
-"❓ <b>{name}</b> has an open question (it is above — you may have missed it)."
-" Your message has not been sent yet, so that it does not pick an option for "
-"you."
-msgid_plural ""
-"❓ <b>{name}</b> has an open question (it is above — you may have missed it)."
-" Your {count} messages have not been sent yet, so that they do not pick an "
+"❓ <b>{name}</b> has an open question (it is above — you may have missed "
+"it). Your message has not been sent yet, so that it does not pick an "
 "option for you."
+msgid_plural ""
+"❓ <b>{name}</b> has an open question (it is above — you may have missed "
+"it). Your {count} messages have not been sent yet, so that they do not "
+"pick an option for you."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3397
+#: ccbot/bot.py:2302
 msgid ""
-"⚠️ Telegram sent something this version of the bot cannot read at all, and "
-"it was skipped. If it was a message, send it again in another form. Details "
-"in /log."
+"⚠️ Telegram sent something this version of the bot cannot read at all, "
+"and it was skipped. If it was a message, send it again in another form. "
+"Details in /log."
 msgstr ""
 
-#: ccbot/bot.py:3402
+#: ccbot/bot.py:2307
 #, python-brace-format
 msgid ""
-"⚠️ Part of this message could not be read by this version of the bot and was"
-" left out: {parts}. The rest was received. Send that part again in another "
-"form if it matters."
+"⚠️ Part of this message could not be read by this version of the bot and "
+"was left out: {parts}. The rest was received. Send that part again in "
+"another form if it matters."
 msgstr ""
 
-#: ccbot/bot.py:3418
+#: ccbot/bot.py:2323
 #, python-brace-format
 msgid ""
-"⌛️ The message that was waiting for an answered question has expired — it "
-"went nowhere. Send it again if it is still needed."
+"⌛️ The message that was waiting for an answered question has expired — it"
+" went nowhere. Send it again if it is still needed."
 msgid_plural ""
 "⌛️ The {count} messages that were waiting for an answered question have "
 "expired — they went nowhere. Send them again if they are still needed."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3440 ccbot/bot.py:3947
+#: ccbot/bot.py:2345 ccbot/bot.py:2704
 msgid "Those messages are no longer waiting"
 msgstr ""
 
-#: ccbot/bot.py:3456 ccbot/bot.py:3465
+#: ccbot/bot.py:2359 ccbot/bot.py:2747 ccbot/bot.py:2962 ccbot/bot.py:3205
+#: ccbot/bot.py:3222 ccbot/bot.py:3246 ccbot/bot.py:3269 ccbot/bot.py:3278
+#: ccbot/bot.py:3311 ccbot/bot.py:3346
+msgid "That session is gone"
+msgstr "That session is gone"
+
+#: ccbot/bot.py:2361 ccbot/bot.py:2370
 #, python-brace-format
 msgid "🗑 Not sent"
 msgid_plural "🗑 {count} messages not sent"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3482 ccbot/bot.py:3522 ccbot/bot.py:3556
-msgid "The question has changed — it is above"
-msgstr ""
-
-#: ccbot/bot.py:3486
+#: ccbot/bot.py:2385
 msgid "Closing the question…"
 msgstr ""
 
-#: ccbot/bot.py:3497
+#: ccbot/bot.py:2392
 msgid "Esc did not close the question — the message is still waiting."
 msgstr ""
 
-#: ccbot/bot.py:3506
+#: ccbot/bot.py:2401
 #, python-brace-format
 msgid "💬 Question in <b>{name}</b> closed, message sent"
 msgstr ""
 
-#: ccbot/bot.py:3515 ccbot/bot.py:3547
+#: ccbot/bot.py:2410
 #, python-brace-format
 msgid "➡️ The question had closed — sent to <b>{name}</b> as an ordinary message"
 msgstr ""
 
-#: ccbot/bot.py:3568
-#, python-brace-format
-msgid "✏️ Sent to <b>{name}</b> as the answer to its question"
+#: ccbot/bot.py:2417
+msgid "The question has changed — it is above"
 msgstr ""
 
-#: ccbot/bot.py:3648
+#: ccbot/bot.py:2494
 #, python-brace-format
 msgid "🗑 The session has ended — the message was not sent."
 msgid_plural "🗑 The session has ended — {count} messages were not sent."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3676
+#: ccbot/bot.py:2522
 #, python-brace-format
 msgid "✅ The question in <b>{name}</b> was answered — message sent"
 msgstr ""
 
-#: ccbot/bot.py:3746
+#: ccbot/bot.py:2592
 #, python-brace-format
 msgid ""
 "⌛️ The forwarded message that was waiting for a session has expired — it "
@@ -1294,234 +962,190 @@ msgid_plural ""
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3753
+#: ccbot/bot.py:2599
 #, python-brace-format
 msgid ""
-"⌛️ The message that was waiting for a session has expired — it went nowhere."
-" Send it again if it is still needed."
+"⌛️ The message that was waiting for a session has expired — it went "
+"nowhere. Send it again if it is still needed."
 msgid_plural ""
-"⌛️ The {count} messages that were waiting for a session have expired — they "
-"went nowhere. Send them again if they are still needed."
+"⌛️ The {count} messages that were waiting for a session have expired — "
+"they went nowhere. Send them again if they are still needed."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3773
+#: ccbot/bot.py:2619
 #, python-brace-format
 msgid "📥 <b>{count} forwarded message</b> is waiting"
 msgid_plural "📥 <b>{count} forwarded messages</b> are waiting"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3776
+#: ccbot/bot.py:2622
 #, python-brace-format
 msgid "📥 <b>{count} message</b> is waiting"
 msgid_plural "📥 <b>{count} messages</b> are waiting"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3780
+#: ccbot/bot.py:2626
 #, python-brace-format
 msgid "{count} file"
 msgid_plural "{count} files"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3784
+#: ccbot/bot.py:2630
 msgid "Which session should they go to? Anything you send meanwhile joins them."
 msgstr ""
 
-#: ccbot/bot.py:3793
+#: ccbot/bot.py:2639
 msgid ""
-"No session is active, so there is nowhere to send them yet. Start a new one,"
-" bring a closed one back or pick one from the list — they go there as soon "
-"as it is up. Anything you send meanwhile joins them."
+"No session is active, so there is nowhere to send them yet. Start a new "
+"one, bring a closed one back or pick one from the list — they go there as"
+" soon as it is up. Anything you send meanwhile joins them."
 msgstr ""
 
-#: ccbot/bot.py:3824
+#: ccbot/bot.py:2670
 msgid "now active"
 msgstr ""
 
-#: ccbot/bot.py:3864 ccbot/keyboards.py:469
-#, python-brace-format
-msgid "▶️ Current: {name}"
-msgstr ""
-
-#: ccbot/bot.py:3874
-#, python-brace-format
-msgid ""
-"📁 <b>{name}</b> is in a folder Claude Code has not opened before, and it "
-"asks first whether you trust it — answer on its card with the buttons, then "
-"press «{button}»."
-msgstr ""
-
-#: ccbot/bot.py:3884
-#, python-brace-format
-msgid ""
-"⏳ <b>{name}</b> is not taking text yet — it has just started, or it is "
-"asking something first. Here is its screen: deal with that, then press "
-"«{button}»."
-msgstr ""
-
-#: ccbot/bot.py:3954
+#: ccbot/bot.py:2711
 msgid "Discarded"
 msgstr ""
 
-#: ccbot/bot.py:3956
+#: ccbot/bot.py:2713
 #, python-brace-format
 msgid "🗑 The forwarded message was discarded — it went to no session."
 msgid_plural "🗑 The {count} forwarded messages were discarded — they went to no session."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3961
+#: ccbot/bot.py:2718
 #, python-brace-format
 msgid "🗑 The message was discarded — it went to no session."
 msgid_plural "🗑 The {count} messages were discarded — they went to no session."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:3969
+#: ccbot/bot.py:2726
 msgid "No active session — pick one below"
 msgstr ""
 
-#: ccbot/bot.py:3973 ccbot/bot.py:3993 ccbot/bot.py:4858
+#: ccbot/bot.py:2730 ccbot/bot.py:2750
 msgid "Sending…"
 msgstr "Sending…"
 
-#: ccbot/bot.py:4007 ccbot/bot.py:4354 ccbot/bot.py:4359 ccbot/bot.py:4365
-#: ccbot/bot.py:4384
+#: ccbot/bot.py:2764 ccbot/bot.py:3073 ccbot/bot.py:3078 ccbot/bot.py:3084
+#: ccbot/bot.py:3103
 msgid "Looking…"
 msgstr "Looking…"
 
-#: ccbot/bot.py:4008
+#: ccbot/bot.py:2765
 msgid "🕘 Looking through the transcripts…"
 msgstr ""
 
-#: ccbot/bot.py:4018
+#: ccbot/bot.py:2775
 msgid "📋 <b>Where should the forwarded messages go?</b>"
 msgstr ""
 
-#: ccbot/bot.py:4020
+#: ccbot/bot.py:2777
 msgid "📋 <b>Where should the messages go?</b>"
 msgstr ""
 
-#: ccbot/bot.py:4022
+#: ccbot/bot.py:2779
 msgid ""
-"A session in tmux takes them straight away. ➕ starts a new one in a "
-"directory you pick, 🕘 brings a closed one back — either way they are sent as"
-" soon as it is up."
+"A running session takes them straight away. ➕ starts a new one in a "
+"directory you pick, 🕘 brings a closed one back — either way they are sent"
+" as soon as it is up."
 msgstr ""
 
-#: ccbot/bot.py:4077
+#: ccbot/bot.py:2834
 #, python-brace-format
 msgid ""
 "⚠️ I cannot read this kind of message (<code>{kind}</code>), so it went "
 "nowhere. Send it as text, a photo or a file."
 msgstr ""
 
-#: ccbot/bot.py:4105
+#: ccbot/bot.py:2862
 #, python-brace-format
 msgid ""
-"That file is too big ({size} MB). Telegram lets a bot download 20 MB at most"
-" — put it somewhere on disk and send me the path instead."
+"That file is too big ({size} MB). Telegram lets a bot download 20 MB at "
+"most — put it somewhere on disk and send me the path instead."
 msgstr ""
 
-#: ccbot/bot.py:4120
+#: ccbot/bot.py:2877
 msgid "❌ Could not download the file"
 msgstr "❌ Could not download the file"
 
-#: ccbot/bot.py:4145
+#: ccbot/bot.py:2902
 msgid "⌛️ That request has expired — treating this as an ordinary message."
 msgstr "⌛️ That request has expired — treating this as an ordinary message."
 
-#: ccbot/bot.py:4154
+#: ccbot/bot.py:2911
 #, python-brace-format
 msgid "❌ No such directory: <code>{path}</code>"
 msgstr "❌ No such directory: <code>{path}</code>"
 
-#: ccbot/bot.py:4160
+#: ccbot/bot.py:2917
 #, python-brace-format
 msgid "✅ Added: <code>{path}</code>"
 msgstr "✅ Added: <code>{path}</code>"
 
-#: ccbot/bot.py:4164
+#: ccbot/bot.py:2921
 msgid "That directory is already on the list"
 msgstr "That directory is already on the list"
 
-#: ccbot/bot.py:4188
+#: ccbot/bot.py:2945
 msgid "Your message goes to the session as an ordinary message."
 msgstr ""
 
-#: ccbot/bot.py:4214
+#: ccbot/bot.py:2971
 msgid ""
-"That does not look like a path (one starts with / or ~), so I am sending it "
-"to the session."
+"That does not look like a path (one starts with / or ~), so I am sending "
+"it to the session."
 msgstr ""
-"That does not look like a path (one starts with / or ~), so I am sending it "
-"to the session."
+"That does not look like a path (one starts with / or ~), so I am sending "
+"it to the session."
 
-#: ccbot/bot.py:4279
+#: ccbot/bot.py:3019
 msgid "Already answered — the button only shows what was chosen"
 msgstr ""
 
-#: ccbot/bot.py:4288
-msgid ""
-"Sessions from your own terminal. The bot can only watch them — their input "
-"is out of reach. «Move into tmux» restarts one under the bot, context and "
-"all."
-msgstr ""
-
-#: ccbot/bot.py:4294
-msgid ""
-"Sessions the bot started in tmux windows. Full control from the chat: text, "
-"dialog buttons, Esc, /clear."
-msgstr ""
-
-#: ccbot/bot.py:4310
+#: ccbot/bot.py:3034
 msgid "Reading the release notes…"
 msgstr ""
 
-#: ccbot/bot.py:4313
+#: ccbot/bot.py:3037
 msgid "Checking…"
 msgstr ""
 
-#: ccbot/bot.py:4317 ccbot/bot.py:4326 ccbot/bot.py:4964 ccbot/bot.py:5080
-#: ccbot/bot.py:6206
+#: ccbot/bot.py:3041 ccbot/bot.py:3049 ccbot/bot.py:3302 ccbot/bot.py:3724
 msgid "Restarting…"
 msgstr "Restarting…"
 
-#: ccbot/bot.py:4373
+#: ccbot/bot.py:3092
 msgid ""
-"🔍 Send a word to look for — it is matched against the session's name, its "
-"first prompt and its last one, in every directory."
+"🔍 Send a word to look for — it is matched against the session's name, its"
+" first prompt and its last one, in every directory."
 msgstr ""
 
-#: ccbot/bot.py:4381
+#: ccbot/bot.py:3100
 msgid "That search is gone — press 🔍 again"
 msgstr ""
 
-#: ccbot/bot.py:4391
-msgid "🔒 <b>Terminal sessions</b> (driven only from the computer)"
-msgstr "🔒 <b>Terminal sessions</b> (driven only from the computer)"
-
-#: ccbot/bot.py:4397
-#, python-brace-format
-msgid "To drive a session from a phone, start it with {button}."
-msgstr "To drive a session from a phone, start it with {button}."
-
-#: ccbot/bot.py:4406
+#: ccbot/bot.py:3110
 msgid "Send the absolute path of the project directory:"
 msgstr "Send the absolute path of the project directory:"
 
-#: ccbot/bot.py:4416
+#: ccbot/bot.py:3120
 msgid "Removed"
 msgstr "Removed"
 
-#: ccbot/bot.py:4425
+#: ccbot/bot.py:3129
 msgid "Reset"
 msgstr "Reset"
 
-#: ccbot/bot.py:4436
+#: ccbot/bot.py:3140
 msgid ""
 "Send the absolute path of a directory (it starts with / or ~).\n"
 "Or just press any button to cancel."
@@ -1529,225 +1153,27 @@ msgstr ""
 "Send the absolute path of a directory (it starts with / or ~).\n"
 "Or just press any button to cancel."
 
-#: ccbot/bot.py:4444 ccbot/bot.py:5142
+#: ccbot/bot.py:3148
 msgid "Starting…"
 msgstr "Starting…"
 
-#: ccbot/bot.py:4492
+#: ccbot/bot.py:3184
+msgid "Bringing it up…"
+msgstr "Bringing it up…"
+
+#: ccbot/bot.py:3196
 #, python-brace-format
 msgid ""
 "▶️ Resuming <b>{name}</b>\n"
 "<code>{path}</code>"
 msgstr ""
 
-#: ccbot/bot.py:4535
+#: ccbot/bot.py:3238
 #, python-brace-format
 msgid "Active: {name}"
 msgstr "Active: {name}"
 
-#: ccbot/bot.py:4569 ccbot/bot.py:4622 ccbot/bot.py:4903
-msgid "It did not go through"
-msgstr ""
-
-#: ccbot/bot.py:4571
-#, python-brace-format
-msgid ""
-"⚠️ That row did not go through — the question is still open in "
-"<b>{name}</b>, and the buttons still work."
-msgstr ""
-
-#: ccbot/bot.py:4584
-msgid "⬇️ The new list is below"
-msgstr ""
-
-#: ccbot/bot.py:4588
-msgid "Picked"
-msgstr ""
-
-#: ccbot/bot.py:4607 ccbot/bot.py:4646
-msgid "The question has already closed"
-msgstr ""
-
-#: ccbot/bot.py:4625
-msgid "This is the first part"
-msgstr ""
-
-#: ccbot/bot.py:4626
-msgid "This is the last part"
-msgstr ""
-
-#: ccbot/bot.py:4632
-msgid "⬅️ Went to the previous part"
-msgstr ""
-
-#: ccbot/bot.py:4634
-msgid "➡️ Went to the next part"
-msgstr ""
-
-#: ccbot/bot.py:4656
-#, python-brace-format
-msgid ""
-"📝 Write the note — it answers this question in <b>{name}</b> instead of an "
-"option."
-msgstr ""
-
-#: ccbot/bot.py:4680
-#, python-brace-format
-msgid "Ticked {n}"
-msgstr "Ticked {n}"
-
-#: ccbot/bot.py:4702 ccbot/bot.py:4794 ccbot/bot.py:4830
-msgid "That dialog has left the screen"
-msgstr ""
-
-#: ccbot/bot.py:4707
-msgid "That option has left the screen"
-msgstr ""
-
-#: ccbot/bot.py:4717
-#, python-brace-format
-msgid "Switching to {label}…"
-msgstr ""
-
-#: ccbot/bot.py:4724 ccbot/keyboards.py:190 ccbot/keyboards.py:218
-msgid "🧠 Model"
-msgstr "🧠 Model"
-
-#: ccbot/bot.py:4725
-msgid "◉ Reasoning effort"
-msgstr "◉ Reasoning effort"
-
-#: ccbot/bot.py:4728
-#, python-brace-format
-msgid ""
-"⚠️ Could not set {title} to <b>{label}</b>. Open 🖥 Screen and pick it by "
-"hand."
-msgstr ""
-
-#: ccbot/bot.py:4742
-#, python-brace-format
-msgid ""
-"{title} of <b>{name}</b> → <b>{label}</b>?\n"
-"Claude Code asks to confirm the switch — answer on the card below."
-msgstr ""
-
-#: ccbot/bot.py:4752
-#, python-brace-format
-msgid ""
-"{title} of <b>{name}</b> → <b>{label}</b>\n"
-"Only for this session; new sessions keep their default."
-msgstr ""
-
-#: ccbot/bot.py:4755
-#, python-brace-format
-msgid ""
-"{title} of <b>{name}</b> → <b>{label}</b>\n"
-"Saved as the default for new sessions too."
-msgstr ""
-
-#: ccbot/bot.py:4790
-#, python-brace-format
-msgid "{name} is already on"
-msgstr ""
-
-#: ccbot/bot.py:4791
-#, python-brace-format
-msgid "{name} is already off"
-msgstr ""
-
-#: ccbot/bot.py:4808
-msgid "Pressed — the card follows once the screen redraws"
-msgstr ""
-
-#: ccbot/bot.py:4812
-#, python-brace-format
-msgid "{name} on — now pick a level"
-msgstr ""
-
-#: ccbot/bot.py:4813
-#, python-brace-format
-msgid "{name} off — now pick a level"
-msgstr ""
-
-#: ccbot/bot.py:4834
-msgid "Only this session"
-msgstr ""
-
-#: ccbot/bot.py:4835
-msgid "This session and new ones"
-msgstr ""
-
-#: ccbot/bot.py:4848
-msgid "That question has left the screen"
-msgstr "That question has left the screen"
-
-#: ccbot/bot.py:4852
-msgid "Tick at least one option first"
-msgstr "Tick at least one option first"
-
-#: ccbot/bot.py:4860
-#, python-brace-format
-msgid "⚠️ Could not press <b>{label}</b>. Open 🖥 Screen and press it by hand."
-msgstr "⚠️ Could not press <b>{label}</b>. Open 🖥 Screen and press it by hand."
-
-#: ccbot/bot.py:4870
-msgid "➡️ Moving on to the next question"
-msgstr "➡️ Moving on to the next question"
-
-#: ccbot/bot.py:4875
-#, python-brace-format
-msgid "✅ Answer sent: <b>{picked}</b>"
-msgstr "✅ Answer sent: <b>{picked}</b>"
-
-#: ccbot/bot.py:4877
-msgid "✅ Answer sent"
-msgstr "✅ Answer sent"
-
-#: ccbot/bot.py:4893
-#, python-brace-format
-msgid "Write your own answer — it goes to <b>{name}</b>"
-msgstr "Write your own answer — it goes to <b>{name}</b>"
-
-#: ccbot/bot.py:4902
-#, python-brace-format
-msgid "Picked {n}"
-msgstr "Picked {n}"
-
-#: ccbot/bot.py:4911
-#, python-brace-format
-msgid ""
-"⚠️ Option <b>{n}</b> did not go through — the question is still open in "
-"<b>{name}</b>. The buttons still work: press it again, or walk the list with"
-" ⬆️⬇️ and confirm with ✅."
-msgstr ""
-
-#: ccbot/bot.py:4925 ccbot/bot.py:4939 ccbot/bot.py:4951 ccbot/bot.py:5323
-msgid "Session not found"
-msgstr "Session not found"
-
-#: ccbot/bot.py:4941
-msgid "Moving it over…"
-msgstr "Moving it over…"
-
-#: ccbot/bot.py:4944
-#, python-brace-format
-msgid "🔗 Moving <b>{name}</b> into tmux"
-msgstr ""
-
-#: ccbot/bot.py:4953 ccbot/bot.py:6239
-msgid "Ending it…"
-msgstr "Ending it…"
-
-#: ccbot/bot.py:4965
-msgid "🔁 Restarting anyway"
-msgstr ""
-
-#: ccbot/bot.py:4978 ccbot/bot.py:4982
-#, python-brace-format
-msgid "📤 /{command} sent"
-msgstr ""
-
-#: ccbot/bot.py:5007
+#: ccbot/bot.py:3256
 #, python-brace-format
 msgid ""
 "{title} for <b>{name}</b>\n"
@@ -1756,40 +1182,23 @@ msgstr ""
 "{title} for <b>{name}</b>\n"
 "Currently: <code>{value}</code>"
 
-#: ccbot/bot.py:5008
+#: ccbot/bot.py:3257
 msgid "🔐 Permission mode"
 msgstr "🔐 Permission mode"
 
-#: ccbot/bot.py:5032
+#: ccbot/bot.py:3281
 msgid "Done"
 msgstr "Done"
 
-#: ccbot/bot.py:5032
+#: ccbot/bot.py:3281
 msgid "Could not switch that"
 msgstr "Could not switch that"
 
-#: ccbot/bot.py:5041
-msgid "Drawing…"
-msgstr "Drawing…"
-
-#: ccbot/bot.py:5046
-msgid "The diagram has left the screen"
-msgstr "The diagram has left the screen"
-
-#: ccbot/bot.py:5060
-msgid "Selected"
-msgstr "Selected"
-
-#: ccbot/bot.py:5073
+#: ccbot/bot.py:3295
 msgid "The bot was started by hand"
 msgstr "The bot was started by hand"
 
-#: ccbot/bot.py:5085
-#, python-brace-format
-msgid "New sessions: {mode}"
-msgstr ""
-
-#: ccbot/bot.py:5166
+#: ccbot/bot.py:3359
 #, python-brace-format
 msgid ""
 "🌐 <b>Interface language</b>\n"
@@ -1800,134 +1209,58 @@ msgstr ""
 "\n"
 "Speaking: <b>{name}</b>"
 
-#: ccbot/bot.py:5169
+#: ccbot/bot.py:3362
 msgid "following your Telegram profile"
 msgstr "following your Telegram profile"
 
-#: ccbot/bot.py:5193
+#: ccbot/bot.py:3386
 msgid "I do not know that language"
 msgstr "I do not know that language"
 
-#: ccbot/bot.py:5198
+#: ccbot/bot.py:3391
 #, python-brace-format
 msgid "Language: {name}"
 msgstr "Language: {name}"
 
-#: ccbot/bot.py:5214
-#, python-brace-format
-msgid "📁 Working in <code>{path}</code>"
-msgstr "📁 Working in <code>{path}</code>"
-
-#: ccbot/bot.py:5216
-#, python-brace-format
-msgid "🚀 Launched from <code>{path}</code>"
-msgstr "🚀 Launched from <code>{path}</code>"
-
-#: ccbot/bot.py:5222 ccbot/bot.py:5462
-#, python-brace-format
-msgid "📊 Status: <b>{status}</b>"
-msgstr "📊 Status: <b>{status}</b>"
-
-#: ccbot/bot.py:5227
-#, python-brace-format
-msgid "🕘 Started: {when}"
-msgstr "🕘 Started: {when}"
-
-#. TRANSLATORS: strftime format — a date this year, plus the time.
-#: ccbot/bot.py:5228 ccbot/bot.py:5495 ccbot/sessions.py:249
-#, python-format
-msgid "%d.%m %H:%M"
-msgstr "%d.%m %H:%M"
-
-#: ccbot/bot.py:5233
-msgid "⚠️ This session belongs to your terminal — it cannot be driven from here."
-msgstr "⚠️ This session belongs to your terminal — it cannot be driven from here."
-
-#: ccbot/bot.py:5236
-#, python-brace-format
-msgid ""
-"{button} sends the process a <b>termination signal</b> (SIGTERM) and brings "
-"<code>claude --resume</code> up in a tmux window — from the directory the "
-"session started in, so the project context stays the same. The terminal "
-"window goes dark, the history survives.\n"
-"A terminal session's stdin cannot be reached from outside, so a clean "
-"<code>/exit</code> is impossible here — which is exactly why the signal is "
-"needed."
-msgstr ""
-"{button} sends the process a <b>termination signal</b> (SIGTERM) and brings "
-"<code>claude --resume</code> up in a tmux window — from the directory the "
-"session started in, so the project context stays the same. The terminal "
-"window goes dark, the history survives.\n"
-"A terminal session's stdin cannot be reached from outside, so a clean "
-"<code>/exit</code> is impossible here — which is exactly why the signal is "
-"needed."
-
-#: ccbot/bot.py:5246
-msgid "🔴 The session is <b>working</b> right now — better to wait until it finishes."
-msgstr "🔴 The session is <b>working</b> right now — better to wait until it finishes."
-
-#: ccbot/bot.py:5259
-msgid "❌ Unknown PID — I cannot stop this one"
-msgstr "❌ Unknown PID — I cannot stop this one"
-
-#: ccbot/bot.py:5263
-#, python-brace-format
-msgid "⏳ Stopping {name} (PID {pid})…"
-msgstr "⏳ Stopping {name} (PID {pid})…"
-
-#: ccbot/bot.py:5269
-msgid "❌ Not allowed to stop that process"
-msgstr "❌ Not allowed to stop that process"
-
-#: ccbot/bot.py:5277
-#, python-brace-format
-msgid ""
-"⚠️ Process {pid} did not exit within {seconds} s. End the session in the "
-"terminal and try again."
-msgstr ""
-"⚠️ Process {pid} did not exit within {seconds} s. End the session in the "
-"terminal and try again."
-
-#: ccbot/bot.py:5289
-#, python-brace-format
-msgid "✅ {name} stopped — bringing it up in tmux…"
-msgstr "✅ {name} stopped — bringing it up in tmux…"
-
-#: ccbot/bot.py:5322
+#: ccbot/bot.py:3410
 msgid "That session is running again — open it in /sessions."
 msgstr ""
 
-#: ccbot/bot.py:5354
+#: ccbot/bot.py:3411
+msgid "Session not found"
+msgstr "Session not found"
+
+#: ccbot/bot.py:3442
 #, python-brace-format
 msgid ""
 "🕘 <b>Closed sessions</b> — resuming brings the context back.\n"
 "📁 <code>{path}</code>"
 msgstr ""
 
-#: ccbot/bot.py:5357 ccbot/bot.py:5396
+#: ccbot/bot.py:3445 ccbot/bot.py:3484
 #, python-brace-format
 msgid "{n} session"
 msgid_plural "{n} sessions"
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bot.py:5359
+#: ccbot/bot.py:3447
 #, python-brace-format
 msgid ""
 "{count} · tap one for details — whether to resume it is decided there.\n"
 "<i>time · topic · live ones are in /sessions</i>"
 msgstr ""
 
-#: ccbot/bot.py:5372
+#: ccbot/bot.py:3460
 msgid "Too short to search for — send at least two characters."
 msgstr ""
 
-#: ccbot/bot.py:5376
+#: ccbot/bot.py:3464
 #, python-brace-format
 msgid "🔍 Looking for «{query}»…"
 msgstr ""
 
-#: ccbot/bot.py:5386
+#: ccbot/bot.py:3474
 #, python-brace-format
 msgid ""
 "🔍 Nothing matches «{query}».\n"
@@ -1935,262 +1268,207 @@ msgid ""
 "session — not the whole conversation.</i>"
 msgstr ""
 
-#: ccbot/bot.py:5400
+#: ccbot/bot.py:3488
 #, python-brace-format
 msgid ""
 "🔍 «{query}» — {count}.\n"
 "<i>time · directory · topic</i>"
 msgstr ""
 
-#: ccbot/bot.py:5410
+#: ccbot/bot.py:3498
 msgid "🕘 No closed sessions found in the project directories."
 msgstr "🕘 No closed sessions found in the project directories."
 
-#: ccbot/bot.py:5417
+#: ccbot/bot.py:3505
 #, python-brace-format
 msgid ""
 "🕘 <b>Closed sessions</b> — {total} in all, by directory.\n"
 "Pick a project to see its own list."
 msgstr ""
 
-#: ccbot/bot.py:5473
+#: ccbot/bot.py:3533
+#, python-brace-format
+msgid "📊 Status: <b>{status}</b>"
+msgstr "📊 Status: <b>{status}</b>"
+
+#: ccbot/bot.py:3543
 #, python-brace-format
 msgid ""
-"⬆️ Claude Code <code>{old}</code> — <code>{new}</code> is on disk; /update "
-"restarts it without losing the context."
+"⬆️ Claude Code <code>{old}</code> — <code>{new}</code> is on disk; "
+"/update restarts it without losing the context."
 msgstr ""
 
-#: ccbot/bot.py:5480
+#: ccbot/bot.py:3550
 #, python-brace-format
 msgid "📈 Context: {pct}% ({tokens} token)"
 msgid_plural "📈 Context: {pct}% ({tokens} tokens)"
 msgstr[0] "📈 Context: {pct}% ({tokens} token)"
 msgstr[1] "📈 Context: {pct}% ({tokens} tokens)"
 
-#: ccbot/bot.py:5485
+#: ccbot/bot.py:3555
 msgid "📈 Context: metrics appear after the first request"
 msgstr "📈 Context: metrics appear after the first request"
 
-#: ccbot/bot.py:5488 ccbot/util.py:143
+#: ccbot/bot.py:3558 ccbot/util.py:128
 #, python-brace-format
 msgid "resets {when}"
 msgstr "resets {when}"
 
-#: ccbot/bot.py:5491
+#: ccbot/bot.py:3561
 #, python-brace-format
 msgid "💵 Session cost: ${amount}"
 msgstr "💵 Session cost: ${amount}"
 
-#: ccbot/bot.py:5494
+#: ccbot/bot.py:3564
 #, python-brace-format
 msgid "🕘 Created: {when}"
 msgstr "🕘 Created: {when}"
 
-#: ccbot/bot.py:5511
+#. TRANSLATORS: strftime format — a date this year, plus the time.
+#: ccbot/bot.py:3565 ccbot/sessions.py:220
+#, python-format
+msgid "%d.%m %H:%M"
+msgstr "%d.%m %H:%M"
+
+#: ccbot/bot.py:3577
 #, python-brace-format
 msgid "🕘 Last active: {when}"
 msgstr "🕘 Last active: {when}"
 
-#: ccbot/bot.py:5513
+#: ccbot/bot.py:3579
 #, python-brace-format
 msgid "💬 It started with: {text}"
 msgstr "💬 It started with: {text}"
 
-#: ccbot/bot.py:5517
+#: ccbot/bot.py:3583
 #, python-brace-format
 msgid "⏹ It stopped on: {text}"
 msgstr ""
 
-#: ccbot/bot.py:5521
+#: ccbot/bot.py:3587
 #, python-brace-format
 msgid "📦 Transcript: {size} MB"
 msgstr "📦 Transcript: {size} MB"
 
-#: ccbot/bot.py:5524
+#: ccbot/bot.py:3590
 #, python-brace-format
 msgid "📦 Transcript: {size} KB"
 msgstr "📦 Transcript: {size} KB"
 
-#: ccbot/bot.py:5527
+#: ccbot/bot.py:3593
 #, python-brace-format
 msgid ""
-"{button} runs <code>claude --resume</code> in a new tmux window — the "
-"session picks up all of its context."
+"{button} brings the session back through the session host — it picks up "
+"all of its context."
 msgstr ""
-"{button} runs <code>claude --resume</code> in a new tmux window — the "
-"session picks up all of its context."
 
-#: ccbot/bot.py:5529 ccbot/keyboards.py:138
+#: ccbot/bot.py:3595 ccbot/keyboards.py:106
 msgid "▶️ Resume"
 msgstr "▶️ Resume"
 
-#: ccbot/bot.py:5579
+#: ccbot/bot.py:3633
 #, python-brace-format
 msgid "▶️ Active session: <b>{name}</b>"
 msgstr "▶️ Active session: <b>{name}</b>"
 
-#: ccbot/bot.py:5582
+#: ccbot/bot.py:3636
 #, python-brace-format
 msgid "Status: {status}"
 msgstr "Status: {status}"
 
-#: ccbot/bot.py:5643
-msgid "It is already open — scroll down to its card"
-msgstr ""
-
-#: ccbot/bot.py:5671
-msgid "Asking Claude Code…"
-msgstr ""
-
-#: ccbot/bot.py:5677
-#, python-brace-format
-msgid ""
-"⏳ <b>{name}</b>: {reason}.\n"
-"If the bot misreads the session, send /{command} anyway."
-msgstr ""
-
-#: ccbot/bot.py:5696 ccbot/bot.py:5699 ccbot/bot.py:5706
-msgid "It is working right now — press ⏸ Esc or wait"
-msgstr ""
-
-#: ccbot/bot.py:5929
-#, python-brace-format
-msgid "✏️ Answer sent to <b>{name}</b> · it is the active session now"
-msgstr "✏️ Answer sent to <b>{name}</b> · it is the active session now"
-
-#: ccbot/bot.py:6082
-msgid "Question dropped"
-msgstr "Question dropped"
-
-#: ccbot/bot.py:6086
-#, python-brace-format
-msgid ""
-"💬 Question dropped in <b>{name}</b>. It is the active session now — write "
-"what you want to clarify and it goes there."
-msgstr ""
-"💬 Question dropped in <b>{name}</b>. It is the active session now — write "
-"what you want to clarify and it goes there."
-
-#: ccbot/bot.py:6103
-#, python-brace-format
-msgid "⚠️ The question in <b>{name}</b> has already closed — the note was not sent."
-msgstr ""
-
-#: ccbot/bot.py:6122
-#, python-brace-format
-msgid "⚠️ The note did not go through — the question is still open in <b>{name}</b>."
-msgstr ""
-
-#: ccbot/bot.py:6133
-#, python-brace-format
-msgid "📝 Note sent to <b>{name}</b> · it is the active session now"
-msgstr ""
-
-#: ccbot/bot.py:6163
+#: ccbot/bot.py:3695
 msgid "Interrupting…"
 msgstr ""
 
-#: ccbot/bot.py:6169
-msgid "Esc sent"
-msgstr "Esc sent"
-
-#: ccbot/bot.py:6172
+#: ccbot/bot.py:3699
 msgid "It is not asking anything right now"
 msgstr ""
 
-#: ccbot/bot.py:6175
+#: ccbot/bot.py:3702
 msgid "The question is below"
 msgstr ""
 
-#: ccbot/bot.py:6177
-msgid "Taking a snapshot…"
-msgstr "Taking a snapshot…"
-
-#: ccbot/bot.py:6194
-msgid "/context sent — the breakdown comes back as a screen"
+#: ccbot/bot.py:3720
+msgid "/context sent — the breakdown comes in a moment"
 msgstr ""
 
-#: ccbot/bot.py:6197
-msgid "Moving it…"
-msgstr ""
-
-#: ccbot/bot.py:6218
+#: ccbot/bot.py:3734
 msgid "/compact sent — the chat is told when it is done"
 msgstr ""
 
-#: ccbot/bot.py:6221
-msgid "/compact sent — the result comes back as a screen when it finishes"
-msgstr ""
-
-#: ccbot/bot.py:6228
+#: ccbot/bot.py:3740
 msgid "/clear sent"
 msgstr "/clear sent"
 
-#: ccbot/bot.py:6262
+#: ccbot/bot.py:3751
+msgid "Ending it…"
+msgstr "Ending it…"
+
+#: ccbot/bot.py:3774
 msgid "Session list and controls"
 msgstr "Session list and controls"
 
-#: ccbot/bot.py:6263
+#: ccbot/bot.py:3775
 msgid "Controls of the session you are talking to"
 msgstr ""
 
-#: ccbot/bot.py:6264
+#: ccbot/bot.py:3776
 msgid "New session in a chosen directory"
 msgstr "New session in a chosen directory"
 
-#: ccbot/bot.py:6265
+#: ccbot/bot.py:3777
 msgid "Quota and context, without asking Claude"
 msgstr ""
 
-#: ccbot/bot.py:6266
-msgid "Terminal snapshot, or where an SDK session stopped"
+#: ccbot/bot.py:3778
+msgid "Where the session stopped"
 msgstr ""
 
-#: ccbot/bot.py:6267
+#: ccbot/bot.py:3779
 msgid "Interrupt what Claude is doing"
 msgstr "Interrupt what Claude is doing"
 
-#: ccbot/bot.py:6268
+#: ccbot/bot.py:3780
 msgid "Clear the active session's context"
 msgstr "Clear the active session's context"
 
-#: ccbot/bot.py:6269
+#: ccbot/bot.py:3781
 msgid "Give a session your own name"
 msgstr "Give a session your own name"
 
-#: ccbot/bot.py:6270
+#: ccbot/bot.py:3782
 msgid "End the active session cleanly"
 msgstr "End the active session cleanly"
 
-#: ccbot/bot.py:6271
+#: ccbot/bot.py:3783
 msgid "Project directories for new sessions"
 msgstr "Project directories for new sessions"
 
-#: ccbot/bot.py:6272
+#: ccbot/bot.py:3784
 msgid "Interface language"
 msgstr "Interface language"
 
-#: ccbot/bot.py:6273
+#: ccbot/bot.py:3785
 msgid "Last entries from the bot's journal"
 msgstr "Last entries from the bot's journal"
 
-#: ccbot/bot.py:6274
+#: ccbot/bot.py:3786
 msgid "Claude Code version and session restarts"
 msgstr ""
 
-#: ccbot/bot.py:6275
+#: ccbot/bot.py:3787
 msgid "Log Claude in to another account"
 msgstr ""
 
-#: ccbot/bot.py:6276
+#: ccbot/bot.py:3788
 msgid "Bot state: uptime, version, restart"
 msgstr "Bot state: uptime, version, restart"
 
-#: ccbot/bot.py:6277
+#: ccbot/bot.py:3789
 msgid "Help"
 msgstr "Help"
 
-#: ccbot/bot.py:6345
+#: ccbot/bot.py:3857
 #, python-brace-format
 msgid ""
 "✅ The bot is back — the restart took {duration}.\n"
@@ -2199,22 +1477,20 @@ msgstr ""
 "✅ The bot is back — the restart took {duration}.\n"
 "Code: <code>{version}</code>"
 
-#: ccbot/bot.py:6355
+#: ccbot/bot.py:3867
 msgid ""
-"⚠️ I could not find the <code>claude</code> executable. Lists of live "
-"sessions will be empty.\n"
+"⚠️ I could not find the <code>claude</code> executable: the Claude Code "
+"version on disk cannot be read, and the session host most likely cannot "
+"start sessions either.\n"
 "Set the path in .env: <code>CCBOT_CLAUDE_BIN=/path/to/claude</code>"
 msgstr ""
-"⚠️ I could not find the <code>claude</code> executable. Lists of live "
-"sessions will be empty.\n"
-"Set the path in .env: <code>CCBOT_CLAUDE_BIN=/path/to/claude</code>"
 
 #: ccbot/bridge.py:209
 #, python-brace-format
 msgid "⚠️ The side question to <b>{name}</b> got no answer: <code>{error}</code>"
 msgstr ""
 
-#: ccbot/bridge.py:221 ccbot/watcher.py:1059
+#: ccbot/bridge.py:221
 #, python-brace-format
 msgid "🗨 Side question (/btw): {question}"
 msgstr ""
@@ -2227,23 +1503,27 @@ msgstr ""
 msgid "⏹ Closed to send a message"
 msgstr ""
 
-#: ccbot/bridge.py:364 ccbot/watcher.py:953
+#: ccbot/bridge.py:356 ccbot/bridge.py:485 ccbot/bridge.py:554
+#: ccbot/bridge.py:899 ccbot/bridge.py:1062
+msgid "⏹ Question closed"
+msgstr ""
+
+#: ccbot/bridge.py:361
 msgid "⬇️ Shown again below"
 msgstr ""
 
-#: ccbot/bridge.py:385
+#: ccbot/bridge.py:382
 msgid "✅ The session host is back — SDK sessions are reachable again."
 msgstr ""
 
-#: ccbot/bridge.py:398
+#: ccbot/bridge.py:395
 msgid ""
 "⚠️ <b>The session host is not answering.</b>\n"
-"SDK sessions cannot be reached until it is back; tmux sessions are not "
-"affected. It restarts by itself — if this lasts, see <code>journalctl --user"
-" -u claude-tg-host</code>."
+"The sessions cannot be reached until it is back. It restarts by itself — "
+"if this lasts, see <code>journalctl --user -u claude-tg-host</code>."
 msgstr ""
 
-#: ccbot/bridge.py:410
+#: ccbot/bridge.py:406
 #, python-brace-format
 msgid ""
 "⚠️ <b>The SDK session bridge has crashed</b>\n"
@@ -2252,572 +1532,398 @@ msgid ""
 "Details in /log."
 msgstr ""
 
-#: ccbot/bridge.py:426
+#: ccbot/bridge.py:422
 #, python-brace-format
 msgid ""
 "⏳ <b>{name}</b>\n"
 "working for {minutes} min"
 msgstr ""
 
-#: ccbot/bridge.py:500
+#: ccbot/bridge.py:496
 msgid ""
-"⚠️ The bot was away longer than the session host keeps its journal: some SDK"
-" output may be missing from the chat."
+"⚠️ The bot was away longer than the session host keeps its journal: some "
+"SDK output may be missing from the chat."
 msgstr ""
 
-#: ccbot/bridge.py:613
+#: ccbot/bridge.py:609
 msgid "⏹ Interrupted."
 msgstr ""
 
-#: ccbot/bridge.py:617
+#: ccbot/bridge.py:613
 #, python-brace-format
 msgid "⚠️ The turn ended with an error{status}: {detail}"
 msgstr ""
 
-#: ccbot/bridge.py:638 ccbot/watcher.py:598
+#: ccbot/bridge.py:634
 #, python-brace-format
 msgid ""
-"🧹 <b>{name}</b>: context cleared — the session was given a new id, and I am "
-"following it there."
+"🧹 <b>{name}</b>: context cleared — the session was given a new id, and I "
+"am following it there."
 msgstr ""
-"🧹 <b>{name}</b>: context cleared — the session was given a new id, and I am "
-"following it there."
+"🧹 <b>{name}</b>: context cleared — the session was given a new id, and I "
+"am following it there."
 
-#: ccbot/bridge.py:650
+#: ccbot/bridge.py:646
 #, python-brace-format
 msgid "⚠️ <b>{name}</b>: the Claude process has ended."
 msgstr ""
 
-#: ccbot/bridge.py:653
+#: ccbot/bridge.py:649
 msgid "The session is resting: your next message resumes it with its context."
 msgstr ""
 
-#: ccbot/bridge.py:655
+#: ccbot/bridge.py:651
 msgid "Cut off with it:"
 msgstr ""
 
-#: ccbot/bridge.py:663
+#: ccbot/bridge.py:659
 msgid "🗜 Context compacted."
 msgstr ""
 
-#: ccbot/bridge.py:665
+#: ccbot/bridge.py:661
 #, python-brace-format
 msgid "⚠️ Claude reported an error: {error}"
 msgstr ""
 
-#: ccbot/bridge.py:673
+#: ccbot/bridge.py:669
 msgid "🔌 <b>The session host was restarted.</b>"
 msgstr ""
 
-#: ccbot/bridge.py:674
+#: ccbot/bridge.py:670
 msgid "SDK sessions are resting and wake up with your next message."
 msgstr ""
 
-#: ccbot/bridge.py:678
+#: ccbot/bridge.py:674
 #, python-brace-format
 msgid "✂️ <b>{name}</b> was cut off in the middle of:"
 msgstr ""
 
-#: ccbot/bridge.py:683
+#: ccbot/bridge.py:679
 #, python-brace-format
 msgid "❓ {count} open question was closed with it."
 msgid_plural "❓ {count} open questions were closed with it."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bridge.py:704
+#: ccbot/bridge.py:700
 #, python-brace-format
 msgid "🔁 Send again: {text}"
 msgstr ""
 
-#: ccbot/bridge.py:770
+#: ccbot/bridge.py:766
 #, python-brace-format
 msgid "**📋 {name}: a plan for your approval**"
 msgstr ""
 
-#: ccbot/bridge.py:772
+#: ccbot/bridge.py:768
 msgid "✅ Approve"
 msgstr ""
 
-#: ccbot/bridge.py:773
+#: ccbot/bridge.py:769
 msgid "✅ Approve, accept edits"
 msgstr ""
 
-#: ccbot/bridge.py:775
+#: ccbot/bridge.py:771
 msgid "✏️ Revise"
 msgstr ""
 
-#: ccbot/bridge.py:776 ccbot/bridge.py:921
+#: ccbot/bridge.py:772 ccbot/bridge.py:917
 msgid "❌ Keep planning"
 msgstr ""
 
-#: ccbot/bridge.py:780
+#: ccbot/bridge.py:776
 #, python-brace-format
 msgid "Claude wants to use {tool}"
 msgstr ""
 
-#: ccbot/bridge.py:797 ccbot/bridge.py:816
+#: ccbot/bridge.py:793 ccbot/bridge.py:812
 msgid "✅ Allow"
 msgstr ""
 
-#: ccbot/bridge.py:798 ccbot/bridge.py:817
+#: ccbot/bridge.py:794 ccbot/bridge.py:813
 msgid "❌ Deny"
 msgstr ""
 
-#: ccbot/bridge.py:799
+#: ccbot/bridge.py:795
 msgid "✏️ Deny with a reason"
 msgstr ""
 
-#: ccbot/bridge.py:805
+#: ccbot/bridge.py:801
 #, python-brace-format
 msgid "✅ Always: {rule}"
 msgstr ""
 
-#: ccbot/bridge.py:814 ccbot/bridge.py:826 ccbot/bridge.py:865
+#: ccbot/bridge.py:810 ccbot/bridge.py:822 ccbot/bridge.py:861
 msgid "🚫 Don't answer"
 msgstr ""
 
-#: ccbot/bridge.py:828
+#: ccbot/bridge.py:824
 #, python-brace-format
 msgid "**❓ {name}** asks a question this bot cannot read."
 msgstr ""
 
-#: ccbot/bridge.py:845
+#: ccbot/bridge.py:841
 #, python-brace-format
 msgid "_Several can be ticked; then press {button}._"
 msgstr ""
 
-#: ccbot/bridge.py:846 ccbot/bridge.py:858
+#: ccbot/bridge.py:842 ccbot/bridge.py:854
 msgid "✅ Next"
 msgstr ""
 
-#: ccbot/bridge.py:846 ccbot/bridge.py:858
+#: ccbot/bridge.py:842 ccbot/bridge.py:854
 msgid "✅ Send"
 msgstr ""
 
-#: ccbot/bridge.py:854 ccbot/keyboards.py:139 ccbot/keyboards.py:148
-#: ccbot/keyboards.py:159 ccbot/keyboards.py:244 ccbot/keyboards.py:503
-#: ccbot/keyboards.py:670 ccbot/keyboards.py:681
+#: ccbot/bridge.py:850 ccbot/keyboards.py:107 ccbot/keyboards.py:114
+#: ccbot/keyboards.py:155 ccbot/keyboards.py:204 ccbot/keyboards.py:254
+#: ccbot/keyboards.py:265
 msgid "⬅️ Back"
 msgstr "⬅️ Back"
 
-#: ccbot/bridge.py:862
+#: ccbot/bridge.py:858
 msgid "✏️ Own answer"
 msgstr ""
 
-#: ccbot/bridge.py:864
+#: ccbot/bridge.py:860
 msgid "💬 Discuss"
 msgstr ""
 
-#: ccbot/bridge.py:910
+#: ccbot/bridge.py:906
 msgid "✅ Allowed"
 msgstr ""
 
-#: ccbot/bridge.py:911
+#: ccbot/bridge.py:907
 msgid "✅ Plan approved"
 msgstr ""
 
-#: ccbot/bridge.py:914
+#: ccbot/bridge.py:910
 msgid "✅ Approved, edits accepted"
 msgstr ""
 
-#: ccbot/bridge.py:917
+#: ccbot/bridge.py:913
 msgid "✅ Always allowed"
 msgstr ""
 
-#: ccbot/bridge.py:924
+#: ccbot/bridge.py:920
 msgid "🚫 Not answered"
 msgstr ""
 
-#: ccbot/bridge.py:931
+#: ccbot/bridge.py:927
 msgid "💬 To be discussed — your next message goes there"
 msgstr ""
 
-#: ccbot/bridge.py:934
+#: ccbot/bridge.py:930
 msgid "❌ Denied"
 msgstr ""
 
-#: ccbot/bridge.py:936 ccbot/bridge.py:979 ccbot/bridge.py:1041
-#: ccbot/bridge.py:1052
+#: ccbot/bridge.py:932 ccbot/bridge.py:975 ccbot/bridge.py:1037
+#: ccbot/bridge.py:1048
 msgid "Could not pass the answer on — see /log"
 msgstr ""
 
-#: ccbot/bridge.py:979
+#: ccbot/bridge.py:975
 msgid "Answered"
 msgstr ""
 
-#: ccbot/bridge.py:1028
+#: ccbot/bridge.py:1024
 msgid "This question is no longer open."
 msgstr ""
 
-#: ccbot/bridge.py:1034
+#: ccbot/bridge.py:1030
 msgid "The question has moved on — its card is shown again."
 msgstr ""
 
-#: ccbot/bridge.py:1039
+#: ccbot/bridge.py:1035
 msgid "✏️ Answer taken — the next part is on the card."
 msgstr ""
 
-#: ccbot/bridge.py:1040
+#: ccbot/bridge.py:1036
 msgid "✏️ Answered."
 msgstr ""
 
-#: ccbot/bridge.py:1046
+#: ccbot/bridge.py:1042
 msgid "✏️ Sent back with changes"
 msgstr ""
 
-#: ccbot/bridge.py:1049
+#: ccbot/bridge.py:1045
 msgid "❌ Denied with a reason"
 msgstr ""
 
-#: ccbot/bridge.py:1067
+#: ccbot/bridge.py:1063
 msgid "✅ Already answered"
 msgstr ""
 
-#: ccbot/keyboards.py:88
-msgid "──── 🖥 in tmux ────"
-msgstr ""
-
-#: ccbot/keyboards.py:92 ccbot/keyboards.py:104 ccbot/keyboards.py:495
+#: ccbot/keyboards.py:77 ccbot/keyboards.py:196
 msgid "waiting"
 msgstr "waiting"
 
-#: ccbot/keyboards.py:101
-msgid "──── 🔗 in your terminal ────"
-msgstr ""
-
-#: ccbot/keyboards.py:114
-#, python-brace-format
-msgid "🔌 Restore stopped sessions ({count})"
-msgstr ""
-
-#: ccbot/keyboards.py:120
+#: ccbot/keyboards.py:88
 msgid "🔄 Refresh"
 msgstr "🔄 Refresh"
 
-#: ccbot/keyboards.py:134 ccbot/keyboards.py:181 ccbot/keyboards.py:201
-#: ccbot/keyboards.py:712
+#: ccbot/keyboards.py:102 ccbot/keyboards.py:126 ccbot/keyboards.py:287
 msgid "🔔 Show the question"
 msgstr ""
 
-#: ccbot/keyboards.py:146 ccbot/keyboards.py:152 ccbot/keyboards.py:195
-#: ccbot/keyboards.py:225
-msgid "🚪 End"
-msgstr "🚪 End"
-
-#: ccbot/keyboards.py:151
+#: ccbot/keyboards.py:111
 msgid "▶️ Open"
 msgstr "▶️ Open"
 
-#: ccbot/keyboards.py:157 ccbot/keyboards.py:229
-msgid "↗️ Move to SDK"
-msgstr ""
+#: ccbot/keyboards.py:112 ccbot/keyboards.py:140
+msgid "🚪 End"
+msgstr "🚪 End"
 
-#: ccbot/keyboards.py:168
-msgid "⬅️ To the list"
-msgstr ""
-
-#: ccbot/keyboards.py:183
+#: ccbot/keyboards.py:128
 msgid "📜 Where it stopped"
 msgstr ""
 
-#: ccbot/keyboards.py:186 ccbot/keyboards.py:206
+#: ccbot/keyboards.py:131
 msgid "📊 Limits"
 msgstr "📊 Limits"
 
-#: ccbot/keyboards.py:189 ccbot/keyboards.py:215
+#: ccbot/keyboards.py:134
 msgid "🔁 Restart"
 msgstr ""
 
-#: ccbot/keyboards.py:191 ccbot/keyboards.py:219
+#: ccbot/keyboards.py:135
+msgid "🧠 Model"
+msgstr "🧠 Model"
+
+#: ccbot/keyboards.py:136
 msgid "◉ Effort"
 msgstr "◉ Effort"
 
-#: ccbot/keyboards.py:192 ccbot/keyboards.py:220
+#: ccbot/keyboards.py:137
 msgid "🔐 Mode"
 msgstr "🔐 Mode"
 
-#: ccbot/keyboards.py:193 ccbot/keyboards.py:223
+#: ccbot/keyboards.py:138
 msgid "✏️ Rename"
 msgstr "✏️ Rename"
 
-#: ccbot/keyboards.py:194 ccbot/keyboards.py:224
+#: ccbot/keyboards.py:139
 msgid "🔑 Other account"
 msgstr ""
 
-#: ccbot/keyboards.py:196 ccbot/keyboards.py:230 ccbot/keyboards.py:650
-#: ccbot/keyboards.py:848 ccbot/keyboards.py:883 ccbot/keyboards.py:925
-#: ccbot/keyboards.py:967 ccbot/keyboards.py:994 ccbot/keyboards.py:1007
+#: ccbot/keyboards.py:141 ccbot/keyboards.py:234 ccbot/keyboards.py:373
+#: ccbot/keyboards.py:408 ccbot/keyboards.py:443 ccbot/keyboards.py:485
+#: ccbot/keyboards.py:512 ccbot/keyboards.py:525
 msgid "⬅️ Sessions"
 msgstr "⬅️ Sessions"
 
-#: ccbot/keyboards.py:205 ccbot/keyboards.py:319 ccbot/keyboards.py:336
-#: ccbot/keyboards.py:349 ccbot/keyboards.py:452 ccbot/keyboards.py:566
-#: ccbot/keyboards.py:589
-msgid "🖥 Screen"
-msgstr "🖥 Screen"
-
-#: ccbot/keyboards.py:259
-msgid "✅ this session"
-msgstr ""
-
-#: ccbot/keyboards.py:259
-msgid "this session"
-msgstr ""
-
-#: ccbot/keyboards.py:262
-msgid "✅ + new sessions"
-msgstr ""
-
-#: ccbot/keyboards.py:262
-msgid "+ new sessions"
-msgstr ""
-
-#: ccbot/keyboards.py:292
+#: ccbot/keyboards.py:171
 #, python-brace-format
-msgid "⚡ {name}: on"
+msgid "▶️ Current: {name}"
 msgstr ""
 
-#: ccbot/keyboards.py:294
-#, python-brace-format
-msgid "⚡ {name}: off"
-msgstr ""
-
-#: ccbot/keyboards.py:311
-msgid "▾ Hide the other models"
-msgstr ""
-
-#: ccbot/keyboards.py:312
-msgid "▸ More models"
-msgstr ""
-
-#: ccbot/keyboards.py:318 ccbot/keyboards.py:689
-msgid "✖️ Cancel"
-msgstr ""
-
-#. TRANSLATORS: a multi-part question — this moves to its next part.
-#: ccbot/keyboards.py:413
-#, python-brace-format
-msgid "➡️ Next question ({n} ticked)"
-msgstr "➡️ Next question ({n} ticked)"
-
-#: ccbot/keyboards.py:414
-msgid "➡️ Next question"
-msgstr "➡️ Next question"
-
-#. TRANSLATORS: sends the ticked options of a multi-select question.
-#: ccbot/keyboards.py:417
-#, python-brace-format
-msgid "✅ Send {n} choice"
-msgid_plural "✅ Send {n} choices"
-msgstr[0] "✅ Send {n} choice"
-msgstr[1] "✅ Send {n} choices"
-
-#: ccbot/keyboards.py:418
-msgid "✅ Send answer"
-msgstr "✅ Send answer"
-
-#. TRANSLATORS: answers a question with a note of one's own instead
-#. of one of its options ("n to add notes" in the terminal).
-#: ccbot/keyboards.py:431
-msgid "📝 Answer with a note"
-msgstr ""
-
-#: ccbot/keyboards.py:436
-msgid "⬅️ Previous part"
-msgstr ""
-
-#: ccbot/keyboards.py:438
-msgid "Next part ➡️"
-msgstr ""
-
-#: ccbot/keyboards.py:446 ccbot/keyboards.py:562
-msgid "✅ Select"
-msgstr "✅ Select"
-
-#: ccbot/keyboards.py:451 ccbot/watcher.py:1648
-msgid "🖼 Diagram"
-msgstr "🖼 Diagram"
-
-#: ccbot/keyboards.py:471
+#: ccbot/keyboards.py:173
 msgid "📋 Another session"
 msgstr ""
 
-#: ccbot/keyboards.py:473 ccbot/keyboards.py:506
+#: ccbot/keyboards.py:175 ccbot/keyboards.py:207
 msgid "🗑 Discard"
 msgstr ""
 
-#: ccbot/keyboards.py:523
-#, python-brace-format
-msgid "↩️ Restore all ({count})"
-msgstr ""
-
-#: ccbot/keyboards.py:531
-msgid "🗑 Forget them"
-msgstr ""
-
-#: ccbot/keyboards.py:544
+#: ccbot/keyboards.py:220
 msgid "🎛 Session controls"
 msgstr ""
 
-#: ccbot/keyboards.py:579
-msgid "📋 Copy again"
-msgstr ""
-
-#: ccbot/keyboards.py:583
-msgid "⬅️ Earlier"
-msgstr ""
-
-#: ccbot/keyboards.py:585
-msgid "Later ➡️"
-msgstr ""
-
-#: ccbot/keyboards.py:588
-msgid "✖️ Close"
-msgstr ""
-
-#: ccbot/keyboards.py:595
-msgid "✖️ Cancel the login"
-msgstr ""
-
-#: ccbot/keyboards.py:614 ccbot/keyboards.py:688
-msgid "🔑 Open the sign-in page"
-msgstr ""
-
-#: ccbot/keyboards.py:622 ccbot/keyboards.py:704
-msgid "🔁 Try again with a new link"
-msgstr ""
-
-#: ccbot/keyboards.py:630
-msgid "⏎ Continue"
-msgstr ""
-
-#: ccbot/keyboards.py:643
-#, python-brace-format
-msgid "🧪 New sessions: switch to «{mode}»"
-msgstr ""
-
-#: ccbot/keyboards.py:646
+#: ccbot/keyboards.py:230
 msgid "🔄 Restart the bot"
 msgstr "🔄 Restart the bot"
 
-#: ccbot/keyboards.py:649 ccbot/keyboards.py:847
+#: ccbot/keyboards.py:233 ccbot/keyboards.py:372
 msgid "♻️ Refresh"
 msgstr "♻️ Refresh"
 
-#: ccbot/keyboards.py:696
-msgid "↗️ Move anyway — the background work stops"
+#: ccbot/keyboards.py:272
+msgid "🔑 Open the sign-in page"
 msgstr ""
 
-#: ccbot/keyboards.py:719
-msgid "tmux"
+#: ccbot/keyboards.py:273
+msgid "✖️ Cancel"
 msgstr ""
 
-#: ccbot/keyboards.py:719
-msgid "tmux + 🧪 SDK button"
+#: ccbot/keyboards.py:279
+msgid "🔁 Try again with a new link"
 msgstr ""
 
-#: ccbot/keyboards.py:720
-msgid "Agent SDK"
-msgstr ""
-
-#: ccbot/keyboards.py:734
+#: ccbot/keyboards.py:302
 msgid "✏️ This answers the question"
 msgstr ""
 
-#: ccbot/keyboards.py:737
+#: ccbot/keyboards.py:304
 msgid "💬 Close the question and send"
 msgstr ""
 
-#: ccbot/keyboards.py:739
+#: ccbot/keyboards.py:306
 msgid "⏳ Send after the answer"
 msgstr ""
 
-#: ccbot/keyboards.py:741 ccbot/keyboards.py:749
+#: ccbot/keyboards.py:308 ccbot/keyboards.py:316
 msgid "🗑 Don't send"
 msgstr ""
 
-#: ccbot/keyboards.py:763
-#, python-brace-format
-msgid "📤 Send /{command} anyway"
-msgstr ""
-
-#: ccbot/keyboards.py:779 ccbot/keyboards.py:839
-#, python-brace-format
-msgid "🔁 Restart anyway: {name}"
-msgstr ""
-
-#: ccbot/keyboards.py:781
-msgid "🔁 Restart anyway — cancels the automatic continuation"
-msgstr ""
-
-#: ccbot/keyboards.py:783
-msgid "🔁 Restart anyway — stops the background tasks"
-msgstr ""
-
-#: ccbot/keyboards.py:810 ccbot/keyboards.py:865 ccbot/keyboards.py:902
+#: ccbot/keyboards.py:343 ccbot/keyboards.py:390 ccbot/keyboards.py:420
 msgid "⬅️ Cancel"
 msgstr "⬅️ Cancel"
 
-#: ccbot/keyboards.py:829
+#: ccbot/keyboards.py:358
 msgid "⬆️ Restart this session"
 msgstr ""
 
-#: ccbot/keyboards.py:835
+#: ccbot/keyboards.py:364
 #, python-brace-format
 msgid "⬆️ Restart all idle ({count})"
 msgstr ""
 
-#: ccbot/keyboards.py:842
+#: ccbot/keyboards.py:367
 msgid "🆕 What's new"
 msgstr ""
 
-#: ccbot/keyboards.py:843
+#: ccbot/keyboards.py:368
 msgid "🔄 Check for updates"
 msgstr ""
 
-#: ccbot/keyboards.py:856
+#: ccbot/keyboards.py:381
 msgid "⬆️ Update sessions"
 msgstr ""
 
-#: ccbot/keyboards.py:864
+#: ccbot/keyboards.py:389
 msgid "✅ Yes, restart"
 msgstr "✅ Yes, restart"
 
-#: ccbot/keyboards.py:879
+#: ccbot/keyboards.py:404
 msgid "➕ Add a directory"
 msgstr "➕ Add a directory"
 
-#: ccbot/keyboards.py:881
+#: ccbot/keyboards.py:406
 msgid "🔄 Reset to autodiscovery"
 msgstr "🔄 Reset to autodiscovery"
 
-#: ccbot/keyboards.py:899
-msgid "🧪 SDK"
-msgstr ""
-
-#: ccbot/keyboards.py:918
+#: ccbot/keyboards.py:436
 msgid "🌐 Same as Telegram"
 msgstr "🌐 Same as Telegram"
 
-#: ccbot/keyboards.py:956 ccbot/keyboards.py:985
+#: ccbot/keyboards.py:474 ccbot/keyboards.py:503
 #, python-brace-format
 msgid "page {page} of {pages}"
 msgstr ""
 
-#: ccbot/keyboards.py:963 ccbot/keyboards.py:1006
+#: ccbot/keyboards.py:481 ccbot/keyboards.py:524
 msgid "🔍 Find"
 msgstr ""
 
-#: ccbot/keyboards.py:964
+#: ccbot/keyboards.py:482
 msgid "📁 Another directory"
 msgstr ""
 
-#: ccbot/keyboards.py:991
+#: ccbot/keyboards.py:509
 msgid "🔍 Search again"
 msgstr ""
 
-#: ccbot/keyboards.py:992
+#: ccbot/keyboards.py:510
 msgid "📁 Directories"
 msgstr ""
 
@@ -2911,1050 +2017,171 @@ msgstr "not a git repository"
 msgid "{commit} + uncommitted changes"
 msgstr "{commit} + uncommitted changes"
 
-#: ccbot/sessions.py:51
+#: ccbot/sessions.py:49
 msgid "idle"
 msgstr "idle"
 
-#: ccbot/sessions.py:52
+#: ccbot/sessions.py:50
 msgid "waiting for you"
 msgstr "waiting for you"
 
-#: ccbot/sessions.py:53
+#: ccbot/sessions.py:51
 msgid "starting"
 msgstr "starting"
 
-#: ccbot/sessions.py:54
-msgid "dead"
-msgstr "dead"
-
-#: ccbot/sessions.py:55
-msgid "window is gone"
-msgstr "window is gone"
-
-#: ccbot/sessions.py:56
+#: ccbot/sessions.py:52
 msgid "closed"
 msgstr "closed"
 
-#: ccbot/sessions.py:68
-#, python-brace-format
-msgid ""
-"🔌 <b>{count} session was stopped</b> — the tmux server went down with it "
-"(the machine restarted, most likely)."
-msgid_plural ""
-"🔌 <b>{count} sessions were stopped</b> — the tmux server went down with them"
-" (the machine restarted, most likely)."
-msgstr[0] ""
-msgstr[1] ""
-
-#: ccbot/sessions.py:73
-msgid ""
-"Nothing is lost: each one comes back with its whole context, in a new tmux "
-"window."
-msgstr ""
-
-#: ccbot/sessions.py:75
-msgid ""
-"A restored session opens on an empty prompt — work that was running at that "
-"moment is not picked up again, and a question that was on the screen is "
-"gone."
-msgstr ""
-
-#: ccbot/sessions.py:78
-msgid "Anything not restored stays in 🕘 history."
-msgstr ""
-
 #. TRANSLATORS: "yesterday" abbreviated to fit a button caption.
-#: ccbot/sessions.py:97
+#: ccbot/sessions.py:71
 #, python-brace-format
 msgid "yst {time}"
 msgstr "yst {time}"
 
 #. TRANSLATORS: strftime format — day and month, on a button.
-#: ccbot/sessions.py:99
+#: ccbot/sessions.py:73
 #, python-format
 msgid "%d.%m"
 msgstr "%d.%m"
 
-#: ccbot/sessions.py:244 ccbot/status_feed.py:73
+#: ccbot/sessions.py:215 ccbot/status_feed.py:62
 #, python-brace-format
 msgid "today {time}"
 msgstr "today {time}"
 
-#: ccbot/sessions.py:246
+#: ccbot/sessions.py:217
 #, python-brace-format
 msgid "yesterday {time}"
 msgstr "yesterday {time}"
 
 #. TRANSLATORS: strftime format — a date in an earlier year.
-#: ccbot/sessions.py:251
+#: ccbot/sessions.py:222
 #, python-format
 msgid "%d.%m.%y"
 msgstr "%d.%m.%y"
 
-#: ccbot/sessions.py:543
+#: ccbot/sessions.py:464
 msgid "untitled"
 msgstr "untitled"
 
-#: ccbot/status_feed.py:54
+#: ccbot/status_feed.py:43
 msgid "5 hours"
 msgstr "5 hours"
 
-#: ccbot/status_feed.py:55
+#: ccbot/status_feed.py:44
 msgid "7 days"
 msgstr "7 days"
 
-#: ccbot/status_feed.py:56
+#: ccbot/status_feed.py:45
 msgid "7 days · Opus"
 msgstr "7 days · Opus"
 
 #. TRANSLATORS: weekday names, abbreviated as far as your language allows.
-#: ccbot/status_feed.py:59
+#: ccbot/status_feed.py:48
 msgid "Mon"
 msgstr "Mon"
 
-#: ccbot/status_feed.py:59
+#: ccbot/status_feed.py:48
 msgid "Tue"
 msgstr "Tue"
 
-#: ccbot/status_feed.py:59
+#: ccbot/status_feed.py:48
 msgid "Wed"
 msgstr "Wed"
 
-#: ccbot/status_feed.py:59
+#: ccbot/status_feed.py:48
 msgid "Thu"
 msgstr "Thu"
 
-#: ccbot/status_feed.py:60
+#: ccbot/status_feed.py:49
 msgid "Fri"
 msgstr "Fri"
 
-#: ccbot/status_feed.py:60
+#: ccbot/status_feed.py:49
 msgid "Sat"
 msgstr "Sat"
 
-#: ccbot/status_feed.py:60
+#: ccbot/status_feed.py:49
 msgid "Sun"
 msgstr "Sun"
 
-#: ccbot/status_feed.py:75
+#: ccbot/status_feed.py:64
 #, python-brace-format
 msgid "tomorrow {time}"
 msgstr "tomorrow {time}"
 
-#: ccbot/status_feed.py:76
+#: ccbot/status_feed.py:65
 #, python-brace-format
 msgid "{weekday} {time}"
 msgstr "{weekday} {time}"
 
-#: ccbot/util.py:97 ccbot/util.py:103
+#: ccbot/util.py:88
 msgid "session context"
 msgstr "session context"
 
-#: ccbot/util.py:111
+#: ccbot/util.py:96
 #, python-brace-format
 msgid "{window} limit (resets {when})"
 msgstr "{window} limit (resets {when})"
 
-#: ccbot/util.py:112
+#: ccbot/util.py:97
 #, python-brace-format
 msgid "{window} limit"
 msgstr "{window} limit"
 
-#: ccbot/util.py:117
+#: ccbot/util.py:102
 #, python-brace-format
 msgid "👤 Account: {email}"
 msgstr ""
 
-#: ccbot/util.py:134
+#: ccbot/util.py:119
 msgid "context"
 msgstr "context"
 
-#: ccbot/util.py:139
+#: ccbot/util.py:124
 #, python-brace-format
 msgid "{used} of {total} token"
 msgid_plural "{used} of {total} tokens"
 msgstr[0] "{used} of {total} token"
 msgstr[1] "{used} of {total} tokens"
 
-#: ccbot/util.py:157
-#, python-brace-format
-msgid "{minutes} min stale — this session has not redrawn its status line in a while"
-msgstr "{minutes} min stale — this session has not redrawn its status line in a while"
-
-#: ccbot/util.py:166
-msgid "No metrics yet — the status line has not been drawn."
-msgstr "No metrics yet — the status line has not been drawn."
-
-#: ccbot/util.py:169
-msgid ""
-"read off the status line; exact figures appear once the statusline wrapper "
-"is in place"
-msgstr ""
-"read off the status line; exact figures appear once the statusline wrapper "
-"is in place"
-
-#: ccbot/watcher.py:131
-msgid "Model"
+#: ccbot/util.py:141
+msgid "No metrics yet — a session reports them with its first answer."
 msgstr ""
 
-#: ccbot/watcher.py:133
-msgid "Reasoning effort"
-msgstr ""
-
-#: ccbot/watcher.py:135
-msgid "Feedback drafts"
-msgstr ""
-
-#: ccbot/watcher.py:137
-msgid "A new folder"
-msgstr ""
-
-#. TRANSLATORS: the /effort card while Ultracode is on — Claude Code
-#. then offers no "save as default".
-#: ccbot/watcher.py:146
+#: ccbot/watcher.py:118
 #, python-brace-format
 msgid ""
-"A button applies the choice, for this session only: with {name} on there is "
-"no saving it as the default."
-msgstr ""
-
-#. TRANSLATORS: the row of two buttons under a settings dialog.
-#: ccbot/watcher.py:150
-msgid ""
-"A button applies the choice. The switch under the list decides whether new "
-"sessions get it as their default too."
-msgstr ""
-
-#: ccbot/watcher.py:163
-#, python-brace-format
-msgid ""
-"Claude Code is closing this session and asks about {count} unsent feedback "
-"draft for Anthropic (they are written during the session and kept in "
-"~/.claude/feedback/drafts). It exits after the answer; in a restart the "
-"session then comes back by itself."
-msgid_plural ""
-"Claude Code is closing this session and asks about {count} unsent feedback "
-"drafts for Anthropic (they are written during the session and kept in "
-"~/.claude/feedback/drafts). It exits after the answer; in a restart the "
-"session then comes back by itself."
-msgstr[0] ""
-msgstr[1] ""
-
-#: ccbot/watcher.py:175
-#, python-brace-format
-msgid ""
-"Claude Code is opening {folder} for the first time and asks whether you "
-"trust it: it will be able to read, edit and run files there. Until you "
-"answer, the session takes no text; «No, exit» closes it."
-msgstr ""
-
-#: ccbot/watcher.py:179
-msgid "this folder"
-msgstr "this folder"
-
-#. TRANSLATORS: under a permission question; {time} is HH:MM.
-#: ccbot/watcher.py:192
-#, python-brace-format
-msgid "⏱ Unanswered, Claude Code blocks this request itself at {time}."
-msgstr "⏱ Unanswered, Claude Code blocks this request itself at {time}."
-
-#: ccbot/watcher.py:549
-#, python-brace-format
-msgid ""
-"⚠️ <b>The session watcher has crashed</b>\n"
+"⚠️ <b>The Claude Code version check has crashed</b>\n"
 "<code>{error}</code>\n"
 "\n"
-"While this lasts, Claude's replies do not reach the chat — prompts you send "
-"still get through to the session. Details in /log; /restart usually cures "
-"it."
+"The sessions are not affected. Details in /log."
 msgstr ""
-"⚠️ <b>The session watcher has crashed</b>\n"
-"<code>{error}</code>\n"
-"\n"
-"While this lasts, Claude's replies do not reach the chat — prompts you send "
-"still get through to the session. Details in /log; /restart usually cures "
-"it."
 
-#: ccbot/watcher.py:564
-msgid "✅ The watcher is back — following the sessions again."
-msgstr "✅ The watcher is back — following the sessions again."
+#: ccbot/watcher.py:130
+msgid "✅ The Claude Code version check works again."
+msgstr ""
 
-#: ccbot/watcher.py:627
+#: ccbot/watcher.py:154
 #, python-brace-format
 msgid "⬆️ <b>Claude Code {version} is on disk</b>"
 msgstr ""
 
-#: ccbot/watcher.py:630
+#: ccbot/watcher.py:157
 #, python-brace-format
 msgid ""
-"{count} session is still running an older build — a session only picks a new"
-" one up when it is started again."
-msgid_plural ""
-"{count} sessions are still running an older build — a session only picks a "
+"{count} session is still running an older build — a session only picks a "
 "new one up when it is started again."
+msgid_plural ""
+"{count} sessions are still running an older build — a session only picks "
+"a new one up when it is started again."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/watcher.py:635
+#: ccbot/watcher.py:162
 msgid ""
-"A restart keeps the context: the same session id, the same transcript, the "
-"same history. /update"
+"A restart keeps the context: the same session id, the same transcript, "
+"the same history. /update"
 msgstr ""
-
-#: ccbot/watcher.py:735
-#, python-brace-format
-msgid "💀 Session {name} is gone (its tmux window was closed)."
-msgstr "💀 Session {name} is gone (its tmux window was closed)."
-
-#: ccbot/watcher.py:1087
-#, python-brace-format
-msgid "⚠️ {name} shows a /btw answer, and I could not copy it. Here is the screen:"
-msgstr ""
-
-#: ccbot/watcher.py:1089
-msgid ""
-"📋 tries the copy again, ⬆️⬇️ scroll the answer, ✖️ Close dismisses it, 🖥 "
-"sends a fresh screen."
-msgstr ""
-
-#: ccbot/watcher.py:1161
-#, python-brace-format
-msgid "🔑 <b>{name}</b>: Claude asks how to log in."
-msgstr ""
-
-#: ccbot/watcher.py:1164
-#, python-brace-format
-msgid ""
-"🔑 <b>{name}</b>: sign in to Claude.\n"
-"\n"
-"1. Open the page with the button below and sign in with the account you want"
-" this machine to use.\n"
-"2. The page shows a code: copy all of it, the part after # included.\n"
-"3. Send it here as a message, and I will enter it."
-msgstr ""
-
-#: ccbot/watcher.py:1172
-#, python-brace-format
-msgid "❌ <b>{name}</b>: Claude did not accept the code."
-msgstr ""
-
-#: ccbot/watcher.py:1175
-#, python-brace-format
-msgid "⚠️ <b>{name}</b>: the login worked, with a warning."
-msgstr ""
-
-#: ccbot/watcher.py:1187
-msgid "▶️ Method chosen"
-msgstr ""
-
-#: ccbot/watcher.py:1189
-msgid "⏹ This link was replaced"
-msgstr ""
-
-#: ccbot/watcher.py:1191
-msgid "🔑 Code entered"
-msgstr ""
-
-#: ccbot/watcher.py:1236
-#, python-brace-format
-msgid "✅ <b>{name}</b>: logged in as <b>{email}</b>."
-msgstr ""
-
-#: ccbot/watcher.py:1239
-#, python-brace-format
-msgid "✅ <b>{name}</b>: logged in."
-msgstr ""
-
-#: ccbot/watcher.py:1241
-msgid ""
-"The other sessions switch to this account with their next request — none of "
-"them needs a restart."
-msgstr ""
-
-#: ccbot/watcher.py:1364
-#, python-brace-format
-msgid ""
-"⚠️ {name} is waiting for an answer, but I did not recognise the question. "
-"Here is the screen:"
-msgstr ""
-
-#: ccbot/watcher.py:1369
-msgid ""
-"The buttons below work without understanding it: digits pick an option, the "
-"arrows walk the list, Esc backs out. 🖥 sends a fresh screen."
-msgstr ""
-
-#: ccbot/watcher.py:1443
-msgid "⏱ Blocked by Claude Code: no answer in time"
-msgstr "⏱ Blocked by Claude Code: no answer in time"
-
-#. TRANSLATORS: how a multi-select question is answered from a chat.
-#: ccbot/watcher.py:1540 ccbot/watcher.py:1582
-msgid ""
-"The numbered buttons only tick boxes — nothing goes to Claude until the "
-"button under them."
-msgstr ""
-"The numbered buttons only tick boxes — nothing goes to Claude until the "
-"button under them."
-
-#: ccbot/watcher.py:1545 ccbot/watcher.py:1586
-#, python-brace-format
-msgid "🖼 Diagram for option {n}:"
-msgstr "🖼 Diagram for option {n}:"
-
-#: ccbot/watcher.py:1546 ccbot/watcher.py:1587
-msgid "🖼 Diagram:"
-msgstr "🖼 Diagram:"
-
-#: ccbot/watcher.py:1591
-msgid "🖼 The diagram is wider than the screen — sent as a picture"
-msgstr "🖼 The diagram is wider than the screen — sent as a picture"
-
-#: ccbot/watcher.py:1647
-#, python-brace-format
-msgid "🖼 Diagram for option {n}"
-msgstr "🖼 Diagram for option {n}"
-
-#~ msgid ""
-#~ "🤖 <b>Claude Code session dispatcher</b>\n"
-#~ "\n"
-#~ "<b>Sessions</b>\n"
-#~ "/sessions — the session list, cards and controls\n"
-#~ "/new — start a session (pick a directory)\n"
-#~ "\n"
-#~ "<b>Where things go</b>\n"
-#~ "Without a reply, everything — text and commands — goes to the\n"
-#~ "<b>active</b> session. Replying to a session's message goes to\n"
-#~ "<b>that</b> session and makes it active. The commands below\n"
-#~ "follow the same rule.\n"
-#~ "\n"
-#~ "<b>Acting on a session</b>\n"
-#~ "/usage — how much of the 5-hour and 7-day quota is spent, and\n"
-#~ "   how full this session's context is. Read off the status line,\n"
-#~ "   so it is instant, costs no tokens and does not disturb the\n"
-#~ "   session. Not to be confused with «📉 Context breakdown» on the\n"
-#~ "   card: that one asks Claude itself <i>what</i> is filling the\n"
-#~ "   context — and that is a real turn in the session.\n"
-#~ "/screen — a text snapshot of the terminal\n"
-#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
-#~ "   The session stays alive and its context is untouched.\n"
-#~ "/clear — clear the session's context. The session lives on,\n"
-#~ "   its history is gone.\n"
-#~ "/rename <i>name</i> — your own name "
-#~ "instead of <code>project-1a2b</code>.\n"
-#~ "   Sent bare, from the \"/\" menu, it asks for the name and takes\n"
-#~ "   your next message as it. (<code>/rename -</code> gives the\n"
-#~ "   automatic one back.) Until you name it, the list shows the\n"
-#~ "   topic Claude came up with itself.\n"
-#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
-#~ "   the tmux window closes. The transcript stays — the session can\n"
-#~ "   be brought back from 🕘 in the list.\n"
-#~ "\n"
-#~ "Any other <code>/command</code> (<code>/model</code>,"
-#~ " <code>/compact</code>,\n"
-#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
-#~ "\n"
-#~ "<b>The bot itself</b>\n"
-#~ "/update — which Claude Code each session runs, which one is\n"
-#~ "   on disk, and a restart that keeps the context: Claude\n"
-#~ "   updates itself in the background, but a running session\n"
-#~ "   stays on the build it started with.\n"
-#~ "/service — uptime, code version, tmux state, restart button\n"
-#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
-#~ "/log — the last lines of the journal\n"
-#~ "/dirs — directories offered when starting a session\n"
-#~ "/lang — interface language\n"
-#~ "\n"
-#~ "📎 <b>Any file</b> — a photo, a PDF, a JSON dump, a log, an\n"
-#~ "archive, a voice message — is saved and handed to Claude as a\n"
-#~ "path, under the name you sent it with. As an album, with a\n"
-#~ "caption, or with the text in the next message. Telegram lets a\n"
-#~ "bot download 20 MB at most; for anything bigger, send the path.\n"
-#~ "\n"
-#~ "📨 Messages that arrive together become <b>one</b> prompt: a\n"
-#~ "forwarded conversation, an album, a thought written in three\n"
-#~ "goes. A forwarded message keeps the name of whoever wrote it.\n"
-#~ "\n"
-#~ "When Claude asks a question, buttons with the options arrive."
-#~ msgstr ""
-
-#~ msgid "/context sent"
-#~ msgstr "/context sent"
-
-#~ msgid ""
-#~ "🤖 <b>Claude Code session dispatcher</b>\n"
-#~ "\n"
-#~ "<b>Sessions</b>\n"
-#~ "/sessions — the session list, cards and controls\n"
-#~ "/new — start a session (pick a directory)\n"
-#~ "\n"
-#~ "<b>Where things go</b>\n"
-#~ "Without a reply, everything — text and commands — goes to the\n"
-#~ "<b>active</b> session. Replying to a session's message goes to\n"
-#~ "<b>that</b> session and makes it active. The commands below\n"
-#~ "follow the same rule.\n"
-#~ "\n"
-#~ "<b>Acting on a session</b>\n"
-#~ "/usage — how much of the 5-hour and 7-day quota is spent, and\n"
-#~ "   how full this session's context is. Read off the status line,\n"
-#~ "   so it is instant, costs no tokens and does not disturb the\n"
-#~ "   session. Not to be confused with «📉 Context breakdown» on the\n"
-#~ "   card: that one runs Claude Code's own <code>/context</code> in\n"
-#~ "   the session and sends back the breakdown it draws — which\n"
-#~ "   files, tools and messages the context is spent on.\n"
-#~ "   «🗜 /compact» next to it sums the conversation up and carries\n"
-#~ "   on with the summary instead of the history: the session, its\n"
-#~ "   name and its id all stay, and the screen with the result\n"
-#~ "   arrives once it is done.\n"
-#~ "/screen — a text snapshot of the terminal\n"
-#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
-#~ "   The session stays alive and its context is untouched.\n"
-#~ "/clear — clear the session's context. The session lives on,\n"
-#~ "   its history is gone.\n"
-#~ "/rename <i>name</i> — your own name "
-#~ "instead of <code>project-1a2b</code>.\n"
-#~ "   Sent bare, from the \"/\" menu, it asks for the name and takes\n"
-#~ "   your next message as it. (<code>/rename -</code> gives the\n"
-#~ "   automatic one back.) Until you name it, the list shows the\n"
-#~ "   topic Claude came up with itself.\n"
-#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
-#~ "   the tmux window closes. The transcript stays — the session can\n"
-#~ "   be brought back from 🕘 in the list.\n"
-#~ "\n"
-#~ "Any other <code>/command</code> (<code>/model</code>,"
-#~ " <code>/compact</code>,\n"
-#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
-#~ "\n"
-#~ "<b>The bot itself</b>\n"
-#~ "/update — which Claude Code each session runs, which one is\n"
-#~ "   on disk, and a restart that keeps the context: Claude\n"
-#~ "   updates itself in the background, but a running session\n"
-#~ "   stays on the build it started with.\n"
-#~ "/service — uptime, code version, tmux state, restart button\n"
-#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
-#~ "/log — the last lines of the journal\n"
-#~ "/dirs — directories offered when starting a session\n"
-#~ "/lang — interface language\n"
-#~ "\n"
-#~ "📎 <b>Any file</b> — a photo, a PDF, a JSON dump, a log, an\n"
-#~ "archive, a voice message — is saved and handed to Claude as a\n"
-#~ "path, under the name you sent it with. As an album, with a\n"
-#~ "caption, or with the text in the next message. Telegram lets a\n"
-#~ "bot download 20 MB at most; for anything bigger, send the path.\n"
-#~ "\n"
-#~ "📨 Messages that arrive together become <b>one</b> prompt: a\n"
-#~ "forwarded conversation, an album, a thought written in three\n"
-#~ "goes. A forwarded message keeps the name of whoever wrote it.\n"
-#~ "\n"
-#~ "When Claude asks a question, buttons with the options arrive."
-#~ msgstr ""
-
-#~ msgid "That session is no longer running — /sessions"
-#~ msgstr "That session has already ended — see /sessions"
-
-#~ msgid ""
-#~ "🤖 <b>Claude Code session dispatcher</b>\n"
-#~ "\n"
-#~ "<b>Sessions</b>\n"
-#~ "/sessions — the session list, cards and controls\n"
-#~ "/menu — the controls of one session, without the list in the\n"
-#~ "   way: 🧠 model, ◉ effort, 🔐 permission mode, 📉 context,\n"
-#~ "   ✏️ rename, 🚪 end. Without a reply it is the active session;\n"
-#~ "   as a reply to a session's message, that one (which then\n"
-#~ "   becomes active).\n"
-#~ "/new — start a session (pick a directory)\n"
-#~ "\n"
-#~ "<b>Where things go</b>\n"
-#~ "Without a reply, everything — text and commands — goes to the\n"
-#~ "<b>active</b> session. Replying to a session's message goes to\n"
-#~ "<b>that</b> session and makes it active. The commands below\n"
-#~ "follow the same rule.\n"
-#~ "\n"
-#~ "<b>Acting on a session</b>\n"
-#~ "/usage — how much of the 5-hour and 7-day quota is spent, and\n"
-#~ "   how full this session's context is. Read off the status line,\n"
-#~ "   so it is instant, costs no tokens and does not disturb the\n"
-#~ "   session. Not to be confused with «📉 Context breakdown» on the\n"
-#~ "   card: that one runs Claude Code's own <code>/context</code> in\n"
-#~ "   the session and sends back the breakdown it draws — which\n"
-#~ "   files, tools and messages the context is spent on.\n"
-#~ "   «🗜 /compact» next to it sums the conversation up and carries\n"
-#~ "   on with the summary instead of the history: the session, its\n"
-#~ "   name and its id all stay, and the screen with the result\n"
-#~ "   arrives once it is done.\n"
-#~ "/screen — a text snapshot of the terminal\n"
-#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
-#~ "   The session stays alive and its context is untouched.\n"
-#~ "/clear — clear the session's context. The session lives on,\n"
-#~ "   its history is gone.\n"
-#~ "/rename <i>name</i> — your own name "
-#~ "instead of <code>project-1a2b</code>.\n"
-#~ "   Sent bare, from the \"/\" menu, it asks for the name and takes\n"
-#~ "   your next message as it. (<code>/rename -</code> gives the\n"
-#~ "   automatic one back.) Until you name it, the list shows the\n"
-#~ "   topic Claude came up with itself.\n"
-#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
-#~ "   the tmux window closes. The transcript stays — the session can\n"
-#~ "   be brought back from 🕘 in the list.\n"
-#~ "\n"
-#~ "Any other <code>/command</code> (<code>/model</code>,"
-#~ " <code>/compact</code>,\n"
-#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
-#~ "\n"
-#~ "<b>The bot itself</b>\n"
-#~ "/update — which Claude Code each session runs, which one is\n"
-#~ "   on disk, and a restart that keeps the context: Claude\n"
-#~ "   updates itself in the background, but a running session\n"
-#~ "   stays on the build it started with.\n"
-#~ "/service — uptime, code version, tmux state, restart button\n"
-#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
-#~ "/log — the last lines of the journal\n"
-#~ "/dirs — directories offered when starting a session\n"
-#~ "/lang — interface language\n"
-#~ "\n"
-#~ "📎 <b>Any file</b> — a photo, a PDF, a JSON dump, a log, an\n"
-#~ "archive, a voice message — is saved and handed to Claude as a\n"
-#~ "path, under the name you sent it with. As an album, with a\n"
-#~ "caption, or with the text in the next message. Telegram lets a\n"
-#~ "bot download 20 MB at most; for anything bigger, send the path.\n"
-#~ "\n"
-#~ "📨 Messages that arrive together become <b>one</b> prompt: a\n"
-#~ "forwarded conversation, an album, a thought written in three\n"
-#~ "goes. A forwarded message keeps the name of whoever wrote it.\n"
-#~ "\n"
-#~ "When Claude asks a question, buttons with the options arrive."
-#~ msgstr ""
-
-#~ msgid ""
-#~ "⏳ <b>{name}</b> is still starting up, "
-#~ "so the forwarded messages have not "
-#~ "been sent yet."
-#~ msgstr ""
-
-#~ msgid ""
-#~ "📋 <b>Where should the forwarded messages go?</b>\n"
-#~ "\n"
-#~ "A session in tmux takes them straight"
-#~ " away. ➕ starts a new one in "
-#~ "a directory you pick, 🕘 brings a "
-#~ "closed one back — either way they "
-#~ "are sent as soon as it is up."
-#~ msgstr ""
-
-#~ msgid "Via ⬆️⬇️✅: "
-#~ msgstr "Via ⬆️⬇️✅: "
-
-#~ msgid ""
-#~ "🤖 <b>Claude Code session dispatcher</b>\n"
-#~ "\n"
-#~ "<b>Sessions</b>\n"
-#~ "/sessions — the session list, cards and controls\n"
-#~ "/menu — the controls of one session, without the list in the\n"
-#~ "   way: 🧠 model, ◉ effort, 🔐 permission mode, 📉 context,\n"
-#~ "   ✏️ rename, 🚪 end. Without a reply it is the active session;\n"
-#~ "   as a reply to a session's message, that one (which then\n"
-#~ "   becomes active).\n"
-#~ "/new — start a session (pick a directory)\n"
-#~ "\n"
-#~ "<b>Where things go</b>\n"
-#~ "Without a reply, everything — text and commands — goes to the\n"
-#~ "<b>active</b> session. Replying to a session's message goes to\n"
-#~ "<b>that</b> session and makes it active. The commands below\n"
-#~ "follow the same rule.\n"
-#~ "\n"
-#~ "<b>Acting on a session</b>\n"
-#~ "/usage — how much of the 5-hour and 7-day quota is spent, and\n"
-#~ "   how full this session's context is. Read off the status line,\n"
-#~ "   so it is instant, costs no tokens and does not disturb the\n"
-#~ "   session. Not to be confused with «📉 Context breakdown» on the\n"
-#~ "   card: that one runs Claude Code's own <code>/context</code> in\n"
-#~ "   the session and sends back the breakdown it draws — which\n"
-#~ "   files, tools and messages the context is spent on.\n"
-#~ "   «🗜 /compact» next to it sums the conversation up and carries\n"
-#~ "   on with the summary instead of the history: the session, its\n"
-#~ "   name and its id all stay, and the screen with the result\n"
-#~ "   arrives once it is done.\n"
-#~ "/screen — a text snapshot of the terminal\n"
-#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
-#~ "   The session stays alive and its context is untouched.\n"
-#~ "/clear — clear the session's context. The session lives on,\n"
-#~ "   its history is gone.\n"
-#~ "/rename <i>name</i> — your own name "
-#~ "instead of <code>project-1a2b</code>.\n"
-#~ "   Sent bare, from the \"/\" menu, it asks for the name and takes\n"
-#~ "   your next message as it. (<code>/rename -</code> gives the\n"
-#~ "   automatic one back.) Until you name it, the list shows the\n"
-#~ "   topic Claude came up with itself.\n"
-#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
-#~ "   the tmux window closes. The transcript stays — the session can\n"
-#~ "   be brought back from 🕘 in the list.\n"
-#~ "\n"
-#~ "Any other <code>/command</code> (<code>/model</code>,"
-#~ " <code>/compact</code>,\n"
-#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
-#~ "\n"
-#~ "<b>The bot itself</b>\n"
-#~ "/update — which Claude Code each session runs, which one is\n"
-#~ "   on disk, and a restart that keeps the context: Claude\n"
-#~ "   updates itself in the background, but a running session\n"
-#~ "   stays on the build it started with.\n"
-#~ "/service — uptime, code version, tmux state, restart button\n"
-#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
-#~ "/log — the last lines of the journal\n"
-#~ "/dirs — directories offered when starting a session\n"
-#~ "/lang — interface language\n"
-#~ "\n"
-#~ "📎 <b>Any file</b> — a photo, a PDF, a JSON dump, a log, an\n"
-#~ "archive, a voice message — is saved and handed to Claude as a\n"
-#~ "path, under the name you sent it with. As an album, with a\n"
-#~ "caption, or with the text in the next message. Telegram lets a\n"
-#~ "bot download 20 MB at most; for anything bigger, send the path.\n"
-#~ "\n"
-#~ "📨 Messages that arrive together become <b>one</b> prompt: a\n"
-#~ "forwarded conversation, an album, a thought written in three\n"
-#~ "goes. A forwarded message keeps the name of whoever wrote it.\n"
-#~ "\n"
-#~ "↪️ <b>Forwarded</b> messages ask where they should go, instead of\n"
-#~ "going to the active session: «▶️ Current», «📋 Another session»\n"
-#~ "(the sessions in tmux, ➕ a new one, 🕘 a closed one to bring\n"
-#~ "back) or «🗑 Discard». Anything you send while the question is\n"
-#~ "open joins the same batch, so the words that explain a forward\n"
-#~ "travel with it. Forwarding as a reply to a session's message\n"
-#~ "needs no question — the reply has already said where.\n"
-#~ "\n"
-#~ "When Claude asks a question, buttons with the options arrive."
-#~ msgstr ""
-
-#~ msgid "That step of the login is no longer on the screen."
-#~ msgstr ""
-
-#~ msgid ""
-#~ "🤖 <b>Claude Code session dispatcher</b>\n"
-#~ "\n"
-#~ "<b>Sessions</b>\n"
-#~ "/sessions — the session list, cards and controls\n"
-#~ "/menu — the controls of one session, without the list in the\n"
-#~ "   way: 🧠 model, ◉ effort, 🔐 permission mode, 📉 context,\n"
-#~ "   ✏️ rename, 🚪 end. Without a reply it is the active session;\n"
-#~ "   as a reply to a session's message, that one (which then\n"
-#~ "   becomes active).\n"
-#~ "/new — start a session (pick a directory)\n"
-#~ "\n"
-#~ "<b>Where things go</b>\n"
-#~ "Without a reply, everything — text and commands — goes to the\n"
-#~ "<b>active</b> session. Replying to a session's message goes to\n"
-#~ "<b>that</b> session and makes it active. The commands below\n"
-#~ "follow the same rule.\n"
-#~ "\n"
-#~ "<b>Acting on a session</b>\n"
-#~ "/usage — how much of the 5-hour and 7-day quota is spent, and\n"
-#~ "   how full this session's context is. Read off the status line,\n"
-#~ "   so it is instant, costs no tokens and does not disturb the\n"
-#~ "   session. Not to be confused with «📉 Context breakdown» on the\n"
-#~ "   card: that one runs Claude Code's own <code>/context</code> in\n"
-#~ "   the session and sends back the breakdown it draws — which\n"
-#~ "   files, tools and messages the context is spent on.\n"
-#~ "   «🗜 /compact» next to it sums the conversation up and carries\n"
-#~ "   on with the summary instead of the history: the session, its\n"
-#~ "   name and its id all stay, and the screen with the result\n"
-#~ "   arrives once it is done.\n"
-#~ "/screen — a text snapshot of the terminal\n"
-#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
-#~ "   The session stays alive and its context is untouched.\n"
-#~ "/clear — clear the session's context. The session lives on,\n"
-#~ "   its history is gone.\n"
-#~ "/rename <i>name</i> — your own name "
-#~ "instead of <code>project-1a2b</code>.\n"
-#~ "   Sent bare, from the \"/\" menu, it asks for the name and takes\n"
-#~ "   your next message as it. (<code>/rename -</code> gives the\n"
-#~ "   automatic one back.) Until you name it, the list shows the\n"
-#~ "   topic Claude came up with itself.\n"
-#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
-#~ "   the tmux window closes. The transcript stays — the session can\n"
-#~ "   be brought back from 🕘 in the list.\n"
-#~ "\n"
-#~ "Any other <code>/command</code> (<code>/model</code>,"
-#~ " <code>/compact</code>,\n"
-#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
-#~ "\n"
-#~ "<b>The bot itself</b>\n"
-#~ "/update — which Claude Code each session runs, which one is\n"
-#~ "   on disk, and a restart that keeps the context: Claude\n"
-#~ "   updates itself in the background, but a running session\n"
-#~ "   stays on the build it started with.\n"
-#~ "/login — log Claude in to another account (when the limits of\n"
-#~ "   this one run out). The sign-in link comes here, the code from\n"
-#~ "   the page goes back as a message, and then a button restarts\n"
-#~ "   the other sessions onto the new account.\n"
-#~ "/service — uptime, code version, tmux state, restart button\n"
-#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
-#~ "/log — the last lines of the journal\n"
-#~ "/dirs — directories offered when starting a session\n"
-#~ "/lang — interface language\n"
-#~ "\n"
-#~ "📎 <b>Any file</b> — a photo, a PDF, a JSON dump, a log, an\n"
-#~ "archive, a voice message — is saved and handed to Claude as a\n"
-#~ "path, under the name you sent it with. As an album, with a\n"
-#~ "caption, or with the text in the next message. Telegram lets a\n"
-#~ "bot download 20 MB at most; for anything bigger, send the path.\n"
-#~ "\n"
-#~ "📨 Messages that arrive together become <b>one</b> prompt: a\n"
-#~ "forwarded conversation, an album, a thought written in three\n"
-#~ "goes. A forwarded message keeps the name of whoever wrote it.\n"
-#~ "\n"
-#~ "↪️ <b>Forwarded</b> messages ask where they should go, instead of\n"
-#~ "going to the active session: «▶️ Current», «📋 Another session»\n"
-#~ "(the sessions in tmux, ➕ a new one, 🕘 a closed one to bring\n"
-#~ "back) or «🗑 Discard». Anything you send while the question is\n"
-#~ "open joins the same batch, so the words that explain a forward\n"
-#~ "travel with it. Forwarding as a reply to a session's message\n"
-#~ "needs no question — the reply has already said where.\n"
-#~ "\n"
-#~ "When Claude asks a question, buttons with the options arrive."
-#~ msgstr ""
-
-#~ msgid "No idle session to restart"
-#~ msgstr ""
-
-#~ msgid "🔄 Restart all idle ({count})"
-#~ msgstr ""
-
-#~ msgid "No other session is running, so none needs a restart."
-#~ msgstr ""
-
-#~ msgid "Every other session already runs on this account — nothing to restart."
-#~ msgstr ""
-
-#~ msgid ""
-#~ "Sessions that were already running keep "
-#~ "the previous account until they are "
-#~ "restarted:"
-#~ msgstr ""
-
-#~ msgid "✅ already on this account"
-#~ msgstr ""
-
-#~ msgid "busy or waiting, left alone"
-#~ msgstr ""
-
-#~ msgid ""
-#~ "A restart is <code>/exit</code> and "
-#~ "<code>claude --resume</code> in the same "
-#~ "window: the conversation and its context"
-#~ " stay."
-#~ msgstr ""
-
-#~ msgid "📤 /login sent"
-#~ msgstr ""
-
-#~ msgid ""
-#~ "🤖 <b>Claude Code session dispatcher</b>\n"
-#~ "\n"
-#~ "<b>Sessions</b>\n"
-#~ "/sessions — the session list, cards and controls\n"
-#~ "/menu — the controls of one session, without the list in the\n"
-#~ "   way: 🧠 model, ◉ effort, 🔐 permission mode, 📉 context,\n"
-#~ "   ✏️ rename, 🚪 end. Without a reply it is the active session;\n"
-#~ "   as a reply to a session's message, that one (which then\n"
-#~ "   becomes active).\n"
-#~ "/new — start a session (pick a directory)\n"
-#~ "\n"
-#~ "<b>Where things go</b>\n"
-#~ "Without a reply, everything — text and commands — goes to the\n"
-#~ "<b>active</b> session. Replying to a session's message goes to\n"
-#~ "<b>that</b> session and makes it active. The commands below\n"
-#~ "follow the same rule.\n"
-#~ "\n"
-#~ "<b>Acting on a session</b>\n"
-#~ "/usage — how much of the 5-hour and 7-day quota is spent, and\n"
-#~ "   how full this session's context is. Read off the status line,\n"
-#~ "   so it is instant, costs no tokens and does not disturb the\n"
-#~ "   session. Not to be confused with «📉 Context breakdown» on the\n"
-#~ "   card: that one runs Claude Code's own <code>/context</code> in\n"
-#~ "   the session and sends back the breakdown it draws — which\n"
-#~ "   files, tools and messages the context is spent on.\n"
-#~ "   «🗜 /compact» next to it sums the conversation up and carries\n"
-#~ "   on with the summary instead of the history: the session, its\n"
-#~ "   name and its id all stay, and the screen with the result\n"
-#~ "   arrives once it is done.\n"
-#~ "/screen — a text snapshot of the terminal\n"
-#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
-#~ "   The session stays alive and its context is untouched.\n"
-#~ "/clear — clear the session's context. The session lives on,\n"
-#~ "   its history is gone.\n"
-#~ "/rename <i>name</i> — your own name "
-#~ "instead of <code>project-1a2b</code>.\n"
-#~ "   Sent bare, from the \"/\" menu, it asks for the name and takes\n"
-#~ "   your next message as it. (<code>/rename -</code> gives the\n"
-#~ "   automatic one back.) Until you name it, the list shows the\n"
-#~ "   topic Claude came up with itself.\n"
-#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
-#~ "   the tmux window closes. The transcript stays — the session can\n"
-#~ "   be brought back from 🕘 in the list.\n"
-#~ "\n"
-#~ "Any other <code>/command</code> (<code>/model</code>,"
-#~ " <code>/compact</code>,\n"
-#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
-#~ "\n"
-#~ "<b>The bot itself</b>\n"
-#~ "/update — which Claude Code each session runs, which one is\n"
-#~ "   on disk, and a restart that keeps the context: Claude\n"
-#~ "   updates itself in the background, but a running session\n"
-#~ "   stays on the build it started with.\n"
-#~ "/login — log Claude in to another account (when the limits of\n"
-#~ "   this one run out). The sign-in link comes here, the code from\n"
-#~ "   the page goes back as a message. The other sessions switch to\n"
-#~ "   the new account with their next request, without a restart.\n"
-#~ "/service — uptime, code version, tmux state, restart button\n"
-#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
-#~ "/log — the last lines of the journal\n"
-#~ "/dirs — directories offered when starting a session\n"
-#~ "/lang — interface language\n"
-#~ "\n"
-#~ "📎 <b>Any file</b> — a photo, a PDF, a JSON dump, a log, an\n"
-#~ "archive, a voice message — is saved and handed to Claude as a\n"
-#~ "path, under the name you sent it with. As an album, with a\n"
-#~ "caption, or with the text in the next message. Telegram lets a\n"
-#~ "bot download 20 MB at most; for anything bigger, send the path.\n"
-#~ "\n"
-#~ "📨 Messages that arrive together become <b>one</b> prompt: a\n"
-#~ "forwarded conversation, an album, a thought written in three\n"
-#~ "goes. A forwarded message keeps the name of whoever wrote it.\n"
-#~ "\n"
-#~ "↪️ <b>Forwarded</b> messages ask where they should go, instead of\n"
-#~ "going to the active session: «▶️ Current», «📋 Another session»\n"
-#~ "(the sessions in tmux, ➕ a new one, 🕘 a closed one to bring\n"
-#~ "back) or «🗑 Discard». Anything you send while the question is\n"
-#~ "open joins the same batch, so the words that explain a forward\n"
-#~ "travel with it. Forwarding as a reply to a session's message\n"
-#~ "needs no question — the reply has already said where.\n"
-#~ "\n"
-#~ "When Claude asks a question, buttons with the options arrive."
-#~ msgstr ""
-
-#~ msgid "Busy or waiting, so left alone: {names}"
-#~ msgstr ""
-
-#~ msgid "📉 Context breakdown"
-#~ msgstr ""
-
-#~ msgid "🔔 It is waiting for your choice — the question is posted below."
-#~ msgstr ""
-
-#~ msgid ""
-#~ "⏳ <b>{name}</b> is not taking text "
-#~ "yet — it has just started, or "
-#~ "it is asking something first (a new"
-#~ " directory is asked about). Here is "
-#~ "its screen: deal with that, then "
-#~ "press «{button}»."
-#~ msgstr ""
-
-#~ msgid ""
-#~ "📁 <b>{name}</b> is in a folder Claude"
-#~ " Code has not opened before, and "
-#~ "it asks first whether you trust it"
-#~ " — the card with the buttons comes"
-#~ " below. Answer it, then press "
-#~ "«{button}»."
-#~ msgstr ""
-
-#~ msgid "This question is no longer open — the message was not sent."
-#~ msgstr ""
-
-#~ msgid ""
-#~ "🤖 <b>Claude Code session dispatcher</b>\n"
-#~ "\n"
-#~ "<b>Sessions</b>\n"
-#~ "/sessions — the session list, cards and controls\n"
-#~ "/menu — the controls of one session, without the list in the\n"
-#~ "   way: 🧠 model, ◉ effort, 🔐 permission mode, 🔁 restart,\n"
-#~ "   ✏️ rename, 🚪 end. Without a reply it is the active session;\n"
-#~ "   as a reply to a session's message, that one (which then\n"
-#~ "   becomes active).\n"
-#~ "/new — start a session (pick a directory)\n"
-#~ "\n"
-#~ "<b>Where things go</b>\n"
-#~ "Without a reply, everything — text and commands — goes to the\n"
-#~ "<b>active</b> session. Replying to a session's message goes to\n"
-#~ "<b>that</b> session and makes it active. The commands below\n"
-#~ "follow the same rule.\n"
-#~ "\n"
-#~ "<b>Acting on a session</b>\n"
-#~ "/usage — how much of the 5-hour and 7-day quota is spent, and\n"
-#~ "   how full this session's context is. Read off the status line,\n"
-#~ "   so it is instant, costs no tokens and does not disturb the\n"
-#~ "   session. Not to be confused with <code>/context</code>: that is\n"
-#~ "   Claude Code's own breakdown of which files, tools and messages\n"
-#~ "   the context is spent on, drawn in the session.\n"
-#~ "   «🗜 /compact» on the card sums the conversation up and carries\n"
-#~ "   on with the summary instead of the history: the session, its\n"
-#~ "   name and its id all stay, and the screen with the result\n"
-#~ "   arrives once it is done.\n"
-#~ "   «🔁 Restart» next to it relaunches the session with its\n"
-#~ "   context (<code>/exit</code>, then resume). If background tasks\n"
-#~ "   are running in it, it says which and asks before stopping them.\n"
-#~ "/screen — a text snapshot of the terminal\n"
-#~ "/esc — <b>interrupt what Claude is doing</b> (the Esc key).\n"
-#~ "   The session stays alive and its context is untouched.\n"
-#~ "/clear — clear the session's context. The session lives on,\n"
-#~ "   its history is gone.\n"
-#~ "/rename <i>name</i> — your own name "
-#~ "instead of <code>project-1a2b</code>.\n"
-#~ "   Sent bare, from the \"/\" menu, it asks for the name and takes\n"
-#~ "   your next message as it. (<code>/rename -</code> gives the\n"
-#~ "   automatic one back.) Until you name it, the list shows the\n"
-#~ "   topic Claude came up with itself.\n"
-#~ "/exit — <b>end the session</b>: Claude shuts down on its own, then\n"
-#~ "   the tmux window closes. The transcript stays — the session can\n"
-#~ "   be brought back from 🕘 in the list.\n"
-#~ "\n"
-#~ "Any other <code>/command</code> (<code>/model</code>,"
-#~ " <code>/compact</code>,\n"
-#~ "<code>/cost</code>…) is passed to Claude as it is.\n"
-#~ "\n"
-#~ "<b>The bot itself</b>\n"
-#~ "/update — which Claude Code each session runs, which one is\n"
-#~ "   on disk, and a restart that keeps the context: Claude\n"
-#~ "   updates itself in the background, but a running session\n"
-#~ "   stays on the build it started with.\n"
-#~ "/login — log Claude in to another account (when the limits of\n"
-#~ "   this one run out). The sign-in link comes here, the code from\n"
-#~ "   the page goes back as a message. The other sessions switch to\n"
-#~ "   the new account with their next request, without a restart.\n"
-#~ "/service — uptime, code version, tmux state, restart button\n"
-#~ "/restart — restart the bot (Claude's sessions are unaffected)\n"
-#~ "/log — the last lines of the journal\n"
-#~ "/dirs — directories offered when starting a session\n"
-#~ "/lang — interface language\n"
-#~ "\n"
-#~ "📎 <b>Any file</b> — a photo, a PDF, a JSON dump, a log, an\n"
-#~ "archive, a voice message — is saved and handed to Claude as a\n"
-#~ "path, under the name you sent it with. As an album, with a\n"
-#~ "caption, or with the text in the next message. Telegram lets a\n"
-#~ "bot download 20 MB at most; for anything bigger, send the path.\n"
-#~ "\n"
-#~ "📨 Messages that arrive together become <b>one</b> prompt: a\n"
-#~ "forwarded conversation, an album, a thought written in three\n"
-#~ "goes. A forwarded message keeps the name of whoever wrote it.\n"
-#~ "\n"
-#~ "↪️ <b>Forwarded</b> messages ask where they should go, instead of\n"
-#~ "going to the active session: «▶️ Current», «📋 Another session»\n"
-#~ "(the sessions in tmux, ➕ a new one, 🕘 a closed one to bring\n"
-#~ "back) or «🗑 Discard». Anything you send while the question is\n"
-#~ "open joins the same batch, so the words that explain a forward\n"
-#~ "travel with it. Forwarding as a reply to a session's message\n"
-#~ "needs no question — the reply has already said where.\n"
-#~ "\n"
-#~ "When Claude asks a question, buttons with the options arrive."
-#~ msgstr ""
-
-#~ msgid ""
-#~ "An SDK session has no terminal "
-#~ "screen: everything it shows comes to "
-#~ "the chat as messages and cards."
-#~ msgstr ""
-
-#~ msgid "Snapshot of the active session's terminal"
-#~ msgstr "Snapshot of the active session's terminal"
 

@@ -51,7 +51,7 @@ sys.exit(1 if errs else 0)
 INNER
 
 echo "── import"
-"$PY" -c "import main, ccbot.bot, ccbot.watcher, ccbot.state, ccbot.screen" || fail=1
+"$PY" -c "import main, host_main, ccbot.bot, ccbot.bridge, ccbot.watcher, ccbot.state" || fail=1
 
 # The bot reads the compiled .mo, never the .po a human edited. An edited .po
 # left uncompiled is therefore invisible until someone switches language and

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from aiogram import BaseMiddleware
 
-from . import login, paths, rich
+from . import authlogin, paths, rich
 from .i18n import _
 
 LOG_PATH = paths.LOG_FILE
@@ -106,7 +106,7 @@ class UpdateLogMiddleware(BaseMiddleware):
                 "in msg id=%s from=%s kind=%s reply_to=%s%s: %r",
                 msg.message_id, uid, kind,
                 getattr(msg.reply_to_message, "message_id", None),
-                allowed, login.mask(body)[:160],
+                allowed, authlogin.mask(body)[:160],
             )
         elif cb is not None:
             uid = cb.from_user.id if cb.from_user else None

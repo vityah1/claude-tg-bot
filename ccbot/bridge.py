@@ -1,8 +1,7 @@
-"""The bot's side of SDK sessions: host events in, chat messages and cards out.
+"""The bot's side of the sessions: host events in, chat messages and cards out.
 
-What `Watcher._tick_session` does for a tmux session by reading the
-transcript and the screen, this does for an SDK session from the host's
-events — the same rules, a different source:
+Every session is held by the session host (`ccbot/host/`); this follows it
+through the host's events by these rules:
 
 * text is buffered and flushed once the session has been quiet for
   `_FLUSH_IDLE`, or the buffer is `_MAX_BUFFER_AGE` old, or a turn ended, or
@@ -144,8 +143,9 @@ class SdkBridge:
             self.delivered = set()
         self.link = HostLink(self._on_event, self._on_welcome, lambda: self.acked)
         self._task: asyncio.Task | None = None
-        # The ids of SDK rows, refreshed each tick: `usage_for` sits on the hot
-        # path of every `status_feed.read` and must not query for tmux ones.
+        # The ids of the session rows, refreshed each tick: `usage_for` sits on
+        # the hot path of every `status_feed.read` and must not query for
+        # an id that is no session of ours.
         self.sdk_ids: set[str] = set()
         self.tasks: set[asyncio.Task] = set()
         self._fail_sig: str | None = None
@@ -222,7 +222,7 @@ class SdkBridge:
                 question=rich.md_escape(question[:300]))
             body = str(data.get("text") or _("(no answer)"))
             await self.watcher._emit(mgd.session_id, mgd.full_label, f"_{title}_\n\n{body}",
-                                     self.usage_for(mgd.session_id), None)
+                                     self.usage_for(mgd.session_id))
 
     async def interrupt(self, mgd: Managed) -> None:
         await self.link.call("interrupt", name=mgd.name)
@@ -273,7 +273,7 @@ class SdkBridge:
         mgd = self.store.by_name(name)
         usage = self.usage_for(mgd.session_id) if mgd else None
         if mgd is not None and usage is not None:
-            await self.watcher._check_usage(mgd.full_label, mgd.session_id, rt, usage, None)
+            await self.watcher._check_usage(mgd.full_label, mgd.session_id, rt, usage)
 
     def _forget_context(self, rt: _Rt) -> None:
         """/clear and /compact empty the context: the old figure is no longer true."""
@@ -288,11 +288,11 @@ class SdkBridge:
         return "manual" if mode == "default" else mode
 
     def usage_for(self, session_id: str) -> Usage | None:
-        """An SDK session's metrics in the shape the status line used to give."""
+        """A session's metrics as `status_feed.Usage`."""
         if session_id not in self.sdk_ids:
             return None
         mgd = self.store.get(session_id)
-        if mgd is None or not mgd.is_sdk:
+        if mgd is None:
             return None
         rt = self.rt.get(mgd.name)
         if rt is None:
@@ -315,10 +315,7 @@ class SdkBridge:
             ctx_pct=round(float(pct)) if pct is not None else None,
             ctx_window=int(ctx.get("maxTokens") or 0),
             input_tokens=int(ctx.get("totalTokens") or 0),
-            cost_usd=rt.cost or float(rt.info.get("cost") or 0.0), limits=limits,
-            # Metrics come as events, after each turn, not as a status line
-            # that redraws every second: their age says nothing about staleness.
-            age=0.0)
+            cost_usd=rt.cost or float(rt.info.get("cost") or 0.0), limits=limits)
 
     # -- the loop: flushes, pulse, host-down notice ------------------------
     async def _loop(self) -> None:
@@ -334,7 +331,7 @@ class SdkBridge:
             await asyncio.sleep(_TICK)
 
     def _refresh_ids(self) -> None:
-        self.sdk_ids = {m.session_id for m in self.store.all_managed(backend="sdk")}
+        self.sdk_ids = {m.session_id for m in self.store.all_managed()}
 
     async def _tick(self) -> None:
         now = time.time()
@@ -385,7 +382,7 @@ class SdkBridge:
                 await self._say(_("✅ The session host is back — SDK sessions are "
                                   "reachable again."))
             return
-        if self._down_told or not self.store.all_managed(backend="sdk"):
+        if self._down_told or not self.store.all_managed():
             return
         since = self.link.down_since
         loop_now = asyncio.get_running_loop().time()
@@ -396,10 +393,9 @@ class SdkBridge:
             return
         self._down_told = True
         await self._say(_("⚠️ <b>The session host is not answering.</b>\n"
-                          "SDK sessions cannot be reached until it is back; tmux "
-                          "sessions are not affected. It restarts by itself — if "
-                          "this lasts, see <code>journalctl --user -u "
-                          "claude-tg-host</code>."), parse_mode="HTML")
+                          "The sessions cannot be reached until it is back. It "
+                          "restarts by itself — if this lasts, see <code>journalctl "
+                          "--user -u claude-tg-host</code>."), parse_mode="HTML")
 
     async def _report_failure(self, exc: Exception) -> None:
         sig = f"{type(exc).__name__}: {exc}"
@@ -599,7 +595,7 @@ class SdkBridge:
             log.info("flush id=%s name=%s chars=%d", mgd.session_id[:8], name, len(body))
             await self._drop_pulse(rt)
             await self.watcher._emit(mgd.session_id, mgd.full_label, body,
-                                     self.usage_for(mgd.session_id), None)
+                                     self.usage_for(mgd.session_id))
         self._deliver(rt.seqs)
         rt.buffer.clear()
         rt.seqs.clear()
@@ -1080,7 +1076,7 @@ class SdkBridge:
 
 
 def _model_name(model_id: str) -> str:
-    """"claude-opus-5-5" → "Opus 5.5", the way the status line named models."""
+    """"claude-opus-5-5" → "Opus 5.5", the way Claude Code names models."""
     base, _br, tail = model_id.partition("[")
     if tail:
         name = _model_name(base)

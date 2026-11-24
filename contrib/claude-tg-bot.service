@@ -25,10 +25,8 @@ Environment=PATH=%h/.nvm/versions/node/current/bin:%h/.local/bin:/usr/local/bin:
 ExecStart=%INSTALL_DIR%/.venv/bin/python main.py
 Restart=always
 RestartSec=5
-# The tmux server the bot starts ends up in this unit's cgroup, and the default
-# kill mode would take it — along with every Claude session inside it — on each
-# restart. Signal the bot only; the sessions must outlive it.
-KillMode=process
+# The sessions live in claude-tg-host, a unit of its own, so a stop or restart
+# of the bot takes only the bot (and a `claude auth login` it may be running).
 TimeoutStopSec=20
 StandardOutput=journal
 StandardError=journal
