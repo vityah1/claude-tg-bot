@@ -370,6 +370,8 @@ class SessionActor:
             self.host.store.set_session(
                 self.name, inflight=json.dumps(self.prompts) if self.prompts else None,
                 info=self.info)
+            if msg.total_cost_usd is not None:
+                self.info["cost"] = msg.total_cost_usd
             usage = msg.model_usage or {}
             window = max((int(v.get("contextWindow") or 0) for v in usage.values()), default=0)
             self.host.emit(self.name, "turn_end", {
@@ -436,11 +438,25 @@ class SessionActor:
             if answer.get("set_mode"):
                 updates.append(PermissionUpdate(type="setMode", mode=answer["set_mode"],
                                                 destination="session"))
+            # The mode this allow leaves the session in: an approved plan ends
+            # plan mode, and a setMode update names its own.
+            new_mode = next((str(u.mode) for u in updates
+                             if getattr(u, "type", "") == "setMode" and u.mode), "")
+            if not new_mode and tool == "ExitPlanMode":
+                new_mode = "default"
+            if new_mode and new_mode != self.info.get("mode"):
+                self.note_mode(new_mode)
             return PermissionResultAllow(updated_input=answer.get("updated_input"),
                                          updated_permissions=updates or None)
         return PermissionResultDeny(
             message=answer.get("message") or "The user declined this in Telegram.",
             interrupt=bool(answer.get("interrupt")))
+
+    def note_mode(self, mode: str) -> None:
+        """The permission mode changed: remembered, and told to the bot."""
+        self.info["mode"] = mode
+        self.host.store.set_session(self.name, info=self.info)
+        self.host.emit(self.name, "mode", {"mode": mode})
 
     def answer(self, rid: str, answer: dict[str, Any]) -> str:
         """Hand the chat's answer to the waiting callback: ok | already | unknown."""

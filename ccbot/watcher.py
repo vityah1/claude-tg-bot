@@ -18,6 +18,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 from aiogram import Bot
 from aiogram.types import FSInputFile
@@ -236,6 +237,12 @@ def _words(text: str) -> set[str]:
 def _login_state(raw: str) -> str:
     ls = screenmod.login_screen(raw)
     return ls.state if ls else ""
+
+
+class _Alerted(Protocol):
+    """What the usage alerts keep per session — a tmux runtime or an SDK one."""
+
+    alerted: dict[str, int]
 
 
 class SessionRuntime:
@@ -1449,7 +1456,7 @@ class Watcher:
             log.debug("pulse delete skipped", exc_info=True)
 
     async def _check_usage(self, name: str, session_id: str,
-                           rt: SessionRuntime, usage, status) -> None:
+                           rt: _Alerted, usage, status) -> None:
         """Notify when context or a rate limit crosses a step.
 
         A rate limit belongs to the account, not the session, and an alert
@@ -1464,7 +1471,8 @@ class Watcher:
                 icon = "🔴" if reached >= 90 else ("🟠" if reached >= 75 else "🟡")
                 who = ""
                 if key != "ctx":
-                    email = await account.email_for(
+                    # An SDK runtime knows its account from the host.
+                    email = getattr(rt, "account", "") or await account.email_for(
                         session_id, since=await sess.started_at(session_id))
                     who = f" · {email}" if email else ""
                 await self._say(f"{icon} {name}: {note} — {pct}%{who}",

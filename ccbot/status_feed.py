@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
 from pathlib import Path
@@ -129,7 +130,17 @@ def available() -> bool:
     return FEED_DIR.is_dir() and any(FEED_DIR.glob("*.json"))
 
 
+# SDK sessions run no status line: their metrics come from the session host's
+# events, and the bridge answers for them here (set by the bot at start-up), so
+# every reader — the card, /usage, the alerts, the version check — sees both.
+sdk_usage: Callable[[str], Usage | None] | None = None
+
+
 def read(session_id: str) -> Usage | None:
+    if sdk_usage is not None:
+        u = sdk_usage(session_id)
+        if u is not None:
+            return u
     p = path_for(session_id)
     try:
         raw = p.read_text()

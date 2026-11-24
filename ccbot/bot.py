@@ -726,6 +726,7 @@ class CCBot:
         # SDK sessions: held by the session host, followed through its events.
         self.bridge = SdkBridge(self.bot, self.store, self.watcher, cfg.owner)
         sess.sdk_state = self.bridge.state
+        status_feed.sdk_usage = self.bridge.usage_for
         # chat_id -> ("dir",) | ("dialog", session_id, option_number, card)
         #          | ("note", session_id, card, question_sig)
         #          | ("rename", session_id) | ("adddir",)
@@ -2334,7 +2335,8 @@ class CCBot:
         disk = await updates.installed()
         views = {v.session_id: v for v in await sess.managed_views(self.store)}
         rows = []
-        for m in self.store.all_managed():
+        # SDK sessions are not restarted onto a new build yet (stage d).
+        for m in self.store.all_managed(backend="tmux"):
             view = views.get(m.session_id)
             rows.append((m, view.status if view else "",
                          updates.stale(m.session_id, disk)))
@@ -5205,7 +5207,8 @@ class CCBot:
     async def _status(self, mgd):
         """Model / effort / permission mode as shown in the status line."""
         if mgd.is_sdk:
-            return screenmod.Status()
+            # No screen: the mode is what the host last reported for it.
+            return screenmod.Status(mode=self.bridge.mode(mgd))
         try:
             return screenmod.read_status(await tmux.capture(mgd.window_id))
         except tmux.TmuxError:

@@ -225,9 +225,8 @@ class Host:
     async def cmd_set_mode(self, c: dict[str, Any]) -> dict[str, Any]:
         actor = await self._actor(c["name"])
         await actor.call(lambda cl: cl.set_permission_mode(c["mode"]), timeout=20)
-        actor.info["mode"] = c["mode"]
         actor.info.setdefault("chosen", {})["mode"] = c["mode"]
-        self.store.set_session(actor.name, info=actor.info)
+        actor.note_mode(c["mode"])
         return {}
 
     async def cmd_set_model(self, c: dict[str, Any]) -> dict[str, Any]:

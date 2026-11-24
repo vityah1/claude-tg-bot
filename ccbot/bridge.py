@@ -39,6 +39,7 @@ from .i18n import _, ngettext
 from .i18n import use as use_locale
 from .keyboards import done_kb, menu_kb
 from .state import Managed, Store
+from .status_feed import Limit, Usage
 from .transcript import _summarise_tool
 from .util import split_text
 
@@ -76,6 +77,17 @@ class _Rt:
     info: dict[str, Any] = field(default_factory=dict)
     limits: dict[str, Any] = field(default_factory=dict)
     context: dict[str, Any] = field(default_factory=dict)
+    cost: float = 0.0
+    metrics_at: float = 0.0
+    # Usage alert steps already announced (`Watcher._check_usage` keeps them here).
+    alerted: dict[str, int] = field(default_factory=dict)
+    # Metrics arrived while a card held the session: checked once it is free.
+    usage_due: bool = False
+
+    @property
+    def account(self) -> str:
+        """The account the host reports for the session, for the limit alerts."""
+        return str(self.info.get("account") or "")
 
 
 @dataclass
@@ -130,6 +142,9 @@ class SdkBridge:
             self.delivered = set()
         self.link = HostLink(self._on_event, self._on_welcome, lambda: self.acked)
         self._task: asyncio.Task | None = None
+        # The ids of SDK rows, refreshed each tick: `usage_for` sits on the hot
+        # path of every `status_feed.read` and must not query for tmux ones.
+        self.sdk_ids: set[str] = set()
         self._fail_sig: str | None = None
         self._fail_told = 0.0
         self._down_told = False
@@ -211,6 +226,58 @@ class SdkBridge:
     def info(self, mgd: Managed) -> _Rt | None:
         return self.rt.get(mgd.name)
 
+    async def _check_usage(self, name: str, rt: _Rt) -> None:
+        mgd = self.store.by_name(name)
+        usage = self.usage_for(mgd.session_id) if mgd else None
+        if mgd is not None and usage is not None:
+            await self.watcher._check_usage(mgd.full_label, mgd.session_id, rt, usage, None)
+
+    def _forget_context(self, rt: _Rt) -> None:
+        """/clear and /compact empty the context: the old figure is no longer true."""
+        rt.context = {}
+        rt.info.pop("context", None)
+        rt.alerted.pop("ctx", None)
+
+    def mode(self, mgd: Managed) -> str:
+        """The permission mode in force, as the session card names modes."""
+        rt = self.rt.get(mgd.name)
+        mode = str((rt.info if rt else {}).get("mode") or "")
+        return "manual" if mode == "default" else mode
+
+    def usage_for(self, session_id: str) -> Usage | None:
+        """An SDK session's metrics in the shape the status line used to give."""
+        if session_id not in self.sdk_ids:
+            return None
+        mgd = self.store.get(session_id)
+        if mgd is None or not mgd.is_sdk:
+            return None
+        rt = self.rt.get(mgd.name)
+        if rt is None:
+            return None
+        ctx = rt.context or rt.info.get("context") or {}
+        limits = []
+        for key, val in (rt.limits or {}).items():
+            if isinstance(val, dict) and val.get("utilization") is not None:
+                limits.append(Limit(key=key, pct=round(float(val["utilization"]) * 100),
+                                    resets_at=val.get("resetsAt")))
+        order = {"five_hour": 0, "seven_day": 1}
+        limits.sort(key=lambda lim: (order.get(lim.key, 2), lim.key))
+        model = str(rt.info.get("model") or "")
+        pct = ctx.get("percentage")
+        return Usage(
+            session_id=session_id, session_name=mgd.name, model=_model_name(model),
+            model_id=model,
+            # No version: "an older build — /update restarts it" is a promise
+            # an SDK session cannot keep until restarts reach it (stage d).
+            version="", cwd=mgd.cwd,
+            ctx_pct=round(float(pct)) if pct is not None else None,
+            ctx_window=int(ctx.get("maxTokens") or 0),
+            input_tokens=int(ctx.get("totalTokens") or 0),
+            cost_usd=rt.cost or float(rt.info.get("cost") or 0.0), limits=limits,
+            # Metrics come as events, after each turn, not as a status line
+            # that redraws every second: their age says nothing about staleness.
+            age=0.0)
+
     # -- the loop: flushes, pulse, host-down notice ------------------------
     async def _loop(self) -> None:
         while True:
@@ -224,9 +291,17 @@ class SdkBridge:
                     await self._report_failure(exc)
             await asyncio.sleep(_TICK)
 
+    def _refresh_ids(self) -> None:
+        self.sdk_ids = {m.session_id for m in self.store.all_managed(backend="sdk")}
+
     async def _tick(self) -> None:
         now = time.time()
+        self._refresh_ids()
         await self._check_down()
+        for name, rt in list(self.rt.items()):
+            if rt.usage_due and not self._holding(name):
+                rt.usage_due = False
+                await self._check_usage(name, rt)
         for req in list(self.requests.values()):
             if req.msg_id is None and time.monotonic() - req.tried > 15:
                 await self._card(req)
@@ -431,10 +506,17 @@ class SdkBridge:
         elif ev == "metrics":
             rt.limits = d.get("limits") or rt.limits
             rt.context = d.get("context") or rt.context
+            rt.metrics_at = time.time()
             if d.get("model"):
                 rt.info["model"] = d["model"]
+            if self._holding(name):
+                rt.usage_due = True     # announced once the card is answered
+            else:
+                await self._check_usage(name, rt)
         elif ev == "background":
             rt.info["background"] = d.get("tasks") or []
+        elif ev == "mode":
+            rt.info["mode"] = d.get("mode") or rt.info.get("mode")
 
     def _buffer(self, rt: _Rt, text: str, seq: int | None) -> None:
         if not text.strip():
@@ -456,7 +538,7 @@ class SdkBridge:
             log.info("flush id=%s name=%s chars=%d", mgd.session_id[:8], name, len(body))
             await self._drop_pulse(rt)
             await self.watcher._emit(mgd.session_id, mgd.full_label, body,
-                                     None, None)
+                                     self.usage_for(mgd.session_id), None)
         self._deliver(rt.seqs)
         rt.buffer.clear()
         rt.seqs.clear()
@@ -464,6 +546,8 @@ class SdkBridge:
 
     async def _turn_end(self, name: str, rt: _Rt, d: dict[str, Any], seq: int | None) -> None:
         result = (d.get("result") or "").strip()
+        if d.get("cost") is not None:
+            rt.cost = float(d["cost"] or 0.0)
         if d.get("terminal_reason") in ("aborted_streaming", "aborted_tools"):
             self._buffer(rt, _("⏹ Interrupted."), seq)
         elif d.get("is_error"):
@@ -488,6 +572,8 @@ class SdkBridge:
             return
         log.info("sdk session rebound %s -> %s (name=%s)", old[:8], new[:8], name)
         self.store.rebind(mgd.session_id, new)
+        self._refresh_ids()
+        self._forget_context(self._rt(name))
         await self._say(_("🧹 <b>{name}</b>: context cleared — the session was given a "
                           "new id, and I am following it there.").format(
                               name=html.escape(mgd.full_label)),
@@ -512,6 +598,7 @@ class SdkBridge:
 
     async def _notice(self, name: str, rt: _Rt, d: dict[str, Any], seq: int | None) -> None:
         if d.get("kind") == "compacted":
+            self._forget_context(rt)
             self._buffer(rt, _("🗜 Context compacted."), seq)
         elif d.get("kind") == "assistant_error":
             self._buffer(rt, _("⚠️ Claude reported an error: {error}").format(
@@ -929,6 +1016,19 @@ class SdkBridge:
         if session_id:
             self.store.remember_message(msg.message_id, session_id)
         return msg
+
+
+def _model_name(model_id: str) -> str:
+    """"claude-opus-5-5" → "Opus 5.5", the way the status line named models."""
+    base, _br, tail = model_id.partition("[")
+    if tail:
+        name = _model_name(base)
+        return f"{name} [{tail}" if name != base else model_id
+    parts = model_id.removeprefix("claude-").split("-")
+    if len(parts) < 2 or not parts[0].isalpha():
+        return model_id
+    family, version = parts[0], [x for x in parts[1:] if x.isdigit() and len(x) < 3]
+    return f"{family.capitalize()} {'.'.join(version)}".strip() if version else model_id
 
 
 def _plain(markdown: str) -> str:
