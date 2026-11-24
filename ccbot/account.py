@@ -372,9 +372,9 @@ async def email_for(session_id: str, *, path_hint: str = "",
 
 
 async def fill(views) -> None:
-    """Set `.account` on managed and foreign views; closed ones stay empty."""
+    """Set `.account` on managed views; closed ones stay empty."""
     for v in views:
-        if v.kind not in ("managed", "foreign") or v.status in ("gone", "dead"):
+        if v.kind != "managed":
             continue
         v.account = await email_for(v.session_id, since=v.started_at)
 

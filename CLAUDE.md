@@ -2,10 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A Telegram dispatcher for Claude Code sessions: it drives somebody else's TUI
-from the outside — in through tmux, out through transcripts. The detailed "why
-it works this way" lives in `README.md` (which is long and current; there is no
-need to duplicate it here).
+A Telegram dispatcher for Claude Code sessions. Every session is held by a
+session host (`claude-tg-host`, one `ClaudeSDKClient` of the Claude Agent SDK
+per session); the bot talks to it over a socket and turns its events into chat
+messages and cards. The detailed "why it works this way" lives in `README.md`
+(long and current; no need to duplicate it here).
 
 ## Running and checking
 
@@ -14,11 +15,12 @@ need to duplicate it here).
   `getUpdates` to one poller only, and both sides start failing with
   `TelegramConflictError`. Check with `systemctl --user is-active claude-tg-bot`.
 - 🔴 **The session host is a second unit, `claude-tg-host`** (`host_main.py`,
-  `ccbot/host/`): it holds the Agent SDK sessions. Restart it only when its own
-  code (`ccbot/host/*`, the SDK pin) changed — a host restart ends every SDK
-  turn in progress. Before one, ask it what is busy (`status` over the socket,
-  or `/service`). Code in `bridge.py` / `hostlink.py` / `bot.py` needs only the
-  bot restart. Its log: `~/.cache/ccbot/host.log`.
+  `ccbot/host/`): it holds every session. Restart it only when its own code
+  (`ccbot/host/*`, the SDK pin) changed — a host restart ends every turn in
+  progress (the chat gets «🔌 The session host was restarted» with «🔁 Send
+  again» per cut-off prompt). Before one, ask it what is busy (`/service`).
+  Code in `bridge.py` / `hostlink.py` / `bot.py` and the rest of `ccbot/`
+  needs only the bot restart. Its log: `~/.cache/ccbot/host.log`.
 - 🔴 **The bot's chat is the user's live workplace.** Live tests through it
   (Telegram Web) are allowed since 2026-11-24: he addresses his sessions by
   reply while they run. But a test reply makes the test session active (his
@@ -28,8 +30,8 @@ need to duplicate it here).
   it the active one, and his next plain message (he had just opened another
   session) went into it, twice on 2026-11-24. (2026-11-24, SDK migration)
 - There is no hot reload. After changing code:
-  `systemctl --user restart claude-tg-bot`. Claude's sessions survive it
-  (`KillMode=process` — only the bot dies, the tmux server stays). `/restart` in
+  `systemctl --user restart claude-tg-bot`. Sessions survive it (they live in
+  the host; the bot replays the host journal from its last ack). `/restart` in
   the chat does the same thing.
 - 🔴 **Restarting is your job, not the user's.** Once the change is tested,
   restart the bot yourself and report it done — never end with "the bot still
@@ -39,818 +41,285 @@ need to duplicate it here).
   restart drops it (a photo with a question was lost that way the same day).
   The same goes for a `held batch` (text kept out of a session with an open
   question) that has no `delivered` / `dropped` line yet.
-- 🔴 **Never print a captured dialog into your own terminal.** The bot reads
-  this session's pane too, and a question printed as tool output becomes a
-  card in the chat — the user pressed «1» on one and it was typed into the
-  session as a prompt (2026-10-01). Write captures to a file in the scratchpad
-  and print only what the checks returned.
 - Installing on a clean machine is `./install.sh` (a wrapper around
   `bin/setup.py`). `./install.sh --doctor` changes nothing and checks the whole
-  install: tmux, claude, venv, `.env` (with a live `getMe`), the status-line
-  hook, the unit, linger, the log. It is a faster way to understand a breakage
-  than reading the log by hand.
+  install: claude, venv, `.env` (with a live `getMe`), both units, the host
+  socket, linger, the log. Faster than reading the log by hand.
 - Log: `tail -n 100 ~/.cache/ccbot/bot.log` or
   `journalctl --user -u claude-tg-bot -n 100 --no-pager`; in the chat, `/log`.
-  `CCBOT_LOG_LEVEL=DEBUG` in `.env` adds every tmux command.
+  The host: `~/.cache/ccbot/host.log`. `CCBOT_LOG_LEVEL=DEBUG` in `.env` adds
+  the `claude` stderr the host sees.
 - Python is `.venv/bin/python` only (3.14, the venv was made by `uv`; **it has
   no pip** — install packages with `uv pip install`). Dependencies: aiogram 3,
-  python-dotenv, Pillow; dev tools in `requirements-dev.txt` (ruff,
-  basedpyright, Babel). Babel is needed ONLY for working on translations; the
-  bot itself reads the compiled `.mo` and does without it.
+  python-dotenv, `claude-agent-sdk` (pinned: an upgrade means a host restart);
+  dev tools in `requirements-dev.txt` (ruff, basedpyright, Babel). Babel is
+  needed ONLY for working on translations; the bot reads the compiled `.mo`.
 - 🔴 **Run `bin/check.sh` before committing** (ruff → basedpyright → import
   check → locales). The same script is installed as a pre-commit hook; after a
   clone, enable it once with `git config core.hooksPath bin/githooks`.
   Configuration lives in `pyproject.toml`. The gate has to stay green: do not
   silence a rule with `# noqa` when the cause can be fixed instead. The
   emergency bypass is `git commit -n`.
-- There is no test directory in the repo (the docstring in `ccbot/screen.py`
-  refers to `tests/samples/`, which does not exist). Check the parser against a
-  live sample: `tmux capture-pane -p -t @N > <scratchpad>/dialog.txt`, then run
-  it through `screen.find_dialog()` from a script in the scratchpad.
-- Live data close at hand: `tmux ls` / `tmux list-windows -t ccbot`,
-  `claude agents --json`, `~/.claude/projects/*/<uuid>.jsonl`,
-  `~/.cache/ccbot/status/<session_id>.json`.
-
-- 🔴 **Several agents often work in this repo at once** (the bot's sessions live
-  in tmux windows of their own, including in this very directory). Before
-  committing, look at `git log --oneline -3` and `git status`: a neighbouring
-  session may already have committed the changes you just made to the tree.
+- There is no test directory in the repo; checks are scripts in the
+  scratchpad. Live data close at hand: `/service` (host status),
+  `~/.local/share/ccbot/host.db` (the host's sessions and event journal),
+  `~/.local/share/ccbot/state.db`, `~/.claude/projects/*/<uuid>.jsonl`,
+  `claude agents --json`.
+- 🔴 **Several agents often work in this repo at once** (the bot's sessions,
+  including ones in this very directory). Before committing, look at
+  `git log --oneline -3` and `git status`: a neighbouring session may already
+  have committed the changes you just made to the tree.
 
 ## Architecture
 
-Managed sessions are windows of a single tmux server (`session ccbot`), each
-running `claude --session-id <uuid> -n <name>`. Control is two-way and
-asymmetric:
-
-| Direction | Mechanism | Module |
+| Part | Mechanism | Module |
 |---|---|---|
-| In (prompts, option digits, `/`-commands, Esc, Shift+Tab) | `tmux paste-buffer` / `send-keys` | `tmux.py` |
-| Out (the text of the answers) | incremental reads of `~/.claude/projects/*/<uuid>.jsonl` | `transcript.py` |
-| Blocking dialogs, the spinner, the status line | `tmux capture-pane` + parser | `screen.py` |
-| Exact metrics (context, limits, model, cost) | the status-line payload via `bin/statusline-tee.sh` | `status_feed.py` |
-| The list of live sessions | `claude agents --json` | `sessions.py` |
-| Which Claude Code a session runs, and which is on disk | the payload's `version` / `claude --version` | `updates.py` |
-| Interface language (gettext, `locales/`) | a middleware on each update + a context in the watcher tick | `i18n.py` |
-| SDK sessions (being introduced, behind the `sdk` switch) | a session host process holding `ClaudeSDKClient`s; NDJSON socket with a replayed event journal; events → cards | `host/`, `hostlink.py`, `bridge.py` |
+| The session host | a process of its own; one actor task per session owns its `ClaudeSDKClient`; SQLite journal of events with a growing `seq` | `host_main.py`, `host/server.py`, `host/actor.py`, `host/store.py` |
+| Bot ↔ host | NDJSON over a Unix socket (`$XDG_RUNTIME_DIR/ccbot/host.sock`); hello with `last_seq` → replay; commands with ids and deadlines | `host/protocol.py`, `hostlink.py` |
+| Host events → chat | text buffered and flushed, cards from `can_use_tool` (questions, permissions, plans), pulse, usage alerts, acks | `bridge.py` |
+| Chat → sessions | handlers, inbox batching, routing, held text, pickers | `bot.py`, `keyboards.py` |
+| Metrics (context, limits, model, cost) | host `metrics` events, kept by the bridge, read through `status_feed.read()` (the `sdk_usage` hook) | `status_feed.py` |
+| What outlives a process | recap («📜 Where it stopped», `/screen`), closed-session captions, version, account — read from `~/.claude/projects/*/<uuid>.jsonl` | `transcript.py`, `sessions.py`, `account.py` |
+| Claude Code on disk vs. in a session | `claude --version` / the session's reported version; a 10-min check in the watcher loop | `updates.py`, `watcher.py` |
+| `/login` | `claude auth login` under a pty; the link to the chat, the code back | `authlogin.py` |
+| Interface language (gettext, `locales/`) | a middleware on each update + a context in the bridge/watcher loops | `i18n.py` |
 
-The `Watcher._tick()` loop (`watcher.py`, every `CCBOT_POLL_INTERVAL` seconds,
-1.5 by default): rebind after `/clear` → read the transcript into the buffer →
-capture the screen → usage thresholds → flush the buffer (once it has been
-quiet for ≥2 s, or a dialog appeared, or the buffer is older than 25 s) → the
-"⏳ working" pulse → render the dialog with buttons.
+Why a separate host: a `claude` child dies with the process that started it,
+so the bot restarts freely while the host restarts only for its own code.
 
-The remaining modules: `bot.py` — aiogram handlers, callbacks, the session
-lifecycle; `state.py` — SQLite (managed sessions, the active one per chat,
-`msg_routes`, the history cache); `sessions.py` — one view over
-managed/foreign/closed; `keyboards.py` — inline keyboards and the
-`callback_data` format; `paths.py` — XDG paths; `settings.py` —
-`~/.config/ccbot/config.json`; `service.py` — the bot's own process (uptime,
-version, restart); `rich.py` (Bot API 10.x rich messages); `media.py`,
-`render.py` (ASCII→PNG, now only a fallback), `transport.py` (the polling
-session that survives an unparseable update), `util.py`,
+`watcher.py` is slim: the chat-output helpers the bridge shares (`_emit`,
+`_say`, `_say_rich`, `_say_html`), usage alerts (`_check_usage`), `_locale`,
+and a loop that announces a newer Claude Code on disk (resting sessions
+excluded). The rest: `state.py` — SQLite (managed sessions, the active one per
+chat, `msg_routes`, aliases, names, the history cache, `request_cards`,
+`meta`); `sessions.py` — two kinds, managed and closed (`live_agents` keeps
+running sessions out of the closed list); `paths.py` — XDG paths;
+`settings.py` — `~/.config/ccbot/config.json`; `service.py` — the bot's own
+process; `rich.py` (Bot API 10.x rich messages); `media.py`; `transport.py`
+(the polling session that survives an unparseable update); `util.py`;
 `logsetup.py`.
 
 ## The bot's state
 
 `~/.local/share/ccbot/state.db` is SQLite the bot maintains itself (no ORM and
-no Alembic): the tables `managed` (managed sessions), `active` (the active
-session per chat), `msg_routes` (which message belongs to which session) and a
-cache of the history scan. The schema is created at startup with
-`CREATE TABLE IF NOT EXISTS`, and structural changes are hand-written
-`ALTER TABLE` statements inside `Store` (`_add_custom_name`, for instance). A
-"migration" here is a line of code that runs the first time a new version
-starts.
+no Alembic); the host keeps its own `host.db` (one writer per file). The
+schema is created at startup with `CREATE TABLE IF NOT EXISTS`, and structural
+changes are hand-written `ALTER TABLE` statements inside `Store`
+(`_add_custom_name`, `_add_backend`). A "migration" here is a line of code that
+runs the first time a new version starts. `managed` keeps the columns
+`window_id` / `offset` / `backend` only for older builds: they are written as
+`''` / `0` / `'sdk'` and never read.
 
-The consequence to keep in mind: **the database is shared by every build that
-is running**. New code that adds a column changes it for the older process that
-is still alive, too. That is why rows are read tolerantly
-(`_row_to_managed`), and why the bot has to be restarted after a schema change.
+**The database is shared by every build that is running.** New code that adds
+a column changes it for the older process that is still alive, too. That is why
+rows are read tolerantly (`_row_to_managed`), and why the bot has to be
+restarted after a schema change.
 
 ## Invariants that are easy to break
 
-- 🔴 **A tmux-only path never acts on an SDK row.** `Managed.backend` is
-  "tmux" or "sdk"; an SDK row has an empty `window_id`, and "no such window"
-  reads as a closed session — `_tick_session` would delete the row. The
-  watcher's loops take `all_managed(backend="tmux")`; everything in `bot.py`
-  that touches tmux or the screen branches on `mgd.is_sdk` first (or refuses
-  with `_sdk_not_yet()`). The host knows a session by its launch name
-  (`Store.by_name`), never by an id — `/clear` changes the id
-  (`session_reset` → `Store.rebind`, aliases as for tmux).
+- 🔴 **Every `ClaudeAgentOptions` the host builds carries
+  `system_prompt={"type": "preset", "preset": "claude_code"}`.** The SDK passes
+  `--system-prompt ""` when `system_prompt` is unset, so a session runs without
+  Claude Code's system prompt — they did from 2026-11-24 until commit 3c1accb
+  (142 vs 3352 tokens). That includes the `/btw` fork (`cmd_side`).
 - 🔴 **An SDK event is acknowledged only once it has reached the chat.** Text
   waits in the bridge's buffer with its `seq`; the ack is the lowest buffered
   seq minus one, so a bot restart replays exactly what had not gone out. A card
   already sent for a request is found in `request_cards` and not sent again.
   The host takes one client: a second connection replaces the first, so never
   point a test client at the live socket.
-
 - **`Managed.name` is the launch name (`claude -n`) and it is untouchable.**
-  `/clear` does not restart Claude, but it does hand out a **new session_id**,
-  and the only thread back is a `(name, cwd)` match in `claude agents --json`
-  (`Watcher._rebind_cleared` → `Store.rebind`). The user-facing name lives
-  separately, in `custom_name`. Change `name` and the session is lost after the
-  very first `/clear`.
-- **session_id is not stable.** Never cache it outside `Store`; after a rebind
-  the offset resets to zero and `title` to NULL.
+  The host knows a session by it (`Store.by_name`), never by an id. The
+  user-facing name lives in `custom_name`.
+- **session_id is not stable.** `/clear` hands out a new id on the same
+  process: the host emits `session_reset` → `bridge._session_reset` →
+  `Store.rebind`. Never cache an id outside `Store`.
 - 🔴 **A button carries the id it was printed with, so an id a session has
-  left behind has to keep resolving.** `/clear` rebinds the row to a new id,
-  and every card already in the chat still says the old one in its
-  `callback_data` — including the card the clear was pressed on, whose next
-  button ("✏️ Rename") answered "that session is gone". `Store.rebind` records
-  the move in `session_aliases`; `Store.find_prefix` (behind `CCBot._resolve`,
-  which every callback goes through) falls back to it, and `Store.follow` does
-  the same for the two ids written down outside the row — the pending rename
-  and the pending dialog text. Aliases are re-pointed on a second clear, so
-  the *first* card still works, and expire after 30 days.
+  left behind has to keep resolving.** `Store.rebind` records the move in
+  `session_aliases`; `Store.find_prefix` (behind `CCBot._resolve`, which every
+  callback goes through) falls back to it, and `Store.follow` does the same
+  for ids written down outside the row (a pending rename, held text). Aliases
+  are re-pointed on a second clear, so the *first* card still works, and
+  expire after 30 days.
 - **Register every outgoing message with `store.remember_message()`**
-  (`Watcher._say`/`_say_html`, `CCBot._ack`). That is what makes reply
+  (`Watcher._say*`, `bridge._say`, `CCBot._ack`). That is what makes reply
   addressable; a message that was not recorded is "blind", and a reply to it
   goes to the active session rather than the one on the screen.
 - **Take the target of an action from `CCBot._target(m)`, not `_active()`** — it
-  accounts for the reply and makes that session active. This applies to commands
-  as well: a `/clear` sent as a reply to one session's message has to clear that
-  session's context.
-- **User text goes through `tmux.submit_text()` only** (bracketed paste,
-  then Enter, both under one lock per window). `send-keys -l` would submit a
-  multi-line prompt at the first newline, and an unlocked paste interleaves
-  with the next one: the buffer name used to be derived from the window alone,
-  and `paste-buffer -d` deletes it, so two concurrent prompts became
-  `no buffer ccbot-7` (11 of 13 forwarded messages, 2026-08-27).
+  accounts for the reply and makes that session active. This applies to
+  commands as well: a `/clear` sent as a reply clears *that* session.
 - 🔴 **Incoming messages are batched, not forwarded one by one.** A forwarded
   conversation arrives as a message per bubble in a single poll, and aiogram
-  runs an update per task — order is not guaranteed and neither is spacing.
-  `CCBot._hold` queues them per chat, `_inbox_loop` waits for `_INBOX_QUIET`
-  of quiet (and for every attachment download to finish), and `_flush_inbox`
-  sends **one** prompt sorted by `message_id`, with the target resolved then
-  (`_batch_target`: the first reply naming a session wins). A forwarded item
-  keeps its author from `forward_origin`, which is also what tells a forwarded
-  batch from the user's own typing (`media.build_batch_prompt`). Anything that
-  sends a prompt outside this path is back to one Enter per message.
+  runs an update per task — order is not guaranteed. `CCBot._hold` queues them
+  per chat, `_inbox_loop` waits for `_INBOX_QUIET` of quiet (and for every
+  attachment download), and `_flush_inbox` sends **one** prompt sorted by
+  `message_id`, with the target resolved then (`_batch_target`: the first
+  reply naming a session wins). A forwarded item keeps its author from
+  `forward_origin` (`media.build_batch_prompt`).
 - 🔴 **A forwarded batch is not sent until the chat says where it goes.**
-  Forwarding is how a session is given its starting context, so the active
-  session is a guess: `_flush_inbox` parks the batch (`_Parked`) and
-  `_ask_route` asks — «▶️ Current», «📋 Another session» (the tmux sessions, ➕
-  a new one, 🕘 a closed one), «🗑 Discard». Four rules hold it together.
+  `_flush_inbox` parks it (`_Parked`) and `_ask_route` asks — «▶️ Current»,
+  «📋 Another session» (➕ a new one, 🕘 a closed one), «🗑 Discard».
   Anything sent while the question is open **joins that batch** and the
-  question is re-asked at the bottom (a card above the new messages is
-  answered for the wrong batch). «New» and «Recent» only set
-  `_Parked.await_new` and hand over to the ordinary pickers — `_create`
-  delivers the batch itself (`_deliver_after_launch`), so there is one
-  delivery path, not three. That path **waits for the TUI**
-  (`screen.is_ready`): `paste-buffer` into the shell prompt a fresh window
-  shows would *run* the prompt, and a directory Claude Code has not seen
-  before draws "Is this a project you trust?" — the batch stays parked and
-  the question goes out as a card of its own (see the trust rule below). And a
-  batch that names a session by replying to its message is **never** asked
-  about. Own typing keeps going straight to the active session — **unless
-  there is none**: then it is parked too (`CCBot._homeless`) and the card is
-  the destination list itself, ➕ first, with no «Current». Answering "no
-  active session" dropped the message (2026-10-01: it had to be sent again,
-  with the forward, after /sessions → ➕); only a lone Claude `/command`
-  still gets that answer.
-- 🔴 **Text is never pasted into a session with an open question.** Pasted
-  into a dialog it is swallowed, and the Enter picks the option under the
-  cursor — the message lost and an answer given nobody chose (2026-10-20,
-  f384fe26, twice; reproduced on 2.1.304). `_dispatch` → `_try_send` is the
-  only road user text takes: `_question_open` first (a parsed dialog, or no
-  ordinary bottom *and* a fresh `waiting` from the agent list), then
-  `_send_prompt(guard=True)`, which hands `tmux.submit_text` a `refuse_if`
-  checked under the input lock both before the paste and before the Enter.
-  Blocked text becomes a `_Held` (one per session, a list of batches; a
-  `/command` is always a batch of its own) with a card: «✏️ This answers the
-  question» (only with a free-text row, one batch, and the same question the
-  card was drawn for — `_answer_free_text`, shared with the `dt:` route),
-  «💬 Close the question and send» (Esc through `tmux.press_if`, never a
-  second one), «⏳ Send after the answer» (`_held_loop` sends only after
-  `_HELD_CLEAR` of no dialog at all: a multi-part question draws its next
-  section at once) and «🗑 Don't send». Text sent meanwhile joins the hold and
-  the card is asked again at the bottom. The command buttons (`/clear`,
-  `/compact`, `/context`) go through `_send_command` and refuse the same way.
-  The only inputs that may type over a question are the dialog's own
-  free-text row and the bot's shutdown `/exit`.
-- 🔴 **`/exit` may ask about feedback drafts before it exits** ("You have 2
-  unsent feedback drafts" / "Enter to review & send · Esc to discard and
-  exit", 2.1.305 — drafts the session queued for Anthropic, in
-  `~/.claude/feedback/drafts`). `screen._drafts_dialog` reads it as
-  `kind == "drafts"`, the card offers Enter / Esc (`dr:`), and a restart that
-  meets it (`_await_exit`) leaves the answer to the user instead of giving up.
-  Whatever answers it — the card, ⏸ Esc from the menu or `/esc` — arms
-  `_resume_when_gone`, which resumes the session in its window once `claude`
-  has left it: a window left at a shell looked as if the Esc had done nothing
-  (2026-10-20, f384fe26).
-- 🔴 **"Is this a project you trust?" is a card with two buttons, not a
-  screen.** A directory Claude Code has not opened before — one with its own
-  `.claude/` or `CLAUDE.md`; a plain subfolder of a trusted one is not asked
-  (2.1.322) — draws a column-0 rule, "Accessing workspace:" and the path, the
-  question, two rows with **no digits** ("❯ No, exit" over "Yes, I trust
-  this folder") and "Enter to confirm · Esc to cancel" as the last line.
-  `screen._trust_dialog` reads it as `kind == "trust"` (anchored like the
-  drafts question: no status line, the rows right on the footer, the
-  heading under the rule), the watcher posts it like any question, and
-  `tr:` (`CCBot._trust_callback`) walks the cursor onto the row by its label
-  and presses Enter only while the cursor stands there, waiting after each
-  move for the cursor to show (a slow redraw read as "not yet" overshot the
-  row). A press that did not land keeps the buttons while the question
-  stands; «No» makes `claude` leave, and the session is then closed the way
-  🚪 closes one, or the window would sit at a shell. Until 2026-11-12 it
-  went out as a bare screen with nothing to press (worktime). Esc exits as
-  well, so a held message's card offers no «Close the question» for it.
-- 🔴 **An attachment is never filtered by format.** `_attachment()` takes every
-  kind Telegram has (photo, document, video, audio, voice, video note,
-  animation, sticker) and hands the path over whatever the MIME type says: a
-  JSON, a log, an archive are all things Claude reads or unpacks himself, and
-  the whitelist that used to be there ("I only take images and PDFs") answered
-  a forwarded conversation dump with a refusal. The only limit left is
-  Telegram's own 20 MB for a bot download, and the message for it says to send
-  a path instead. The handler filter has to list every kind too — an unlisted
-  one matches no handler at all and vanishes from the batch in silence.
-  A file keeps the name it was sent with (`media.safe_name`, `-1` on a
-  collision, never an invented extension); only the nameless kinds get the
-  timestamp. `media.is_image()` is what decides whether the prompt says "image"
-  or "file" — announcing a JSON as an image sends Claude looking for a picture.
-- 🔴 **A message with no `text` may still be words: Premium sends formatted
-  text as `rich_message`.** No `text`, no `caption`, no `photo` — paragraphs
-  and pictures are blocks, so a bot reading the classic fields saw an empty
-  message and no handler took it (2026-10-20, 13 paragraphs and a screenshot
-  gone without a word). `rich.read()` turns the blocks into Markdown plus the
-  files they carry, and one message may bring several (`_Item.paths`). The
-  last handler, `@dp.message()` with no filter, answers any kind still
-  unhandled with its content type (service ones in `_SERVICE_KINDS` are only
-  logged) — keep it last and keep it, it is what turns the next new kind
-  Telegram invents into a reply instead of a hole.
-- 🔴 **One update aiogram cannot parse must not stop polling.** aiogram
-  validates a `getUpdates` answer as a whole, so a single update with a kind
-  its models do not know fails the batch, the offset never moves, and every
-  later message queues behind it — the bot looked dead for 15 minutes on
-  2026-10-27 (a rich message with a `document` block, Bot API 10.3, on aiogram
-  3.30). `transport.TolerantSession` validates such a batch update by update,
-  cuts out what the models reject (an unknown block, not the paragraphs around
-  it), logs the raw JSON and tells the chat what was left out
-  (`CCBot._say_damaged`). Keep the bot on it, and still bump aiogram when
-  Telegram adds a block kind — the guard saves the rest, not the new part.
-- 🔴 **A connect that drops is retried in the transport, and only a connect.**
-  Since 2026-10-27 api.telegram.org resets a single connection now and then
-  (33 in six days, never two in a row); each one was a dead button, a lost
-  download or "could not pass that on". `TolerantSession.make_request`
-  repeats a request whose `ClientConnectorError` came before a byte left
-  (0.5 / 1.5 / 3 s), never a timeout or a hang-up mid-answer — that request
-  may have landed, and a repeated `sendMessage` is a duplicate; only
-  `getUpdates` / `getFile` / `getMe` are repeated after a reset too.
-  Downloads bypass `make_request` (`stream_content`) and repeat on their own
-  until the first byte. And the "➡️ Sent to" after a delivered prompt
-  (`_send_batch`) never raises: the prompt had reached the session when the
-  chat was told it "could not pass" (2026-11-02), so a failed confirmation
-  is re-sent later (`_ack_later`). `_ack` itself still raises — it also
-  carries refusals, and those must not go silent.
-- 🔴 **A session restart is `/exit` + `claude --resume <id> -n <name>` in the
-  same window, and the window is never killed** (`CCBot._restart_session`).
-  `--resume` keeps the session id — verified against the live CLI on
-  2026-08-30: same `sessionId` in `claude agents --json`, same transcript file,
-  appended to rather than replaced. That is what makes the restart cheap:
-  the reader's offset stays valid, so nothing is replayed into the chat, and
-  `adopt()` must *not* be called. The launch name has to come back exactly as
-  it was, or the session is lost at its first `/clear` (see `Managed.name`).
-  Unlike `_close`, a restart that fails leaves the session standing: no
-  `kill_window` on any path.
-- 🔴 **A restart checks that `claude` is on disk before it stops anything.**
-  Claude Code updates itself by replacing the binary in place: for a second or
-  two the path is missing, and briefly it is half-written (bash: `Exec format
-  error`). `/exit` inside that window leaves the session at a shell prompt with
-  nothing to resume it — which is what happened to one session on 2026-08-30,
-  mid-`upd:all`. Hence the pre-flight check, plus a second `_launch_resume`
-  attempt, plus a failure message that says the window is intact and pressing
-  again will work (it does: with no `claude` running, the restart skips `/exit`
-  and goes straight to the resume).
-- 🔴 **A restart refuses a busy or waiting session, and asks twice.**
-  `claude agents --json` is asked with `force=True` (the five-second cache
-  would refuse a session that had *just* finished), and the screen is read on
-  top of that — a session relaunched seconds ago is missing from the agent
-  list entirely, and without the screen check a second press would walk over
-  the prompt it had meanwhile been given. Neither source alone is enough: the
-  agent list knows about dialogs `find_dialog()` cannot parse (`/model` is
-  one), the screen knows about work the list has not caught up with.
-- 🔴 **"busy" in `claude agents --json` is not "the prompt is taken".** The
-  list says `busy` for as long as background shells or subagents run, and for
-  a turn parked on a usage limit ("Continuing automatically at 9pm"), while
-  the input line takes commands (2.1.318). Believed alone, it refused /login
-  on a session sitting at an empty `❯` — the very session that had hit the
-  limit (2026-11-05, 0585ce76). `screen.busy_behind` reads what is drawn
-  *under* the input line (`· 5 shells`, the `◯ general-purpose` panel, the
-  limit notice); `_busy_reason` lets such a session through. A restart
-  refuses both by default — `/exit` would kill the background work or cancel
-  the automatic continuation — but names the work
-  (`screen.background_summary`: "2 shells", the panel's subagents) and offers
-  «🔁 Restart anyway» (`rsa:`, `upd:force:`): a finman session sat out
-  «Restart all» for a wait loop stuck three days and a subagent long finished
-  but still drawn (2026-11-10, 0585ce76), and the user saw only "busy". Forced,
-  `/exit` asks "The following will stop when you exit" (2.1.322) and the bot
-  answers "Exit and stop tasks", never "Move to background"; after the answer
-  the question stays drawn while the tasks stop, so the wait is for the
-  process to leave (`_await_exit(tasks=False)`) — reading the question as
-  asked again typed the resume into the dying `claude`. The list of
-  background kinds grows with Claude Code: `· 1 monitor` (a `Monitor` tool,
-  2.1.321) was missing and refused `/model` on an idle session (2026-11-09,
-  9fc6902d). So a refusal of `/model`, `/effort` or `/login` is a card with
-  «📤 Send … anyway» (`anyway:`), never a bare alert: the bot's reading can
-  be wrong, and the forced send still refuses to type over a question.
+  question is re-asked at the bottom. «New» and «Recent» only set
+  `_Parked.await_new` and hand over to the ordinary pickers; `_create`
+  delivers the batch itself (`_deliver_after_launch`) — the host answers
+  `create` once the session is up, so there is one delivery path. A batch that
+  replies to a session's message is **never** asked about. Own typing goes
+  straight to the active session — **unless there is none**: then it is
+  parked too (`CCBot._homeless`), ➕ first, no «Current»; only a lone Claude
+  `/command` gets "no active session".
+- 🔴 **Text is never sent into a session with an open question.**
+  `_dispatch` → `_try_send` is the only road user text takes:
+  `_question_open` (= `bridge.question_open`) first, then
+  `_send_prompt(guard=True)`; the host refuses a guarded send with
+  `request_open`, raised as `bot.Refused`. Blocked text becomes a `_Held`
+  (one per session, a list of batches) with a card: «✏️ This answers the
+  question» (only for one batch and the same question part the card was drawn
+  for — `bridge.answer_text`, shared with the card's ✏️), «💬 Close the
+  question and send» (declines the open request via `bridge.dismiss`), «⏳ Send
+  after the answer» (`_held_loop`, after `_HELD_CLEAR` with no question) and
+  «🗑 Don't send». Text sent meanwhile joins the hold and the card is asked
+  again at the bottom. Command buttons (`/clear`, `/compact`, `/context`) go
+  through `_send_command` and refuse the same way.
+- 🔴 **«💬 Discuss» answers nothing**: it denies the question with an
+  instruction to ask what to clarify first, so the next message is read as the
+  reply to that.
+- 🔴 **Answering a question from its card makes that session active**
+  (`CCBot._focus`, announced by `_say_focused`): what the user types next
+  belongs to that thread (2026-09-01, a clarification landed in another
+  session). Every card route focuses.
 - **A choice that has come true leaves a record of itself, not the choice.**
-  A picker is edited into one line saying what was picked (`CCBot._settle`:
-  `nd:` and the typed path after `nd:manual`, `dores:`, `grab:` — only on
-  success, so a failed launch keeps the list to try again); deleting it
-  left the chat with no trace of what happened. A question card keeps its
-  text and trades its buttons for one inert `done` button naming the answer
-  (`done_kb`: `d:`, `dt:`, `dc:`, `sub:`, rename via `CCBot.prompt_cards`),
-  and the handler calls `Watcher.release_dialog` first so the watcher does
-  not overwrite it. A question closed any other way (terminal, Esc, the next
-  section replacing it — whose digits would press into the new one) gets
-  `Watcher._retire_dialog`'s «⏹ Question closed».
-- 🔴 **«🔔 Show the question» on the session card is posted by the tick, not
-  the handler.** With many sessions a question card ends up far up the chat;
-  the button (shown only while a card stands: `dialog_msg_id`,
-  `blocked_msg_id`, `login_msg_id`) sets `rt.repost` via
-  `Watcher.request_repost`, and the next `_tick_session` posts the card at the
-  bottom and trades the old one's buttons for «⬇️ Shown again below». The tick
-  is the one writer of the card ids: a send from the handler raced the tick's
-  own and left two live cards for one question. A login card goes through
-  `repost_login` and keeps its buttons (guarded by its step). The same
-  button sits on the card a `/sessions` row opens (`confirm_kb(asking=)`).
-  🔴 **Only on a tap**: picking a session from the list must not post the
-  question by itself — the user has not decided yet to work with it
-  (2026-11-10, the auto-post was rejected: "do not send it ahead").
-- 🔴 **A launch ends on the session's own card, never on a bare line.**
-  Every way into a session — ➕ new, ▶️ resume from 🕘 history or a search,
-  a restore — goes through `_create`, and `_create` answers with
-  `_launch_card`: the card a row of `/sessions` opens, the name the session
-  was picked by (`title=`, set before the card is built), «🟢 Text now goes
-  to …» and the previously active session named as still working. The card
-  and the settled picker line (`_settle(..., session_id)`) are both
-  registered to the new session. A bare «✅ Resumed: 7loc-7487» — launch
-  name, no buttons, no word about the text — sent two messages meant for a
-  session found by search to another one (2026-10-03).
-- **`screen.is_busy()` needs the spinner line, not only the interrupt hint.**
-  "esc to interrupt" joins the spinner a few seconds into a turn, so the hint
-  alone reads the first seconds of every turn as idle (2.1.251:
-  `✻ Smooshing… (1s · thinking)`). The line is matched by `_WORKING_RE`, which
-  demands the ellipsis: `_ACTIVITY_RE` accepts the `●` that also heads Claude's
-  prose, and without the ellipsis "● I ran it (3s later)" reads as hard at work.
+  A picker is edited into one line saying what was picked (`CCBot._settle`,
+  only on success — a failed launch keeps the list). A question card trades
+  its buttons for one inert `done` button naming the answer (`done_kb`); a
+  question closed any other way gets «⏹ Question closed».
+- 🔴 **«🔔 Show the question» is posted by the bridge tick, not the handler,
+  and only on a tap.** The button (shown while a card stands) calls
+  `bridge.request_repost`; the next tick posts the card at the bottom and
+  trades the old one's buttons for «⬇️ Shown again below». Picking a session
+  from the list must not post the question by itself (2026-11-10).
+- 🔴 **A launch ends on the session's own card, never on a bare line.** Every
+  way into a session — ➕ new, ▶️ resume from 🕘 history or a search — goes
+  through `_create` → `_launch_card`: the card a row of `/sessions` opens, the
+  name the session was picked by (`title=`, set before the card is built),
+  «🟢 Text now goes to …» and the previously active session named as still
+  working. Both the card and the settled picker line are registered to the new
+  session (2026-10-03, a bare «✅ Resumed» sent two messages astray).
 - **A new bot `/command` means four places**: the handler in `_register()`, the
   `OWN_COMMANDS` set, the `CCBot.MENU` list, and the text of `help_text()`.
   Forget `OWN_COMMANDS` and the command silently travels to Claude as text.
   🔴 **A command that acts on a session also gets a button on the session
-  card** (`session_kb` → `_session_action`): the user drives the bot from
-  the phone by tapping, and a feature reachable only by typing its command
-  is a feature they cannot find (2026-10-29: `/login` shipped without one —
-  "do you think I have to type it by hand?").
+  card** (`session_kb` → `_session_action`): the user drives the bot from the
+  phone by tapping (2026-10-29: "do you think I have to type it by hand?").
 - **`callback_data` is limited to 64 bytes**: the session id is cut to 8
-  characters (`sid8`) and resolved back by prefix (`_resolve`, `_find_foreign`,
-  `_find_closed`).
+  characters (`sid8`), a request id likewise (`rq:<rid8>:…`), and resolved
+  back by prefix.
 - 🔴 **A closed session is one that nothing owns, and history is per
   directory.** `sessions.closed_all()` drops a transcript whose id is live in
-  `claude agents --json` **or** present in `Store.all_managed()`: after
-  `/clear` the running process writes under a new id, so its old file looks
-  closed, and resuming it would take over the database row of a session still
-  sitting in a tmux window. The list is filtered by exact `cwd` and paged
-  (`HISTORY_PAGE`) because one project holds dozens of transcripts — 88 in
-  `pay4say` on 2026-09-01, of which a global list of twelve showed four. A
-  card is therefore resolved by `sessions.closed_view()`, a direct glob on the
-  file name (the id *is* the file name), never by scanning the newest N; and
-  the directory in `callback_data` is a hash of the path (`sessions.dir_key`),
-  never its position in the list, which moves as sessions open and close.
+  `claude agents --json`, present in `Store.all_managed()`, or hidden (a
+  `/btw` fork). The list is filtered by exact `cwd` and paged
+  (`HISTORY_PAGE`); a card is resolved by `sessions.closed_view()`, a direct
+  glob on the file name, and the directory in `callback_data` is a hash of the
+  path (`sessions.dir_key`), never its position in the list.
 - 🔴 **A name the user gave outlives the session that had it.** `/rename`
-  writes both to `managed.custom_name` and to `session_names`, which
-  `Store.remove()` does *not* touch — a name kept only in `managed` is lost
-  exactly when it becomes useful, in the list of closed sessions. `rebind`
-  moves it to the new id (the work continues there, `/clear` or no `/clear`),
-  and `Store.add()` reads it back, so a resumed session comes up under its own
-  name. Everything else about the row is disposable; this is not.
+  writes both `managed.custom_name` and `session_names`, which `Store.remove()`
+  does *not* touch; `rebind` moves it to the new id, and `Store.add()` reads it
+  back, so a resumed session comes up under its own name.
 - 🔴 **A row's caption has four sources, in this order**
   (`sessions._closed_view`): the saved name, then `claude -n` **when a human
   wrote it** (`hand_written` rejects the bot's own `folder-1a2b`), then
-  `ai-title`, then the first prompt. The order matters because the last one is
-  the usual case: Claude Code all but stopped writing `ai-title` in late
-  August 2026 — 0 of 9 sessions on 30.08, 1 of 16 on 31.08 — and it writes it
-  near the *start* of the transcript, so a tail-only scan finds almost none.
+  `ai-title`, then the first prompt — the usual case, since Claude Code all but
+  stopped writing `ai-title` in late August 2026.
 - 🔴 **A prompt is cleaned before it becomes a caption**
   (`sessions.clean_prompt`, on text that still has its line breaks — hence
-  `transcript.prompt_text` next to `prompt_from_line`). The bot's own wrapping
-  is what would otherwise be shown: an attachment prompt opens with a heading
-  and the media paths, a forwarded batch with "Forwarded from Telegram, 8
-  messages". Six of the newest twenty-four pay4say rows read as a media path
-  on 2026-09-01. The headings are matched **structurally** (a line that is a
-  path; a heading followed by paths) and never by their wording — they are
-  translated, and an English pattern would slip straight past a Ukrainian
-  install.
-- 🔴 **A window that vanishes with the whole tmux server is not an ending.**
-  `_tick_session` drops the row of a window somebody closed; a reboot closes
-  every window at once, and deleting those rows throws away the only record of
-  what to resume (nine at once on 2026-09-09). `Watcher._check_host` runs
-  first in the tick and **moves** the rows instead (`Store.orphan` → `orphans`),
-  then sends one 🔌 card with a button per session. The event is recognised by
-  the boot id in `meta` having changed, or by `tmux.server_pid()` answering 0
-  — never by "several windows went missing", which is also what closing three
-  cards in a row looks like. Each row is still checked with `window_exists`,
-  so a session that outlived the event is not filed as a casualty of it. A
-  restore goes through `_create(resume=...)` like every other launch, and it
-  is `Store.add` that takes the row off the list — which is what makes a
-  session resumed from 🕘 history stop being offered here too.
-- **Three kinds of session.** `managed` — in tmux, full control; `foreign` —
-  somebody else's terminal, view only (stdin is out of reach; "move" means
-  SIGTERM + `--resume`); `closed` — a transcript, brought back with `--resume`.
-- **`screen.py` is the only place that knows what the TUI looks like.** A dialog
-  is recognised by its footer, and there are two footers: `Enter to select…`
-  (choosing an option) and `Esc to cancel · Tab to amend · ctrl+e to explain` (a
-  permission request from a tool or a `PreToolUse` hook). Options are searched
-  **bottom-up from the footer to "1."** — top-down, the parser latches onto
-  Claude's numbered prose. A footer counts only with **nothing of the
-  ordinary bottom (`_UI_BOTTOM`) drawn under it** (`_footer_index`): a real
-  dialog covers the mode/status line, a dialog printed as tool output sits
-  above it — and without that test a printed capture became a live card
-  (2026-10-01). `_UI_BOTTOM` carries `← for agents` because the manual-mode
-  line of 2.1.286 has no `(shift+tab`, and `claude v` is the user's own status
-  line, not the bot's. A Claude Code update breaks this file specifically.
-- 🔴 **The Claude in Chrome permission prompt has no footer, and its title is
-  prose.** "Claude in Chrome wants to <verb> on <host>", the page in a dashed
-  (`╌`) box, then `1. Allow / 2. Allow all actions on … / 3. Deny (esc)` and
-  nothing under it (2.1.303); a digit commits. It is found by
-  `_confirm_footer_index` — the `(esc)` on the last option stands in for the
-  "?" of the heading — and the dashed lines are dropped from the question
-  (`_DASHED_RULE_RE`) but are never separators, or the title is lost. The
-  "to navigate" footer hint is matched as `_NAVIGATE_RE` (a key right before
-  it): as a bare substring it matched "wants to navigate on" and built the
-  card out of Claude's prose above the dialog (2026-10-19, 4d781898).
-- 🔴 **The model list and the effort levels are never written down in the bot.**
-  They are read off `/model` and `/effort`, which are dialogs of their own
-  shape (`screen._model_dialog` / `_effort_dialog`, measured on 2.1.258) and
-  used to reach the chat as "a screen I do not understand". Both are worth
-  knowing exactly:
-  * The picker's footer **follows the cursor** (2.1.330): `s to use this
-    session only · Enter to save · Esc to cancel` on a model row (it was
-    `Enter to set as default · …` before — matching that wording is how the
-    picker became "a screen I do not understand" on 2026-11-21), and `Enter to
-    expand` / `Enter to collapse` on the unnumbered `▸ More models` row, which
-    unfolds models 6–14 under itself. `screen._model_footer` takes either; the
-    row is a `Dialog.extras` entry (arrow kept in the label, so a card drawn
-    collapsed cannot press it expanded) with a button of its own, and
-    `cursor_index` / `model_nav_index` count it in navigation order. Rows
-    carry a label and a description on one line, held apart by padding, with
-    a `✔` on the one in force. Enter saves the pick as the default for new
-    sessions, `s` keeps it to this one, and **both act on the row under the
-    cursor** — so `CCBot._pick_model` always walks the cursor there
-    (`_walk_to`) and never types a digit: "1" of "14" commits row 1.
-  * The slider's footer is `←/→ to adjust · Enter to confirm · s for this
-    session only`, it has **no digits at all**, and the level in force is the
-    one the `▲` sits over — matched by *column* against the centres of the
-    names under it. It does not wrap at the ends. **The set of levels is not
-    fixed**: `ultracode` was on it in one session and absent in another
-    (2026-09-02, the same build), which is the whole reason the list is read
-    rather than declared. Since 2.1.330 Ultracode is a **switch** right of the
-    scale (`Ultracode  off`, `Tab to toggle` under it): level names are taken
-    only up to the scale's end column, the switch is `Dialog.toggle` /
-    `toggle_on` with a button (`etg:` presses Tab), and Tab only *arms* it — a
-    level button commits it. While it is on the footer reads `Enter to use
-    this session only` and there is no `s` and no saving as default
-    (`Dialog.session_only`): the scope row leaves the card and Enter commits.
-  * The line under the names is a gloss that belongs to nothing in particular
-    — sometimes a zone of the scale ("xhigh + workflows" under `ultracode`),
-    sometimes a warning about the level the marker is on ("May use excessive
-    tokens…" on `max`). It goes under the list as `Dialog.note`; attributing
-    it to a level by column puts it on the wrong one.
-  * Switching the model of a conversation that has history is asked once
-    more — "Switch model?", two options, **no footer at all** (2.1.281). It
-    is found by shape in `screen._confirm_footer_index` (no status line, a
-    cursor-bearing list from "1." that ends the pane, a rule and a heading
-    ending in "?" a few lines above it) and reaches the chat as an ordinary
-    card. The picker handler reads the screen back after the pick and, when
-    that question is standing, says the switch awaits confirmation instead
-    of "set" — the old reply claimed success while the session sat on an
-    unrecognised question (2026-09-24, fbcfefa6).
-  * Both are guarded by `_ordinary_bottom`: seeing the mode/status line
-    anywhere on the pane means the bottom belongs to the ordinary UI, however
-    much the text above it looks like these footers. This file quotes both of
-    them, and a session working on this repository prints them.
-- 🔴 **"Type something" and "Chat about this" are not the same escape hatch**
-  (measured on 2.1.252). The first is an **input line inside the dialog**: the
-  digit only moves the cursor onto that row, the text that follows is typed
-  into it, and Enter answers the question — one turn, and the transcript reads
-  `User answered … → <text>`. The second **answers nothing**: the digit alone
-  rejects the question with an instruction that tells Claude to *"start by
-  asking them what they would like to clarify"*, so Claude asks first and any
-  text sent with the press is only read after that answer. Collecting the text
-  up front and pressing "Chat about this" therefore cost a round trip and read
-  as "my message was ignored" (2026-09-01: cf0ab576, the reject at 13:53:35,
-  Claude's "Що саме уточнити?" at 13:53:38, the text delivered at 13:53:39).
-  So the two rows take different routes: `dt:` collects the text and types it
-  into the row, `dc:` presses and stops, saying that the next message goes
-  there.
-- 🔴 **Answering a question from its card makes that session active**
-  (`CCBot._focus`). What the user types next belongs to the thread they were
-  just answering, and the active session is what plain text follows. Without
-  it a clarification typed after a dialog button went wherever the active
-  session happened to point: on 2026-09-01 the second copy of a pay4say
-  clarification (cf0ab576) landed in a different pay4say session (05caad4f) 13
-  seconds later, which started working on a question never put to it. Every
-  dialog route — `d:`, `dt:`, `dc:`, `dm:`, `sub:`, `nav:` — focuses, and the
-  move is announced, because a silent change of target is how the next message
-  goes missing.
-- 🔴 **A digit does not answer a question whose options carry a preview.**
-  There the digit only walks the cursor onto the row so the drawing beside it
-  can be read, and the question stays open — the footer says so
-  (`Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel`,
-  measured on 2.1.278) and promises no digits at all, where an ordinary
-  question commits on the digit itself. So `_answer_dialog` reads the screen
-  back and presses the Enter itself, and it answers with a **bool**: the card
-  keeps its buttons when the press did not land. Retiring them on a press that
-  went nowhere left a pay4say session waiting on its question with no way back
-  to it from the chat — the press at 15:47 on 2026-09-22 reached the
-  transcript at 15:56, typed by hand, and the watcher stayed silent because
-  the cursor had already been on that row, so nothing about the screen
-  changed. The confirmation compares the **question**, not "is a dialog
-  there": a multi-part `AskUserQuestion` draws its next section the instant
-  the previous one is answered, and an Enter meant for the old row would
-  answer the new one blind.
-- 🔴 **A multi-select question answers on a row that has no digit.** Its
-  options are checkboxes ("1. [✔] Fix parser"), a digit *ticks* one, and the
-  ticked set leaves only when the unnumbered row under the list is pressed:
-  `Submit` on the last section, `Next` while sections remain (verified on the
-  live TUI, 2.1.252). Three things follow. The checkbox is parsed out of the
-  label into `Option.checked`, because a label that carries its own box changes
-  on every press and `Watcher._tick_session` would read each press as a new
-  question — hence the box lives in `state`, not in `sig`. The row is found
-  before the description branch (it is indented *deeper* than the options, so
-  it used to be filed away as the description of the last one) and its position
-  is kept in navigation order (`Dialog.submit_index` / `cursor_index`), which
-  is what `CCBot._submit_dialog` walks the cursor along, re-reading the screen
-  after every move. And the review page it leads to ("Review your answers")
-  is answered by the bot: the chat has just confirmed the same thing, so a
-  card repeating it would make one answer cost two taps — unless it warns
-  "Some questions are unanswered": a skipped section would go out as a
-  partial answer, so that page is a card (`screen.is_review`).
-  🔴 **A typed answer is followed by Submit only in a multi-select list,
-  and only one still standing** (`_answer_free_text`, the same question
-  re-read after the paste): an ordinary question is answered by the Enter
-  and draws its next section at once, where a Submit would send that
-  section unchosen. And the paste's Enter **unticks** the row the digit had
-  ticked — the text stays, the box is empty, the set went out without it
-  (2.1.330) — so `_tick_typed_row` presses Enter on it, only while that row
-  stands unticked under the cursor (2026-11-21, d2032fff).
-- **One dialog has no footer at all**: the review step of a multi-part
-  `AskUserQuestion`, which draws its section tabs
-  (`←  ☒ Language  ☐ Style  ✔ Submit  →`), echoes the answers, and ends with
-  `Ready to submit your answers?` and two options. 🔴 **2.1.327 redrew it**:
-  the heading `Review your answers` comes first, the answers (and a
-  `⚠ Some questions are unanswered` when a section was skipped) under it,
-  then `1. Submit answers / 2. Cancel` — the old line is gone from the
-  binary, and the page reached the chat as "a screen I do not understand"
-  with digit buttons (2026-11-18). Both shapes are read; with the heading
-  the list starts at its "1. Submit answers" row. A digit commits there.
-  The page and its warning are `Dialog.review` / `Dialog.partial`, set from
-  the raw lines — never looked up in `Dialog.question`, which keeps only its
-  last 700 characters and so loses a heading that stands at the top.
-  `_submit_footer_index`
-  synthesises the footer position, and it demands *all* of: no mode/status line
-  anywhere on the pane (an open dialog covers them, so seeing one proves the
-  bottom belongs to the ordinary UI), the tabs, the marker, and an option list
-  that opens at "1." and follows the marker (or the echoed answers under the
-  heading), with nothing under it
-  but blank lines — or, since 2.1.281, the one rule that closes the dialog
-  and names the session (`──── pay4say-1a2b ─`, `_NAMED_RULE_RE`); without
-  that allowance a multi-part question answered from the chat ended on "a
-  screen I do not understand" instead of a «Submit answers» card
-  (2026-09-24). Every one of those
-  strings gets printed in this repository while it is being worked on — a
-  heredoc full of this very documentation was reported as two questions in the
-  chat on 2026-08-25, and the digits the user pressed landed in the session's
-  input line. Weaken any of those conditions and it happens again.
-- 🔴 **A dialog redraws in stages.** The row that was chosen leaves the screen
-  before the rest of the dialog does, so a frame captured mid-redraw looks like
-  a new question with options missing. `Watcher._tick_session` therefore
-  reports no *new* dialog within `_DIALOG_SETTLE` of the bot's own keypress
-  (`note_input`), the same mark `_report_blocked` uses.
-- 🔴 **The question text must stand still, so a countdown is taken out of
-  it.** A permission prompt can count down to its own refusal ("⚠ Claude Code
-  will automatically block this request in 1:52, to avoid holding up an
-  unattended session", or "in about 2 minutes", 2.1.318). Left in
-  `Dialog.question`, the clock made every tick a new question, and the card,
-  which waits `_TRANSCRIPT_LAG` for a question that holds still, was never
-  sent. The prompt timed out with no card in the chat, and text typed meanwhile
-  sat held under "the question above" that was not there (2026-11-05, 0585ce76).
-  `screen._AUTO_BLOCK_RE` moves it into `Dialog.expires_in`, and the card
-  shows it as a clock time (`watcher._expiry_line`). Any other line that
-  repaints on its own belongs out of the question for the same reason.
-- 🔴 **Nothing from a session lands under its own open question card.**
-  Claude Code draws a permission dialog 60–115 ms *before* it writes the tool
-  call to the transcript (measured on 2.1.286), so a tick that read the
-  transcript inside that gap sent the card and then, a tick later, the
-  "🔧 Bash: …" line under it — moving the buttons as the user reached for
-  them (120 of 1063 cards by 2026-10-01). Two rules in `_tick_session` hold
-  it: a new question is sent only after standing `_TRANSCRIPT_LAG`
-  (`seen_dialog_at`, on `time.monotonic()` — the WSL wall clock steps back by
-  seconds), so the late record is read and flushed ahead of the card; and
-  while the card waits (`holding`: same question, card sent, no spinner) the
-  buffer and the usage alerts are held, then go out with whatever the answer
-  brings. An answer from the chat (`release_dialog`) ends the hold at once,
-  and `_HOLD_MAX` ends it anyway, so a screen misread as a question cannot
-  swallow a session's output for good.
-- 🔴 **A non-empty `thinking` block is a message to the user, not reasoning.**
-  The reasoning is stored redacted (empty text + signature); what arrives
-  with text is the short mid-turn progress note the TUI draws as an ordinary
-  "●" line (4556 of them in two weeks, none over 470 characters, all
-  addressed to the user). `transcript.parse_line` emits it as `text`;
-  skipping `thinking` wholesale lost a whole paragraph between two tool calls
-  (2026-10-09, 4ae7b1ec).
-- **The reasoning behind a question is on the screen and nowhere else.** Claude
-  Code writes an assistant record only when the tool call inside it returns,
-  and `AskUserQuestion` returns on a human — so the analysis the options are
-  about reaches the transcript *after* the answer was given. `Watcher._preface`
-  reads it off the terminal (`screen.said_above_dialog`, 400 lines of
-  scrollback) before rendering the dialog, and `SessionRuntime.echoes_screen`
-  drops the transcript's own copy when it finally arrives (word overlap, not
-  equality: the terminal renders markdown and wraps to its width). The
-  opposite check — the transcript already delivered it, as it does for a
-  permission prompt — compares the **words** flushed under the question
-  (`flushed_words`, tool lines excluded), never "something was flushed": a
-  `🔧 Bash` line held while Claude went on thinking is flushed by the
-  question's arrival, and taking that for the reasoning held a 1302-character
-  analysis back until after the answer (2026-10-29, aa9c201c). A tool call
-  that has already printed output means the turn *was* recorded, so nothing is
-  read above it — but everything *below* it is (`screen._after_tool_output`):
-  that text belongs to the next record, and the next record is written when
-  the question is answered. Giving up at the output instead cost a finman
-  session its whole 2431-character analysis, which reached the chat five
-  minutes later, under the answer (2026-09-02). The answer's own "●" can be
-  missing from the pane altogether — a redraw around a long tool output ate
-  it, scrollback and all — so the block start cannot be relied on; the end of
-  the output can (its lines are aligned under the "⎿", deeper than the mark).
-- 🔴 **A prompt sent mid-turn is queued, and the queue is drawn between what
-  was said and the dialog** — as "❯ …", the very shape of the prompt that
-  opened the turn, which `said_above_dialog` reads as its floor. Taken for
-  that, a forwarded batch hid a 3124-character plan, and the plan reached the
-  chat only after its question was answered (2026-10-16, 4d781898; reproduced
-  on 2.1.301). The screen cannot tell the two apart; the transcript's
-  `queue-operation` records can (`enqueue` / `dequeue` / `remove`, a
-  `<task-notification>` content being a background task, not a prompt).
-  `SessionRuntime.track_queue` keeps the queue (primed from the transcript's
-  tail when a reader starts mid-file, counted up to the capture by
-  `queued_prompts`), five seconds of idle by both the screen and the agent
-  list clears it, and `said_above_dialog(queued=…)` stops above that many
-  margin "❯" lines below the last "●". The errors lean one way on purpose:
-  a prompt counted too few brings back the old miss, one too many resends the
-  previous answer.
-- 🔴 **What was said is bounded by the rule above the dialog — and a table is
-  made of rules.** Breaking the block at the first box-drawing line cut every
-  answer off at its first table: 320 characters of a 4160-character summary
-  reached the chat, and the rest of it arrived *after* the answer, which is the
-  one thing `_preface` exists to prevent (2026-09-02, five of six questions in
-  one finman session; the sixth had no table). So the rules are dropped
-  wholesale and the end of the block is found by trimming the tail (the rule,
-  the blank lines, the `✻ Worked for 19s` footnote). What is left of a table is
-  a run of adjacent `│ … │` rows, which `screen._table_rows_to_markdown` turns
-  back into a Markdown table — Telegram parses `| a | b |` plus a delimiter row
-  into a real table block (verified against the live API), where box-drawing
-  arrives ragged and column-less.
-- **The settings pickers get no preface.** `/model` and `/effort` are opened
-  from the chat, nothing is said above them, and they draw no rule the reading
-  could stop at — so `said_above_dialog` used to hand back a line of the
-  picker's own state ("High effort (default) ←/→ to adjust") as the preamble to
-  it. `Watcher._tick_session` prefaces `kind == "choice"` only, and
-  `said_above_dialog` returns nothing without a `_dialog_span` of its own:
-  with no rule to stop at it read down to the bottom of the pane and offered
-  the input line and the status bars as something Claude had said.
-- 🔴 **Every control a dialog draws gets a button of its own.** An unnumbered
-  row ("Chat about this"), the section tabs (`← ☐ Назви ☐ Скасовані ✔ Submit →`),
-  a footer key (`n to add notes`) — if the screen offers it, the card offers
-  it, named after what it does. A line of text pointing at ⬆️⬇️✅ is not a
-  control: on 2026-10-24 (d569a86c, a preview question) the user found no way
-  to "Chat about this", switch sections or add a note from the chat.
-- 🔴 **A `/btw` answer is copied out, then closed — never just Esc'd.**
-  It is an overlay (`  /btw …` under a column-0 rule, the answer,
-  `c to copy · f to fork · Esc to close`, 2.1.312), the session reads as
-  `waiting`, and the answer exists on the screen only: not in the transcript,
-  not in `history.jsonl`. `screen.side_answer` finds it, `Watcher._side_answer`
-  presses `c` (`tmux.copy_out` takes the new `bufferN` Claude Code loads —
-  the whole answer, Markdown, however much the pane shows — and deletes it),
-  sends it, then Esc. Right after `c` the footer reads `Copied to clipboard`
-  instead; matching only `c to copy` took that for a closed overlay and the
-  Esc was never pressed. The tmux server is shared, so a new buffer counts
-  only if it holds the answer's first line as the pane shows it — otherwise
-  it is somebody's selection in another window. While it is still
-  answering (footer `Esc to close` alone) the overlay is recognised too and
-  nothing is reported. A copy that does not arrive leaves the overlay up with
-  a card of its keys (`bw:` — 📋 again, ⬆️⬇️, ⬅️➡️ through its history,
-  ✖️ Close; arrows edit the card in place); an overlay closed meanwhile gets
-  no card at all. Every key goes through the lock with the overlay
-  re-checked: a stray `c` lands in the input line, a stray Esc interrupts
-  the turn.
-- 🔴 **`/login` is driven off the screen, and the code never takes the inbox.**
-  The panel (`screen.login_screen`, anchored like `side_answer`: no status
-  line, column-0 rules above and below, "  Login" first) is the whole state;
-  `Watcher._tick_login` sends one card per step and suppresses
-  `_report_blocked` for it, except a panel of unknown shape standing
-  `_LOGIN_OTHER_GRACE`. Every key goes through `login.py`, guarded by the
-  step under the input lock. A message shaped like `code#state` is caught at
-  the top of `_on_text` and typed into the session whose screen waits for a
-  code (`_enter_login_code`); it is masked in both log lines
-  (`login.mask`). 🔴 **Running sessions follow a login with their next
-  request — no restart** (2.1.318, verified on 2026-11-05: finman 0585ce76,
-  untouched since 11:44, went out as the new organisation at 13:44 after a
-  login elsewhere at 13:39). The success card (`login_done_card`) says so and
-  offers no restart; it used to, on the opposite belief, and the user caught
-  it. The success screen was never seen live (2.1.312).
+  `transcript.prompt_text`). The bot's own wrapping (attachment heading and
+  media paths, "Forwarded from Telegram, 8 messages") is matched
+  **structurally**, never by its wording — it is translated.
+- 🔴 **A non-empty `thinking` block is a message to the user, not reasoning**
+  (the reasoning itself is stored redacted): `transcript.parse_line` reads it
+  as text, and the recap must too (2026-10-09, a lost paragraph).
 - 🔴 **A session's account is read from its own transcript, never from
-  `~/.claude.json`.** That file names the last `/login`; a session moves to
-  it only with its next request, so it would show the new one for a session
-  still quiet on the old. `ccbot/account.py` takes the newest of two
-  attachments: `session_context` (`userEmail`, the address matched by shape,
-  not by the sentence) and `credential_org` — written **alone**, an org id
-  and no address, when a login elsewhere moved a running session; it is
-  resolved through known org→address pairs (kept in
-  `~/.cache/ccbot/account-orgs.json`), and unresolved — or shared by several
-  addresses, as a team org is — it shows nothing, never the stale address. A record older than the process `startedAt` is
-  dropped
-  — a resume writes its own only with the first prompt (verified 2.1.317), so
-  the old run's record sits at the end of the file until then. What the bot
-  knows first (a login it drove, a restart it made) goes in
-  `account.note_login` until a newer record appears. The terminal status line
-  repeats the same rule in bash.
-- 🔴 **An unrecognised dialog has no right to be silence.** When
-  `claude agents --json` says `waiting` and `find_dialog()` returned None,
-  `Watcher._report_blocked` sends the screen with buttons (digits/arrows/Esc)
-  that work without any parsing. When adding a new kind of screen, keep that
-  safety net.
-- 🔴 **Do NOT build deduplication of repeated messages on the raw screen.** The
-  terminal does not stand still: the spinner turns, the timer ticks, the status
-  line repaints percentages, and the output scrolls on top of that. A signature
-  taken from `capture-pane` changes every tick — that is how one question turned
-  into 28 chat messages (2026-08-24). The boundary of an episode is the
-  **session state** (`agent_status`), not the content; for comparing content
-  there is `screen.quiet_signature()`, which drops volatile lines and flattens
-  numbers. After that, only `edit_message_text` (an edit raises no
-  notification); a new message is for a new episode only.
+  `~/.claude.json`** (that names the last login; a session moves to it only
+  with its next request). `ccbot/account.py` takes the newest of
+  `session_context` (`userEmail`) and `credential_org` (an org id written
+  **alone** after a login elsewhere), resolved through known org→address pairs
+  (`~/.cache/ccbot/account-orgs.json`); unresolved or shared by several
+  addresses, it shows nothing rather than the stale address. A record older
+  than the process `startedAt` is dropped.
+- 🔴 **An attachment is never filtered by format.** `_attachment()` takes every
+  kind Telegram has and hands the path over whatever the MIME type says (a
+  whitelist once answered a forwarded JSON with a refusal). The only limit is
+  Telegram's 20 MB bot download. The handler filter has to list every kind too
+  — an unlisted one vanishes from the batch in silence. A file keeps the name
+  it was sent with (`media.safe_name`, `-1` on a collision); `media.is_image()`
+  decides whether the prompt says "image" or "file".
+- 🔴 **A message with no `text` may still be words: Premium sends formatted
+  text as `rich_message`.** `rich.read()` turns the blocks into Markdown plus
+  the files they carry (`_Item.paths`). The last handler, `@dp.message()` with
+  no filter, answers any kind still unhandled (service ones in
+  `_SERVICE_KINDS` are only logged) — keep it last and keep it.
+- 🔴 **One update aiogram cannot parse must not stop polling.** aiogram
+  validates a `getUpdates` answer as a whole, so one unknown kind froze the bot
+  for 15 minutes (2026-10-27). `transport.TolerantSession` validates such a
+  batch update by update, cuts out what the models reject, logs the raw JSON
+  and tells the chat what was left out (`CCBot._say_damaged`). Still bump
+  aiogram when Telegram adds a block kind.
+- 🔴 **A connect that drops is retried in the transport, and only a connect.**
+  `TolerantSession.make_request` repeats a request whose `ClientConnectorError`
+  came before a byte left (0.5 / 1.5 / 3 s), never a timeout or a hang-up
+  mid-answer (a repeated `sendMessage` is a duplicate); only `getUpdates` /
+  `getFile` / `getMe` are repeated after a reset too. Downloads repeat on their
+  own until the first byte. The "➡️ Sent to" after a delivered prompt
+  (`_send_batch`) never raises — a failed one is re-sent later (`_ack_later`);
+  `_ack` itself still raises, it also carries refusals.
+- 🔴 **Rich messages are the normal path** (`ccbot/rich.py`, Bot API 10.1):
+  terminal-ish output as `rich.pre()`, Claude's answers as `markdown=`, cards
+  as blocks; text inside a block is never parsed. Measured on the live API: a
+  block took 30 000 characters, a rich message can be edited in place and
+  carries an inline keyboard, and box-drawing is not a letter wide in
+  Telegram's monospace face (`rich.ascii_frame()`).
+- **Every rich send has a plain-text fallback and must keep it.** `rich.send`
+  returns None instead of raising, and the caller then uses the old path
+  (`_say_html`, `util.split_text`, `as_pre`). An older client must not turn
+  into silence.
+- **`c.message` is not guaranteed.** For a card older than 48 hours Telegram
+  serves `InaccessibleMessage` (or `None`). Take the message through
+  `_editable()` only, never `c.message.…`.
+- **Read the database schema tolerantly.** `Store._row_to_managed` discards
+  unknown columns (2026-08-24: a newer build's column killed an older bot).
+- 🔴 **No error goes silent.** An exception in a handler is caught by
+  `@dp.errors` (`bot.py`) and answered in the chat; a bridge tick or watcher
+  loop failure is reported (`_report_failure`, once an hour for the same
+  breakage), a host that stays down past `_DOWN_GRACE` is announced, and so is
+  its return. A new background loop or task must report the same way.
 - 🔴 **`bin/setup.py` runs on the system Python, BEFORE the venv exists.** So it
-  contains stdlib only: no `aiogram`, no `dotenv`, and no imports from `ccbot/`.
-  Importing from the package looks convenient (`paths.py` is right there), but
-  it kills the installer on exactly the machine it was written for. For the same
-  reason it parses `.env` with a short loop of its own rather than with
-  `dotenv`.
+  contains stdlib only: no `aiogram`, no `dotenv`, no imports from `ccbot/`
+  (it mirrors `paths.py` and `protocol.socket_path` instead) and parses `.env`
+  with a loop of its own.
 - **The install steps live in two places deliberately**: `bin/setup.py` and the
-  "Manual install" section of the README. Change one and look at the other, or a
-  hand-built install will drift away from a scripted one.
+  "Manual install" section of the README. Change one and look at the other.
 - **The bot's own files go through `paths.py` only** (XDG: config/data/cache).
   It writes nothing next to the code; `.env` is the single configuration file a
   human edits.
-- **Metrics: `status_feed` first, `screen.read_status` as the fallback.** Do not
-  parse bars off the screen where a payload exists.
-- 🔴 **Rich messages are the normal path now** (`ccbot/rich.py`, Bot API 10.1,
-  June 2026). A preformatted block **scrolls** sideways, so the old rule — "a
-  phone wraps `<pre>`, therefore anything wider than 36 columns becomes a PNG" —
-  is gone. Terminal output goes out as `rich.pre()`, Claude's answers as
-  `markdown=` (he writes Markdown; Telegram now renders it), and a question as
-  a list of blocks. Text inside a block is **never parsed**, which is why an
-  option label containing `<b>` no longer needs escaping.
-  Three things measured against the live API, not the docs: a single block took
-  **30 000** characters (the docs claim 1024), a rich message can be **edited in
-  place** and carries an inline keyboard, and box-drawing (`─ │ ┼`) is **not a
-  letter wide** in Telegram's monospace face — a captured frame comes out
-  ragged, plain ASCII does not, hence `rich.ascii_frame()` on everything read
-  off a terminal.
-- **Every rich send has a plain-text fallback and must keep it.** `rich.send`
-  returns None instead of raising, and the caller then uses the old path
-  (`_say_html`, `as_pre`, and the PNG for a wide diagram). An older client must
-  not turn into silence. `util.split_text`, `as_pre`/`as_pre_lines` and
-  `render.text_to_png` are that fallback — they are not dead code.
-- **`c.message` is not guaranteed.** For a card older than 48 hours Telegram
-  serves `InaccessibleMessage` (or `None`) — it can be neither edited nor
-  replied to. Take the message through `_editable()` only, never `c.message.…`.
-- **Read the database schema tolerantly.** `Store._row_to_managed` discards
-  unknown columns: the database outlives the process, and a newer build that
-  added a column would otherwise kill every older bot still running (which is
-  exactly what happened on 2026-08-24).
-- 🔴 **No error goes silent.** An exception in a handler is caught by
-  `@dp.errors` (`bot.py`) and answered in the chat; an exception in a watcher
-  tick goes through `Watcher._report_failure` (once an hour for the same
-  breakage, plus "✅ working again" once it recovers). A new background loop or
-  separate task must report the same way — otherwise a breakage looks like
-  Claude being quiet.
 - 🔴 **UI strings go through gettext only (`ccbot/i18n.py`).** The base language
   of the code is English; Ukrainian lives in `locales/uk`. New text for the chat
   means `_()` (or `ngettext()` when it contains a number), then
-  `pybabel extract` → `update` → translate → `compile`. The commands are in the
-  README, under "Adding a language". Comments, docstrings and **logs** are in
-  English and WITHOUT `_()`: they are for the developer.
+  `pybabel extract` → `update` → translate → `compile` (README, "Adding a
+  language"). Comments, docstrings and **logs** are in English and WITHOUT
+  `_()`.
 - **`_()` at module level is not allowed** — the constant is evaluated at import
-  time, when the language is not known yet, and the first language sticks
-  forever. For text that used to be a constant, make it a function
-  (`help_text()`, `restart_ask()`, `no_supervisor()`); for tables looked up by
-  key (`MENU`, `_LIMIT_LABELS`, `_DOW`, `_STATUS_LABELS`), use `N_()` at the
-  definition and `_()` where they are read.
+  time, and the first language sticks forever. Make it a function
+  (`help_text()`, `restart_ask()`), or use `N_()` at the definition of a table
+  looked up by key (`MENU`, `_STATUS_LABELS`) and `_()` where it is read.
 - 🔴 **`_` can no longer be used as a throwaway variable** (`for _ in
   range(...)`, `_, a, b = ...`): it shadows the gettext import and the function
   dies with `UnboundLocalError` on the first `_("…")`. Ruff catches only the
   loop form, never tuple unpacking.
 - **Placeholders are named** (`{name}`, not `{}`), emoji go inside the string,
-  and format specifications (`{n:02d}`) stay outside it: everything a translator
-  can see is something a translator can break. HTML travels with the string as a
-  whole.
-- **The watcher has a locale context of its own.** A ContextVar is copied when
-  the task is created, so a background loop would never see a language chosen
-  later — `_loop()` opens `use_locale(self._locale())` on every tick. Any new
-  background task that writes to the chat has to do the same.
+  and format specifications (`{n:02d}`) stay outside it. HTML travels with the
+  string as a whole.
+- **Background loops open a locale context of their own.** A ContextVar is
+  copied when the task is created, so a loop would never see a language chosen
+  later — the bridge's `_loop` and the watcher's `_loop` open
+  `use_locale(watcher._locale())` on every tick. Any new background task that
+  writes to the chat has to do the same.

@@ -1,7 +1,7 @@
 """Bot API 10.x rich messages: monospace that scrolls, Markdown as it is.
 
 Until June 2026 a phone wrapped a ``<pre>`` block instead of scrolling it, so
-anything wider than roughly a phone had to leave as a PNG (``render.py``), and
+anything wider than roughly a phone had to leave as a PNG, and
 Claude's answers — which are Markdown — went out as the asterisks around the
 text. Bot API 10.1 replaced both workarounds: ``sendRichMessage`` takes either
 a list of blocks or a whole Markdown document, the client draws the tables and

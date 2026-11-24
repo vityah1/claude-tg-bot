@@ -1,6 +1,6 @@
 """`/login` without a terminal: `claude auth login` driven under a pty.
 
-SDK sessions have no TUI to open `/login` in ("isn't available in this
+The sessions have no TUI to open `/login` in ("isn't available in this
 environment"), so the bot runs the CLI's own login command. Verified on
 2026-11-24: it prints the claude.ai sign-in link and "Paste code here if
 prompted >", and the current login stays in force until a new one succeeds.
@@ -33,6 +33,30 @@ _URL_WAIT = 30.0
 _CODE_WAIT = 90.0
 # A link nobody used is dropped after this long.
 _STALE = 15 * 60.0
+# What the sign-in page hands over: the code, "#", the state. Both halves are
+# base64url, the state 43 characters of it (the code's length was never
+# measured). Long and dotless, so "README.md#installation" is not one.
+_CODE_TOKEN = r"[A-Za-z0-9_-]{20,}#[A-Za-z0-9_-]{20,}"
+_CODE_RE = re.compile(rf"^{_CODE_TOKEN}$")
+_CODE_ANYWHERE_RE = re.compile(rf"(?<![A-Za-z0-9_-]){_CODE_TOKEN}(?![A-Za-z0-9_-])")
+
+
+def code_of(text: str) -> str:
+    """The sign-in code *text* is, cleaned of what a copy drags along, or ""."""
+    code = text.strip().strip("`'\"").strip()
+    return code if _CODE_RE.match(code) else ""
+
+
+def code_in(text: str) -> str:
+    """A sign-in code anywhere in *text* ("code: …#…"), or ""."""
+    m = _CODE_ANYWHERE_RE.search(text)
+    return m.group(0) if m else ""
+
+
+def mask(text: str) -> str:
+    """*text* for a log line: a sign-in code is a credential while it lives."""
+    return _CODE_ANYWHERE_RE.sub(lambda m: f"<login code, {len(m.group(0))} chars>",
+                                 text)
 
 
 class LoginError(Exception):

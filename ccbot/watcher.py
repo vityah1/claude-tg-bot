@@ -1,10 +1,11 @@
-"""Background polling: pushes Claude's output and blocking dialogs to Telegram.
+"""What the bot says without being asked, and the one thing it polls for.
 
-Two independent signals are watched per managed session:
-
-* the transcript — what Claude *said* (clean text, no ANSI);
-* the terminal   — whether a dialog is *blocking* it (the only thing the
-  transcript cannot tell us in time).
+The sessions' own output arrives as events of the session host and is turned
+into messages by `bridge.py`; the pieces of that shared with the rest of the
+bot live here: sending a block of Claude's output (`_emit`), the usage alerts
+(`_check_usage`), the language for messages nobody asked for (`_locale`), and
+the registration every outgoing message needs (`_say*`). The loop itself
+only asks, now and then, whether a newer Claude Code is on disk.
 """
 
 from __future__ import annotations
@@ -13,387 +14,58 @@ import asyncio
 import contextlib
 import html
 import logging
-import re
-import tempfile
 import time
-from datetime import datetime
-from pathlib import Path
 from typing import Protocol
 
 from aiogram import Bot
-from aiogram.types import FSInputFile
 
-from . import account, render, rich, status_feed, tmux, transcript, updates
-from . import login as loginmod
-from . import screen as screenmod
+from . import account, rich, updates
 from . import sessions as sess
 from .i18n import _, ngettext, resolve
 from .i18n import use as use_locale
-from .keyboards import (
-    blocked_kb,
-    dialog_kb,
-    done_kb,
-    login_error_kb,
-    login_link_kb,
-    login_menu_kb,
-    login_warning_kb,
-    menu_kb,
-    restore_kb,
-    side_kb,
-    update_notice_kb,
-)
+from .keyboards import update_notice_kb
 from .settings import Settings
 from .state import Store
-from .transcript import TranscriptReader
-from .util import as_pre, as_pre_lines, gauges, split_text, usage_suffix
+from .util import gauges, split_text, usage_suffix
 
 log = logging.getLogger("ccbot.watcher")
-
-# Wait for a lull before flushing, so one reply is not split across messages.
-# A screen promised for later (`screen_when_idle`): how long to hold off
-# before the first look — a command needs a moment to start, and a session
-# read too early looks idle because nothing has begun yet — and when to give
-# up on a session that never goes quiet.
-_SCREEN_DELAY = 4.0
-_SCREEN_GIVEUP = 600.0
-_FLUSH_IDLE = 2.0
-_MAX_BUFFER_AGE = 25.0
 
 # Alert steps. Each fires once on the way up and re-arms if usage drops
 # (a /clear, or a fresh rate-limit window).
 _CTX_STEPS = (60, 75, 85, 95)
 _LIMIT_STEPS = (80, 90, 95)
 
-# How often to go looking for a session's opening prompt while it has no title.
-_TITLE_RETRY = 30.0
-
 # How long the same watcher failure stays quiet after it has been reported.
 _FAIL_REPEAT = 3600.0
-
-# The kernel's id for the current boot. It is rewritten on every start of the
-# machine and never otherwise, which is what tells a reboot from a window
-# somebody closed.
-_BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
 # How often to ask what version of Claude Code is on disk. It only moves when
 # the background updater has been at work, and asking spawns a node process.
 _VERSION_CHECK = 600.0
+_TICK = 60.0
 
-# Silence while Claude works reads as a broken bot, so a working session gets a
-# heartbeat: one message, edited in place, never a stream of them.
-_PULSE_AFTER = 75.0
-_PULSE_EDIT = 45.0
-
-# Telegram's mobile clients wrap code blocks instead of scrolling them, so a
-# drawing only survives inline if it fits a phone-width column.
-_PHONE_COLS = 36
-
-# How long an unparsed-question card may go stale before it is redrawn in
-# place. An edit costs the reader nothing; a new message costs a notification.
-_BLOCKED_EDIT = 30.0
-
-# How long a key the bot pressed is allowed to take effect before the session
-# is judged to be waiting on anything. The screen reacts at once; the agent
-# list does not, and that gap is not a question nobody answered.
-_ACT_GRACE = 8.0
-# And how long "waiting, with no dialog I understand" has to hold before it is
-# announced. Every turn passes through that state on its way somewhere else.
-_BLOCKED_SETTLE = 5.0
-# Older than this, an agent-list reading says nothing about right now.
-_STATUS_MAX_AGE = 10.0
-# A login panel of a shape this bot does not know is given this long to
-# turn into one it does, then goes to the chat as an unrecognised screen.
-_LOGIN_OTHER_GRACE = 15.0
-# The menu gets no card this long after the bot typed: `/login` and «Try
-# again» wait up to 8 s for it and then press «1» themselves.
-_LOGIN_MENU_GRACE = 10.0
-# What heads a dialog card. The settings dialogs are not questions Claude is
-# asking — showing them under a "❓" read as one.
-_DIALOG_ICON = {"model": "🧠 ", "effort": "◉ ", "drafts": "📝 ",
-                "trust": "📁 "}
-
-
-def _boot_id() -> str:
-    """This boot's id, or "" where the kernel does not publish one."""
-    try:
-        return _BOOT_ID.read_text().strip()
-    except OSError:
-        return ""
-
-
-def _dialog_title(dialog) -> str:
-    """What heads the card. A settings dialog gets a translated name.
-
-    Its own is the terminal's ("Select model", "Effort"), and a card is read
-    by the user rather than by the parser.
-    """
-    if dialog.kind == "model":
-        return _("Model")
-    if dialog.kind == "effort":
-        return _("Reasoning effort")
-    if dialog.kind == "drafts":
-        return _("Feedback drafts")
-    if dialog.kind == "trust":
-        return _("A new folder")
-    return dialog.title or ""
-
-
-def _settings_hint(dialog) -> str:
-    """How the buttons under a settings dialog commit, as the screen has it."""
-    if dialog.session_only:
-        # TRANSLATORS: the /effort card while Ultracode is on — Claude Code
-        # then offers no "save as default".
-        return _("A button applies the choice, for this session only: with "
-                 "{name} on there is no saving it as the default.").format(
-                     name=dialog.toggle or "Ultracode")
-    # TRANSLATORS: the row of two buttons under a settings dialog.
-    return _("A button applies the choice. The switch under the list "
-             "decides whether new sessions get it as their default too.")
-
-
-def _dialog_question(dialog) -> str:
-    """The question as the card states it.
-
-    The drafts question gets words of its own: the terminal's line names
-    neither what the drafts are nor what the session is doing.
-    """
-    if dialog.kind == "drafts":
-        n = screenmod.drafts_count(dialog)
-        return ngettext(
-            "Claude Code is closing this session and asks about {count} "
-            "unsent feedback draft for Anthropic (they are written during the "
-            "session and kept in ~/.claude/feedback/drafts). It exits after "
-            "the answer; in a restart the session then comes back by itself.",
-            "Claude Code is closing this session and asks about {count} "
-            "unsent feedback drafts for Anthropic (they are written during "
-            "the session and kept in ~/.claude/feedback/drafts). It exits "
-            "after the answer; in a restart the session then comes back by itself.",
-            n).format(count=n)
-    if dialog.kind == "trust":
-        # The terminal's paragraph is a safety lecture in English; the card
-        # says what is asked and what each answer does.
-        return _("Claude Code is opening {folder} for the first time and asks "
-                 "whether you trust it: it will be able to read, edit and run "
-                 "files there. Until you answer, the session takes no text; "
-                 "«No, exit» closes it.").format(
-                     folder=dialog.question or _("this folder"))
-    return dialog.question
-
-
-def _expiry_line(at: float) -> str:
-    """When an unanswered permission prompt refuses itself, as a clock time.
-
-    The terminal counts down; a card cannot, and "in 1:52" would be wrong a
-    second after it was sent. The time of day stays true for as long as the
-    card stands.
-    """
-    when = datetime.fromtimestamp(at, status_feed.TZ)
-    # TRANSLATORS: under a permission question; {time} is HH:MM.
-    return _("⏱ Unanswered, Claude Code blocks this request itself at "
-             "{time}.").format(time=f"{when:%H:%M}")
-
-
-# A dialog redraws in stages once a key lands: the chosen row disappears
-# before the rest of it does. Reporting a frame from inside that redraw is how
-# an answered question came back with only "Cancel" left on it.
-_DIALOG_SETTLE = 3.0
-# How long a new question has to stand before its card is sent. Claude Code
-# draws a permission dialog 60-115 ms before it writes the tool call it asks
-# about to the transcript (2.1.286), so a tick that read the transcript inside
-# that gap sent the card first and the "🔧 Bash: …" line a tick later, under
-# the buttons — 120 of 1063 cards by 2026-10-01. A tick later the record has
-# been read and goes out ahead of the card.
-_TRANSCRIPT_LAG = 1.0
-# How early a countdown may be read as run out: the deadline is computed from
-# a capture that is a tick old, and the card is retired a tick late.
-_EXPIRY_SLACK = 3.0
-# How long a standing card holds back the rest of its session's output. Only
-# late records of the same turn are expected meanwhile; a card that sits
-# longer than this is not about to be pressed, and a screen misread as a
-# question must not swallow a session's output for good.
-_HOLD_MAX = 300.0
-# How long a session has to look idle before its queue count is dropped.
-_QUEUE_IDLE = 5.0
-# How long a settings picker has to stay off the screen before the scope
-# armed on its card (`settings_scope`) is forgotten.
-_SCOPE_FORGET = 3.0
-
-# How much scrollback to read for the reasoning above a dialog: a long answer
-# has usually pushed its own beginning off the top of the pane by then.
-_SAID_HISTORY = 400
-# When the transcript finally delivers that same text, it is recognised by how
-# much of it the screen already showed. Short blocks are not worth judging —
-# a duplicated line costs less than a swallowed answer.
-_ECHO_RATIO = 0.75
-_ECHO_MIN_WORDS = 20
-
-_WORD_RE = re.compile(r"\w+")
-
-
-def _words(text: str) -> set[str]:
-    return set(_WORD_RE.findall(text.lower()))
-
-
-def _login_state(raw: str) -> str:
-    ls = screenmod.login_screen(raw)
-    return ls.state if ls else ""
+# A session in one of these states runs no CLI: it wakes on the build on disk.
+_RESTING = ("dormant", "offline", "closed")
 
 
 class _Alerted(Protocol):
-    """What the usage alerts keep per session — a tmux runtime or an SDK one."""
+    """Whatever keeps a session's announced alert steps (`bridge._Rt`)."""
 
     alerted: dict[str, int]
 
 
-class SessionRuntime:
-    """Per-session bookkeeping that lives only in memory."""
-
-    def __init__(self, session_id: str, offset: int):
-        self.reader = TranscriptReader(session_id, offset)
-        self.buffer: list[str] = []
-        self.buffer_since = 0.0
-        self.last_dialog_sig: str | None = None
-        self.last_dialog_state: str | None = None
-        self.dialog_msg_id: int | None = None
-        self.dialog_sent_at = 0.0
-        # When the standing question refuses itself (`Dialog.expires_in`),
-        # fixed once per question so every edit of its card shows one time.
-        self.expires_at: float | None = None
-        # A question seen on screen but not sent yet, and since when.
-        self.seen_dialog_sig: str | None = None
-        self.seen_dialog_at = 0.0
-        # The question the transcript last spoke under, and the words of
-        # Claude's text it sent meanwhile. Tool lines are not counted: they
-        # are what Claude did before the reasoning, not the reasoning itself.
-        self.flushed_sig: str | None = None
-        self.flushed_words: set[str] = set()
-        self.reported_gone = False
-        self.alerted: dict[str, int] = {}
-        self.title_tried = 0.0
-        # None means "this session is not waiting on anything I failed to
-        # parse". Anything else means the card has already been sent.
-        self.blocked_sig: str | None = None
-        self.blocked_msg_id: int | None = None
-        self.blocked_edited = 0.0
-        # When the state was first seen, and when the bot last typed here.
-        self.blocked_since = 0.0
-        self.acted_at = 0.0
-        # What was read off the screen ahead of a dialog: the words, to spot the
-        # transcript's own copy of it later, and a signature, so walking a
-        # multi-part question does not resend it once per section.
-        self.said_words: set[str] = set()
-        self.said_sig: str | None = None
-        # What waits in Claude Code's input queue, oldest first ("prompt" or
-        # "other"), as its queue-operation records tell it.
-        self.queue: list[str] = []
-        self.idle_since = 0.0
-        # Since when no dialog has been on the screen (monotonic); one empty
-        # frame mid-redraw is no proof the picker has closed.
-        self.no_dialog_since = 0.0
-        self.work_since = 0.0
-        self.pulse_msg_id: int | None = None
-        self.pulse_edited = 0.0
-        # The `/btw` answer already dealt with while its overlay stands: sent
-        # and closed, or its fallback card sent. Cleared once it is gone.
-        self.side_question: str | None = None
-        # The `/login` step the chat was last shown ("menu", "code:<url>",
-        # "error:<text>"…), its card, a step seen once and waiting for a
-        # second frame, and since when an unknown panel has stood.
-        self.login_step: str | None = None
-        self.login_msg_id: int | None = None
-        self.login_seen: str | None = None
-        self.login_other_since = 0.0
-        # The chat asked for the standing card again (🔔 on the session
-        # card); the next tick posts it at the bottom.
-        self.repost = False
-
-    def track_queue(self, op: str, kind: str) -> None:
-        """Follow one queue-operation record of the transcript."""
-        if op == "enqueue":
-            self.queue.append(kind or "prompt")
-        elif op == "dequeue":
-            # The record does not say what was taken, and Claude Code takes a
-            # prompt ahead of a notification. Guessing "prompt" errs
-            # towards counting too few, which only brings back the old
-            # behaviour; too many would resend the previous answer.
-            if self.queue:
-                self.queue.remove("prompt" if "prompt" in self.queue
-                                  else self.queue[0])
-        elif kind in self.queue:
-            self.queue.remove(kind)     # a remove that matches nothing is ignored
-
-    def prime_queue(self) -> None:
-        """Pick up a queue that was filled before this reader's offset."""
-        for ev in self.reader.queue_before():
-            self.track_queue(ev.kind, ev.text)
-
-    def queued_prompts(self) -> int:
-        """How many prompts sent mid-turn still wait to be read.
-
-        Counted up to this moment: a prompt queued after this tick's read of
-        the transcript is already drawn on the screen about to be captured.
-        """
-        held = self.queue
-        self.queue = list(held)
-        try:
-            for ev in self.reader.queue_ahead():
-                self.track_queue(ev.kind, ev.text)
-            return self.queue.count("prompt")
-        finally:
-            self.queue = held
-
-    def remember_said(self, text: str) -> None:
-        self.said_words = _words(text)
-        self.said_sig = f"{len(text)}:{text[:120]}"
-
-    def echoes_screen(self, text: str) -> bool:
-        """Is this the transcript repeating what was already read off screen?
-
-        Judged once per block that was read: a second one is new by then. The
-        two are never byte-identical — the terminal renders markdown and wraps
-        to its width — so the test is how much of the vocabulary matches.
-        """
-        known, self.said_words = self.said_words, set()
-        if not known:
-            return False
-        words = _words(text)
-        if len(words) < _ECHO_MIN_WORDS:
-            return False
-        return len(words & known) / len(words) >= _ECHO_RATIO
-
-    def clear_blocked(self) -> None:
-        """Forget the unparsed-question card: the wait it belonged to is over."""
-        self.blocked_sig = None
-        self.blocked_msg_id = None
-        self.blocked_edited = 0.0
-        self.blocked_since = 0.0
-
-
 class Watcher:
-    def __init__(self, bot: Bot, store: Store, settings: Settings,
-                 chat_id: int, interval: float = 1.5):
+    def __init__(self, bot: Bot, store: Store, settings: Settings, chat_id: int):
         self.bot = bot
         self.store = store
         self.settings = settings
         self.chat_id = chat_id
-        self.interval = interval
-        self.runtimes: dict[str, SessionRuntime] = {}
-        # Sessions owed a screen once they go quiet, and the earliest moment
-        # each is worth looking at.
-        self.pending_screen: dict[str, float] = {}
-        # The scope armed on a settings card (`dsc:`), so a redraw of the
-        # card — the cursor moved, Ultracode armed — keeps it.
-        self.settings_scope: dict[str, str] = {}
         self._task: asyncio.Task | None = None
         # Last failure announced in the chat, so a fault that repeats every
-        # 1.5 seconds does not become 2400 messages an hour.
+        # tick does not become a message per tick.
         self.failure_sig: str | None = None
         self.failure_told = 0.0
         # Last time the disk was asked which Claude Code is installed.
         self.version_checked = 0.0
-        # The account each session last logged in as, for the card that
-        # announces the login (and its redraw from an older card's button).
-        self.login_emails: dict[str, str] = {}
 
     def start(self) -> None:
         if self._task is None:
@@ -406,103 +78,6 @@ class Watcher:
                 await self._task
             self._task = None
 
-    def note_input(self, session_id: str) -> None:
-        """Remember that the bot has just typed into this session.
-
-        A keypress lands long before `claude agents --json` admits it: the
-        dialog leaves the screen immediately, while the agent list still reads
-        "waiting" for a few seconds. Without this mark the watcher took that
-        gap for a question it had failed to parse and posted the fallback
-        screen on top of an answer that had already worked.
-        """
-        rt = self.runtimes.get(session_id)
-        if rt is not None:
-            rt.acted_at = time.time()
-            rt.blocked_since = 0.0
-
-    def screen_when_idle(self, session_id: str) -> None:
-        """Promise a screen snapshot once this session has gone quiet.
-
-        `/context` and `/compact` are Claude Code's own commands: they print
-        their answer on the terminal and write nothing to the transcript that
-        reaches the chat (a local command is a `user` record, and only
-        assistant records are forwarded). A button that sends one and says
-        nothing else is a button that appears to do nothing — which is exactly
-        how «📉 Context breakdown» read. Immediately is no good either: a
-        compaction takes tens of seconds, and a screen captured while it runs
-        shows the spinner instead of the result.
-        """
-        self.pending_screen[session_id] = time.time() + _SCREEN_DELAY
-
-    async def _pending_screen(self, session_id: str, window_id: str, name: str,
-                              busy: bool, dialog: bool) -> None:
-        due = self.pending_screen.get(session_id)
-        if due is None:
-            return
-        if time.time() < due or busy or dialog:
-            if time.time() - due > _SCREEN_GIVEUP:
-                del self.pending_screen[session_id]
-                log.info("promised screen dropped, never idle id=%s",
-                         session_id[:8])
-            return
-        del self.pending_screen[session_id]
-        log.info("promised screen id=%s name=%s", session_id[:8], name)
-        await self.send_screen(window_id, name, session_id)
-
-    def forget_dialog(self, session_id: str) -> None:
-        """Let go of the dialog card, so the next tick never edits it again.
-
-        The bot answers a settings dialog by walking the cursor there, and
-        every move changes the state the card is drawn from — a tick that
-        captured the screen one move before the commit would then edit the
-        confirmation that has since replaced the card.
-        """
-        rt = self.runtimes.get(session_id)
-        if rt is not None:
-            rt.last_dialog_sig = None
-            rt.last_dialog_state = None
-            rt.dialog_msg_id = None
-
-    def request_repost(self, session_id: str) -> bool:
-        """Ask the next tick to post this session's open card again.
-
-        With many sessions talking at once a question card ends up far up the
-        history, and the session sits waiting on a button nobody can find.
-        The tick does the posting, not the caller: it is the one writer of
-        the card ids, and a send from the handler racing a tick's own send
-        left two live cards for one question. False: no card stands.
-        """
-        rt = self.runtimes.get(session_id)
-        if rt is None or (rt.dialog_msg_id is None and rt.blocked_msg_id is None):
-            return False
-        rt.repost = True
-        return True
-
-    def release_dialog(self, session_id: str) -> None:
-        """The chat has answered this card and marked it: hands off.
-
-        Unlike `forget_dialog` the question is kept, so the frames of its
-        departure are not taken for a new one.
-        """
-        rt = self.runtimes.get(session_id)
-        if rt is not None:
-            rt.dialog_msg_id = None
-
-    def forget(self, session_id: str) -> None:
-        self.runtimes.pop(session_id, None)
-        self.pending_screen.pop(session_id, None)
-        self.settings_scope.pop(session_id, None)
-        updates.forget(session_id)
-
-    def adopt(self, session_id: str, skip_existing: bool = True) -> None:
-        """Track a session; by default ignore transcript written before now."""
-        rt = SessionRuntime(session_id, 0)
-        if skip_existing:
-            rt.reader.seek_to_end()
-        rt.prime_queue()
-        self.runtimes[session_id] = rt
-        self.store.set_offset(session_id, rt.reader.offset)
-
     async def _loop(self) -> None:
         while True:
             # No update to read a language off, so the locale is opened here.
@@ -510,7 +85,7 @@ class Watcher:
             # /lang may change the answer while the loop is already running.
             with use_locale(self._locale()):
                 try:
-                    await self._tick()
+                    await self._check_version()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:           # never let the loop die
@@ -518,26 +93,20 @@ class Watcher:
                     await self._report_failure(exc)
                 else:
                     await self._clear_failure()
-            await asyncio.sleep(self.interval)
+            await asyncio.sleep(_TICK)
 
     def _locale(self) -> str:
         """Language for messages nobody asked for.
 
-        There is no Telegram user on this path: the watcher speaks first. So
-        it falls back to the language last seen on the profile — otherwise
+        There is no Telegram user on this path: the bot speaks first. So it
+        falls back to the language last seen on the profile — otherwise
         Claude's answers would arrive in English while every reply to a typed
         message came back in the user's own language.
         """
         return resolve(self.settings.language, self.settings.telegram_language)
 
     async def _report_failure(self, exc: Exception) -> None:
-        """Say in the chat that the watcher is broken.
-
-        A tick that raises stops every session's output from reaching Telegram,
-        and from the phone that is indistinguishable from Claude simply being
-        quiet — the failure has to announce itself. It repeats every poll, so
-        the same fault is reported once and then held back for an hour.
-        """
+        """Say in the chat that the version check is broken, once an hour."""
         signature = f"{type(exc).__name__}: {exc}"
         now = time.time()
         if (signature == self.failure_sig
@@ -546,12 +115,9 @@ class Watcher:
         self.failure_sig = signature
         self.failure_told = now
         await self._say(
-            _("⚠️ <b>The session watcher has crashed</b>\n"
-              "<code>{error}</code>\n\n"
-              "While this lasts, Claude's replies do not reach the chat — "
-              "prompts you send still get through to the session. Details in "
-              "/log; /restart usually cures it.").format(
-                  error=html.escape(signature[:300])),
+            _("⚠️ <b>The Claude Code version check has crashed</b>\n"
+              "<code>{error}</code>\n\nThe sessions are not affected. "
+              "Details in /log.").format(error=html.escape(signature[:300])),
             parse_mode="HTML",
         )
 
@@ -561,55 +127,15 @@ class Watcher:
             return
         self.failure_sig = None
         self.failure_told = 0.0
-        await self._say(_("✅ The watcher is back — following the sessions again."))
-
-    async def _rebind_cleared(self) -> None:
-        """Follow sessions whose id changed under us.
-
-        `/clear` does not restart Claude — it keeps the process, the window and
-        the launch name, and starts a brand new transcript under a brand new
-        session id. Nothing tells the bot about it: the old transcript simply
-        stops growing, and every answer after that is written where nobody is
-        reading. The launch name (`claude -n`) is the thread back: it survives
-        the clear, and `claude agents --json` reports it next to the new id.
-        """
-        managed = self.store.all_managed(backend="tmux")
-        if not managed:
-            return
-        agents = await sess.live_agents()
-        live_ids = {a.get("sessionId") for a in agents}
-        by_name: dict[tuple[str, str], str] = {}
-        for a in agents:
-            sid, name, cwd = a.get("sessionId"), a.get("name"), a.get("cwd") or ""
-            if sid and name:
-                by_name[(name, cwd)] = sid
-        for m in managed:
-            if m.session_id in live_ids:
-                continue
-            fresh = by_name.get((m.name, m.cwd))
-            if not fresh or fresh == m.session_id:
-                continue
-            log.info("session rebound %s -> %s (name=%s)",
-                     m.session_id[:8], fresh[:8], m.name)
-            self.store.rebind(m.session_id, fresh)
-            self.runtimes.pop(m.session_id, None)
-            self.runtimes[fresh] = SessionRuntime(fresh, 0)
-            await self._say(
-                _("🧹 <b>{name}</b>: context cleared — the session was given a "
-                  "new id, and I am following it there.").format(
-                      name=html.escape(m.full_label)),
-                session_id=fresh, parse_mode="HTML",
-                reply_markup=menu_kb(fresh),
-            )
+        await self._say(_("✅ The Claude Code version check works again."))
 
     async def _check_version(self) -> None:
         """Say once when a newer Claude Code is waiting on disk.
 
-        The sessions cannot notice this themselves: a running process keeps
-        the build it started with, and nothing in the TUI mentions the file
-        that has meanwhile been replaced. Announced once per release — the
-        note is kept in the settings file, so a bot restart does not turn one
-        release into a second notification.
+        A running session keeps the build it started with, and nothing tells
+        it about the file that has meanwhile been replaced. Announced once per
+        release — the note is kept in the settings file, so a bot restart does
+        not turn one release into a second notification.
         """
         now = time.time()
         if now - self.version_checked < _VERSION_CHECK:
@@ -618,8 +144,9 @@ class Watcher:
         disk = await updates.installed()
         if not disk or self.settings.notified_version == disk:
             return
-        behind = [m for m in self.store.all_managed(backend="tmux")
-                  if updates.stale(m.session_id, disk)]
+        behind = [m for m in self.store.all_managed()
+                  if (sess.sdk_state is None or sess.sdk_state(m) not in _RESTING)
+                  and updates.stale(m.session_id, disk)]
         if not behind:
             return
         self.settings.notified_version = disk
@@ -637,325 +164,7 @@ class Watcher:
         await self._say_html(f"{head}\n\n{body}\n\n{tail}",
                              reply_markup=update_notice_kb())
 
-    async def _check_host(self) -> None:
-        """Keep the sessions a reboot took down, instead of burying them.
-
-        One window that disappears was closed by somebody, and
-        `_tick_session` is right to drop the row. A whole tmux server that
-        disappears is an accident: on 2026-09-09 Windows restarted itself and
-        the bot answered with nine tombstones, having deleted the very rows
-        that could have brought the sessions back. Two signals say it was the
-        machine and not a person — the boot id changed, or the tmux server is
-        not there at all (`tmux kill-server`, no reboot). The first run ever
-        has no boot id written down; that is a bot that has never run here,
-        not a restart, so it reports nothing.
-        """
-        boot = _boot_id()
-        seen = self.store.meta_get("boot_id")
-        if boot and boot != seen:
-            self.store.meta_set("boot_id", boot)
-        rebooted = bool(boot) and bool(seen) and boot != seen
-        managed = self.store.all_managed(backend="tmux")
-        if not managed:
-            return
-        if not rebooted and await tmux.server_pid():
-            return
-        lost = []
-        for m in managed:
-            # Checked one by one all the same: the reason to keep a row is
-            # that its window is gone, and a session that somehow outlived
-            # the event must not be filed away as a casualty of it.
-            if await tmux.window_exists(m.window_id):
-                continue
-            row = self.store.orphan(m.session_id)
-            if row is None:
-                continue
-            lost.append(row)
-            self.forget(m.session_id)
-        if not lost:
-            return
-        log.info("host death (%s): %d session(s) kept for restore",
-                 "reboot" if rebooted else "no tmux server", len(lost))
-        await self._say_html(sess.restore_text(lost),
-                             reply_markup=restore_kb(lost))
-
-    async def _tick(self) -> None:
-        # Before anything reads the session rows: what follows would take a
-        # dead tmux server for a chatful of closed windows.
-        await self._check_host()
-        await self._check_version()
-        await self._rebind_cleared()
-        live = {a.get("sessionId"): a for a in await sess.live_agents()}
-        # SDK sessions have no window and no screen: `bridge.py` follows them.
-        for m in self.store.all_managed(backend="tmux"):
-            rt = self.runtimes.get(m.session_id)
-            if rt is None:
-                rt = SessionRuntime(m.session_id, m.offset)
-                rt.prime_queue()
-                self.runtimes[m.session_id] = rt
-            agent = live.get(m.session_id) or {}
-            await self._tick_session(m.session_id, m.window_id,
-                                     self._label(m, rt), rt,
-                                     agent.get("status", ""))
-
-    def _label(self, m, rt: SessionRuntime) -> str:
-        """The session's display name, filling in a missing title.
-
-        Claude writes an "ai-title" record only for sessions it named itself,
-        and the bot always launches with -n, so a managed session never gets
-        one. What it was asked first is the next best thing to know it by —
-        "pay4say-0e5e" is not something anyone remembers.
-        """
-        if m.title or not m.is_auto_named:
-            return m.full_label
-        if time.time() - rt.title_tried < _TITLE_RETRY:
-            return m.full_label
-        rt.title_tried = time.time()
-        opening = transcript.first_prompt(m.session_id)
-        if not opening:
-            return m.full_label
-        log.info("title from first prompt id=%s: %r", m.session_id[:8], opening)
-        self.store.set_title(m.session_id, opening)
-        return (self.store.get(m.session_id) or m).full_label
-
-    async def _tick_session(self, session_id: str, window_id: str,
-                            name: str, rt: SessionRuntime,
-                            agent_status: str = "") -> None:
-        if not await tmux.window_exists(window_id):
-            row = self.store.get(session_id)
-            if row is None or row.is_sdk:
-                # Moved to the session host while this tick was under way
-                # (or already removed): not a closed window.
-                self.forget(session_id)
-                return
-            if not rt.reported_gone:
-                rt.reported_gone = True
-                log.info("session gone id=%s name=%s window=%s",
-                         session_id[:8], name, window_id)
-                await self._say(_("💀 Session {name} is gone (its tmux window "
-                                  "was closed).").format(name=name))
-                self.store.remove(session_id)
-                self.forget(session_id)
-            return
-
-        # 1. transcript → what Claude said
-        events = rt.reader.read_new()
-        if events:
-            self.store.set_offset(session_id, rt.reader.offset)
-            for ev in events:
-                if ev.kind == "title":
-                    self.store.set_title(session_id, ev.text)
-                elif ev.kind in ("enqueue", "dequeue", "remove"):
-                    rt.track_queue(ev.kind, ev.text)
-                elif ev.kind == "tool":
-                    rt.buffer.append(f"🔧 {ev.text}")
-                elif rt.echoes_screen(ev.text):
-                    log.info("dropping the transcript copy of text already sent "
-                             "from the screen id=%s chars=%d",
-                             session_id[:8], len(ev.text))
-                else:
-                    rt.buffer.append(ev.text)
-            if rt.buffer:
-                rt.buffer_since = rt.buffer_since or time.time()
-
-        # 2. terminal → is anything blocking?
-        try:
-            raw = await tmux.capture(window_id)
-        except tmux.TmuxError:
-            return
-        dialog = screenmod.find_dialog(raw)
-        login = screenmod.login_screen(raw) if dialog is None else None
-        busy = screenmod.is_busy(raw)
-        status = screenmod.read_status(raw)
-        usage = status_feed.read(session_id)
-        # Which question this is, versus which row is highlighted. The first
-        # warrants a new message; the second only edits the existing one, so
-        # walking a list with the arrow buttons does not spam the chat.
-        sig = ""
-        if dialog is not None:
-            sig = dialog.question + "|" + "|".join(o.label for o in dialog.options)
-        # While this session's card waits for an answer it stays the last
-        # thing the session said: a message under it moves the buttons as the
-        # user reaches for them. Whatever arrives meanwhile is kept for after
-        # the answer, and joins what the answer brings. A spinner means the
-        # session is at work and what looks like a dialog is not one.
-        holding = (dialog is not None and not busy
-                   and rt.dialog_msg_id is not None
-                   and sig == rt.last_dialog_sig
-                   and time.monotonic() - rt.dialog_sent_at < _HOLD_MAX)
-        if not holding:
-            await self._check_usage(name, session_id, rt, usage, status)
-        elif rt.buffer:
-            rt.buffer_since = time.time()
-
-        # Flush buffered output once Claude goes quiet, or a dialog appears.
-        age = time.time() - rt.buffer_since if rt.buffer_since else 0
-        should_flush = rt.buffer and not holding and (
-            dialog is not None
-            or (not busy and age >= _FLUSH_IDLE)
-            or age >= _MAX_BUFFER_AGE
-        )
-        if should_flush:
-            body = "\n\n".join(rt.buffer).strip()
-            if dialog is not None:
-                if rt.flushed_sig != sig:
-                    rt.flushed_sig, rt.flushed_words = sig, set()
-                rt.flushed_words |= _words("\n".join(
-                    b for b in rt.buffer if not b.startswith("🔧 ")))
-            rt.buffer.clear()
-            rt.buffer_since = 0.0
-            log.info("flush id=%s name=%s chars=%d", session_id[:8], name, len(body))
-            await self._drop_pulse(rt)
-            await self._emit(session_id, name, body, usage, status)
-
-        repost, rt.repost = rt.repost, False
-        blocked = dialog is not None or login is not None
-        await self._pending_screen(session_id, window_id, name, busy, blocked)
-        await self._pulse(session_id, name, raw, rt, blocked)
-
-        if dialog is None:
-            # An idle session reads its queue at once, so whatever the records
-            # still count was lost track of (a missed read, a message taken
-            # back with ↑). One frame is no proof of idle — between a
-            # permission answer and the spinner there is a frame with neither
-            # — so it takes the agent list too, and a few seconds of both.
-            if busy or agent_status != "idle":
-                rt.idle_since = 0.0
-            elif not rt.idle_since:
-                rt.idle_since = time.monotonic()
-            elif time.monotonic() - rt.idle_since >= _QUEUE_IDLE:
-                rt.queue.clear()
-            rt.last_dialog_sig = None
-            rt.last_dialog_state = None
-            rt.seen_dialog_sig = None
-            # The next settings card starts on "this session" again — once
-            # the picker has stayed gone a while: a dialog redraws in stages,
-            # and an empty frame while /model folds its list is not a close.
-            if not rt.no_dialog_since:
-                rt.no_dialog_since = time.monotonic()
-            elif time.monotonic() - rt.no_dialog_since >= _SCOPE_FORGET:
-                self.settings_scope.pop(session_id, None)
-            rt.flushed_sig = None
-            rt.flushed_words = set()
-            await self._retire_dialog(rt)
-            if login is None:
-                await self._retire_login(rt)
-            elif await self._tick_login(session_id, window_id, name, rt, login):
-                # Waiting, by the agent list, on a panel the bot drives.
-                rt.clear_blocked()
-                return
-            side = screenmod.side_answer(raw)
-            if side is not None:
-                # Waiting, by the agent list, and asking nothing: the answer
-                # is on its way or on show, never a question to report.
-                rt.clear_blocked()
-                if side.done:
-                    await self._side_answer(session_id, window_id, name, rt,
-                                            side, raw, usage, status)
-                else:
-                    rt.side_question = None
-                return
-            rt.side_question = None
-            await self._report_blocked(session_id, name, raw, rt,
-                                       agent_status, busy, repost)
-            return
-        rt.idle_since = 0.0
-        rt.no_dialog_since = 0.0
-        rt.clear_blocked()
-
-        # Ticks belong to the state, not to the question: a checkbox changes
-        # with every press, and reading that as a new question would answer
-        # one multi-select list with a chat full of copies of it.
-        state = str([(o.number, o.selected, o.checked, o.current)
-                     for o in dialog.options]) + str(
-                         (dialog.toggle_on, dialog.session_only))
-        if repost and sig == rt.last_dialog_sig and rt.dialog_msg_id is not None:
-            # The card stands for this very question: post it again at the
-            # bottom, and the one above gives up its buttons — two live
-            # copies would both press into it, and only one is kept current.
-            # A question not carded yet needs nothing: its card is on the way.
-            old = rt.dialog_msg_id
-            rt.last_dialog_state = state
-            log.info("dialog reposted id=%s name=%s", session_id[:8], name)
-            await self._send_dialog_card(session_id, name, rt, dialog)
-            await self._mark_moved(old)
-            return
-        if sig == rt.last_dialog_sig and state == rt.last_dialog_state:
-            return
-        same_question = sig == rt.last_dialog_sig
-        if not same_question and sig != rt.seen_dialog_sig:
-            # Monotonic: under WSL the wall clock steps back by seconds.
-            rt.seen_dialog_sig, rt.seen_dialog_at = sig, time.monotonic()
-        if not same_question and time.time() - rt.acted_at < _DIALOG_SETTLE:
-            return          # mid-redraw: wait for the screen to settle
-        if not same_question:
-            # The old card's digits would now press into the new question.
-            await self._retire_dialog(rt)
-            if time.monotonic() - rt.seen_dialog_at < _TRANSCRIPT_LAG:
-                return      # the transcript has not caught up with the screen
-            rt.expires_at = (None if dialog.expires_in is None
-                             else time.time() + dialog.expires_in)
-            log.info("dialog id=%s title=%r options=%d preview=%s",
-                     session_id[:8], dialog.title, len(dialog.options),
-                     bool(dialog.preview))
-            if dialog.kind == "choice":
-                # The transcript usually says nothing while a question stands
-                # (the card waits a tick for it, `_TRANSCRIPT_LAG`) — see
-                # _preface. The
-                # settings pickers are the exception: nothing is said above
-                # them (the chat opened them), and they draw no rule the
-                # reading could stop at, so it used to send a line of the
-                # picker's own state as the preamble to it.
-                sent = rt.flushed_words if rt.flushed_sig == sig else set()
-                await self._preface(session_id, window_id, name, rt, usage,
-                                    status, sent)
-        rt.last_dialog_sig = sig
-        rt.last_dialog_state = state
-
-        if same_question and rt.dialog_msg_id:
-            blocks, kb = self._dialog_blocks(name, session_id, dialog)
-            if await rich.edit(self.bot, self.chat_id, rt.dialog_msg_id,
-                               blocks=blocks, reply_markup=kb):
-                return
-            try:
-                await self.bot.edit_message_text(
-                    self._render_dialog(name, session_id, dialog)[0],
-                    chat_id=self.chat_id, message_id=rt.dialog_msg_id,
-                    reply_markup=kb, parse_mode="HTML",
-                )
-                return
-            except Exception:
-                pass          # message too old or unchanged — fall through
-        await self._send_dialog_card(session_id, name, rt, dialog)
-
-    async def _send_dialog_card(self, session_id: str, name: str,
-                                rt: SessionRuntime, dialog) -> None:
-        """Post the question's card as a new message and hold on to it."""
-        blocks, kb = self._dialog_blocks(name, session_id, dialog)
-        msg = await self._say_rich(session_id, blocks=blocks, reply_markup=kb)
-        if msg is None:
-            # No rich messages here: the old card, and a wide drawing goes
-            # back to being a picture because a <pre> would wrap it.
-            text, kb = self._render_dialog(name, session_id, dialog)
-            msg = await self._say_html(text, session_id=session_id, reply_markup=kb)
-            if dialog.preview and render.max_line_width(dialog.preview) > _PHONE_COLS:
-                await self.send_preview(session_id, dialog)
-        rt.dialog_msg_id = getattr(msg, "message_id", None)
-        rt.dialog_sent_at = time.monotonic()
-
-    async def _mark_moved(self, msg_id: int | None) -> None:
-        """Trade an old card's buttons for a note that it was posted again."""
-        if msg_id is None:
-            return
-        try:
-            await self.bot.edit_message_reply_markup(
-                chat_id=self.chat_id, message_id=msg_id,
-                reply_markup=done_kb(_("⬇️ Shown again below")))
-        except Exception:
-            log.debug("moved card mark skipped", exc_info=True)
-
-    async def _emit(self, session_id: str, name: str, body: str,
-                    usage, status) -> None:
+    async def _emit(self, session_id: str, name: str, body: str, usage) -> None:
         """Send one block of Claude's output.
 
         Claude writes Markdown, and since Bot API 10.1 Telegram renders it —
@@ -964,7 +173,7 @@ class Watcher:
         split at all. The chunked plain-text path stays underneath for when
         the API will not take the document.
         """
-        tail = usage_suffix(usage, status)
+        tail = usage_suffix(usage)
         doc = f"**💬 {rich.md_escape(name)}**\n\n{body}{tail}"
         if len(doc) <= rich.DOC_LIMIT and await self._say_rich(
                 session_id, markdown=doc):
@@ -976,499 +185,14 @@ class Watcher:
             await self._say(chunk + (tail if i == len(chunks) - 1 else ""),
                             session_id=session_id)
 
-    async def _preface(self, session_id: str, window_id: str, name: str,
-                       rt: SessionRuntime, usage, status,
-                       sent: set[str]) -> None:
-        """Send the reasoning that leads into a question, before the question.
-
-        Claude lays out the options and then asks about them, so the answer
-        depends on the text — and that text used to arrive *after* the choice
-        had been made. Not a bug in the flush: Claude Code writes an assistant
-        record only when the tool call inside it returns, and AskUserQuestion
-        returns on a human. Minutes of waiting are minutes the transcript
-        holds nothing at all.
-
-        The terminal has it, though, so it is read from there — and the
-        transcript's own copy, when it does arrive, is dropped by
-        `SessionRuntime.echoes_screen`.
-
-        *sent* is the text the transcript did deliver while this question
-        stood. A permission prompt is recorded before its answer, reasoning
-        and all, and then the screen would only say it twice. That the
-        transcript spoke at all proves nothing: a tool line held while Claude
-        went on thinking is flushed by the question's arrival, and taking that
-        for the reasoning held a whole analysis back until after the answer
-        (2026-10-29, aa9c201c: "🔧 Bash" flushed at 12:40:02, the card at
-        12:40:05 with nothing above it, the 1302 characters at 12:40:42).
-        """
-        try:
-            deep = await tmux.capture(window_id, history=_SAID_HISTORY)
-        except tmux.TmuxError:
-            return
-        said = screenmod.said_above_dialog(deep, queued=rt.queued_prompts())
-        if not said or rt.said_sig == f"{len(said)}:{said[:120]}":
-            return          # nothing said, or already sent for this question
-        words = _words(said)
-        if sent and len(words & sent) >= _ECHO_RATIO * len(words):
-            log.info("preface already sent from the transcript id=%s chars=%d",
-                     session_id[:8], len(said))
-            return
-        log.info("preface id=%s name=%s chars=%d", session_id[:8], name, len(said))
-        rt.remember_said(said)
-        await self._drop_pulse(rt)
-        await self._emit(session_id, name, said, usage, status)
-
-    def retry_side(self, session_id: str) -> None:
-        """Let the next tick try the `/btw` copy again (📋 on its card)."""
-        rt = self.runtimes.get(session_id)
-        if rt is not None:
-            rt.side_question = None
-
-    async def _side_answer(self, session_id: str, window_id: str, name: str,
-                           rt: SessionRuntime, side: screenmod.SideAnswer,
-                           raw: str, usage, status) -> None:
-        """Send a finished `/btw` answer to the chat, then close it.
-
-        The answer lives on the screen and nowhere else, so an Esc on its own
-        would throw it away, and the screen shows only as much of it as fits.
-        Its own "c to copy" hands over the whole of it, in Markdown
-        (`tmux.copy_out`); once that is in the chat the overlay is closed, or
-        it would stand in front of the session until somebody went to the
-        terminal. Both keys are pressed only while the overlay is still
-        there: a "c" would land in the input line, an Esc would interrupt the
-        turn.
-        """
-        if rt.side_question == side.question:
-            return
-        rt.side_question = side.question
-        head = _words(side.head)
-
-        def is_open(screen: str) -> bool:
-            return screenmod.side_answer(screen) is not None
-
-        def is_answer(text: str) -> bool:
-            # The tmux server is shared: a buffer that is not this answer is
-            # somebody's selection in another window.
-            return not head or len(head & _words(text)) >= 0.6 * len(head)
-
-        text = (await tmux.copy_out(window_id, "c", is_open, is_answer) or "").strip()
-        if text:
-            log.info("btw answer id=%s name=%s chars=%d",
-                     session_id[:8], name, len(text))
-            await self._drop_pulse(rt)
-            title = _("🗨 Side question (/btw): {question}").format(
-                question=rich.md_escape(side.question[:300]))
-            await self._emit(session_id, name, f"_{title}_\n\n{text}",
-                             usage, status)
-            self.note_input(session_id)
-            await tmux.press_if(window_id, "Escape", is_open)
-            return
-        try:
-            raw = await tmux.capture(window_id)
-        except tmux.TmuxError:
-            return
-        if screenmod.side_answer(raw) is None:
-            log.info("btw overlay closed before the copy id=%s", session_id[:8])
-            return
-        log.warning("btw answer not copied id=%s name=%s", session_id[:8], name)
-        kb = side_kb(session_id, side.browse)
-        msg = await self._say_rich(session_id, blocks=self.side_blocks(name, raw),
-                                   reply_markup=kb)
-        if msg is None:
-            top, foot = self._side_texts(name)
-            await self._say_html(
-                html.escape(top) + "\n"
-                + as_pre_lines(screenmod.tail_text(raw, 1500))
-                + "\n<i>" + html.escape(foot) + "</i>",
-                session_id=session_id, reply_markup=kb)
-
-    @staticmethod
-    def _side_texts(name: str) -> tuple[str, str]:
-        return (_("⚠️ {name} shows a /btw answer, and I could not copy it. "
-                  "Here is the screen:").format(name=name),
-                _("📋 tries the copy again, ⬆️⬇️ scroll the answer, "
-                  "✖️ Close dismisses it, 🖥 sends a fresh screen."))
-
-    def side_blocks(self, name: str, raw: str) -> list[rich.Block]:
-        """The card of a `/btw` answer that could not be copied."""
-        top, foot = self._side_texts(name)
-        return [
-            rich.para(top),
-            rich.pre(rich.ascii_frame(screenmod.tail_text(raw, rich.PRE_LIMIT))),
-            rich.para(rich.italic(foot)),
-        ]
-
-    async def _tick_login(self, session_id: str, window_id: str, name: str,
-                          rt: SessionRuntime,
-                          login: screenmod.LoginScreen) -> bool:
-        """Put the step `/login` stands at in the chat; False lets it fall
-        through to `_report_blocked`.
-
-        The screen is the whole state: whoever started the login, the chat
-        or the terminal, gets the same cards, and a bot restarted halfway
-        through picks it up from the next frame. Each step is shown once
-        and only after two frames agree — the link is drawn line by line,
-        and the menu stands for a moment between the bot's `/login` and its
-        own «1».
-        """
-        if login.state != "other":
-            rt.login_other_since = 0.0
-        if login.state == "working" or (login.state == "code" and login.entered):
-            return True
-        if login.state == "other":
-            # Never silence: a step this bot cannot read goes out as a screen.
-            now = time.monotonic()
-            rt.login_other_since = rt.login_other_since or now
-            return now - rt.login_other_since < _LOGIN_OTHER_GRACE
-        step = {"code": f"code:{login.url}", "error": f"error:{login.text}",
-                "warning": f"warning:{login.text}"}.get(login.state, login.state)
-        if step == rt.login_step:
-            return True
-        if login.state == "menu" and time.time() - rt.acted_at < _LOGIN_MENU_GRACE:
-            return True         # the bot's own «1» is on its way
-        if rt.login_seen != step:
-            rt.login_seen = step
-            return True
-        rt.login_seen = None
-        previous, rt.login_step = rt.login_step, step
-        await self._settle_login(rt, previous, login.state)
-        log.info("login step id=%s name=%s state=%s", session_id[:8], name,
-                 login.state)
-        if login.state == "success":
-            # "Press Enter to continue": the chat has nothing to add to it.
-            if await loginmod.proceed(window_id):
-                self.note_input(session_id)
-            elif _login_state(await tmux.capture(window_id)) == "success":
-                rt.login_step = None        # not pressed: the next tick tries again
-                return True
-            if login.email:
-                self.login_emails[session_id] = login.email
-            # Only what the screen said: ~/.claude.json may not be rewritten
-            # yet, and the old address there would be shown as the new one.
-            account.note_login(session_id, login.email)
-            text, kb = await self.login_done_card(session_id)
-            await self._say_html(text, session_id=session_id, reply_markup=kb)
-            return True
-        text, kb = self._login_card(name, session_id, login)
-        msg = await self._say_html(text, session_id=session_id, reply_markup=kb)
-        rt.login_msg_id = getattr(msg, "message_id", None)
-        return True
-
-    @staticmethod
-    def _login_card(name: str, session_id: str, login: screenmod.LoginScreen):
-        who = html.escape(name)
-        if login.state == "menu":
-            return (_("🔑 <b>{name}</b>: Claude asks how to log in.").format(name=who),
-                    login_menu_kb(session_id, login.options))
-        if login.state == "code":
-            return (_("🔑 <b>{name}</b>: sign in to Claude.\n\n"
-                      "1. Open the page with the button below and sign in "
-                      "with the account you want this machine to use.\n"
-                      "2. The page shows a code: copy all of it, the part "
-                      "after # included.\n"
-                      "3. Send it here as a message, and I will enter it.")
-                    .format(name=who), login_link_kb(session_id, login.url))
-        if login.state == "error":
-            return (_("❌ <b>{name}</b>: Claude did not accept the code.")
-                    .format(name=who) + f"\n\n<i>{html.escape(login.text)}</i>",
-                    login_error_kb(session_id))
-        return (_("⚠️ <b>{name}</b>: the login worked, with a warning.")
-                .format(name=who) + f"\n\n<i>{html.escape(login.text)}</i>",
-                login_warning_kb(session_id))
-
-    async def _settle_login(self, rt: SessionRuntime, previous: str | None,
-                            state: str) -> None:
-        """Trade the last step's buttons for a line saying how it ended."""
-        if rt.login_msg_id is None:
-            return
-        msg_id, rt.login_msg_id = rt.login_msg_id, None
-        kind = (previous or "").split(":", 1)[0]
-        if kind == "menu":
-            label = _("▶️ Method chosen")
-        elif kind == "code" and state == "code":
-            label = _("⏹ This link was replaced")
-        elif kind == "code":
-            label = _("🔑 Code entered")
-        elif kind == "error":
-            label = _("🔁 Tried again")
-        else:
-            label = _("⏹ Login closed")
-        with contextlib.suppress(Exception):
-            await self.bot.edit_message_reply_markup(
-                chat_id=self.chat_id, message_id=msg_id, reply_markup=done_kb(label))
-
-    async def _retire_login(self, rt: SessionRuntime) -> None:
-        """The panel is gone: Esc, the terminal, or the Enter after success."""
-        if rt.login_step is None and rt.login_msg_id is None:
-            return
-        await self._settle_login(rt, None, "")
-        rt.login_step = rt.login_seen = None
-        rt.login_other_since = 0.0
-
-    def repost_login(self, session_id: str) -> None:
-        """Send the current login step again, at the bottom of the chat.
-
-        The card above keeps its buttons: its step still stands, and they
-        are guarded by it.
-        """
-        rt = self.runtimes.get(session_id)
-        if rt is not None:
-            rt.login_step = rt.login_seen = None
-            rt.login_msg_id = None
-
-    def release_login(self, session_id: str) -> None:
-        """The chat has marked the login card itself: hands off."""
-        rt = self.runtimes.get(session_id)
-        if rt is not None:
-            rt.login_msg_id = None
-
-    async def login_done_card(self, session_id: str):
-        """The news of a login.
-
-        No restarts are offered: every running session of the profile sends
-        its next request with the new credentials (2.1.318, verified on
-        2026-11-05), so there is nothing left behind to move.
-        """
-        labels = {m.session_id: m.full_label for m in self.store.all_managed()}
-        me = html.escape(labels.get(session_id, session_id[:8]))
-        email = self.login_emails.get(session_id, "")
-        if email:
-            lines = [_("✅ <b>{name}</b>: logged in as <b>{email}</b>.").format(
-                name=me, email=html.escape(email))]
-        else:
-            lines = [_("✅ <b>{name}</b>: logged in.").format(name=me)]
-        if any(sid != session_id for sid in labels):
-            lines += ["", _("The other sessions switch to this account with "
-                            "their next request — none of them needs a "
-                            "restart.")]
-        return "\n".join(lines), None
-
-    async def _report_blocked(self, session_id: str, name: str, raw: str,
-                              rt: SessionRuntime, agent_status: str,
-                              busy: bool, repost: bool = False) -> None:
-        """Speak up when a session waits on a question we could not parse.
-
-        `find_dialog` only knows the prompt shapes it has been taught, and a
-        shape it misses leaves the session blocked with nothing in the chat —
-        exactly the silence this bot exists to prevent. `claude agents --json`
-        says "waiting" regardless of the shape, so it is the honest signal:
-        forward the screen and the keys that work without understanding it.
-
-        Once per wait, though — not once per redraw. A blocked session keeps
-        drawing: the spinner turns, a tool prints, the status line re-renders.
-        Deciding by what is on screen therefore announced the same question
-        every couple of seconds until the chat was unreadable. The honest
-        boundary is the wait itself, so the screen only ever edits the message
-        that already exists, and 🖥 fetches a fresh one on demand.
-
-        And only when the wait is real. Answering a dialog from a button used
-        to produce this card: the option was taken, the dialog vanished from
-        the screen, and the agent list — which is polled, cached, and briefly
-        unreadable while Claude Code updates itself — went on saying "waiting"
-        for a couple of seconds. Three things have to agree before a card is
-        worth a notification: the terminal is not visibly working, nothing was
-        typed here a moment ago, and the state held still long enough to be
-        confirmed by a reading taken just now.
-        """
-        now = time.time()
-        if busy or agent_status != "waiting":
-            rt.clear_blocked()
-            return
-        if now - rt.acted_at < _ACT_GRACE:
-            rt.blocked_since = 0.0
-            return
-        signature = screenmod.quiet_signature(raw)
-        if repost and rt.blocked_msg_id is not None:
-            old = rt.blocked_msg_id
-            log.info("blocked screen reposted id=%s name=%s",
-                     session_id[:8], name)
-            await self._send_blocked(session_id, name, raw, rt, signature)
-            await self._mark_moved(old)
-            return
-        if rt.blocked_sig is not None:
-            await self._refresh_blocked(session_id, name, raw, rt, signature)
-            return
-        if not rt.blocked_since:
-            rt.blocked_since = now
-            return
-        if now - rt.blocked_since < _BLOCKED_SETTLE:
-            return
-        if not await self._still_waiting(session_id):
-            # Restart the clock rather than clearing: if the reading was simply
-            # unavailable, this retries in _BLOCKED_SETTLE instead of every tick.
-            rt.blocked_since = now
-            return
-        log.info("blocked without a parsed dialog id=%s name=%s",
-                 session_id[:8], name)
-        await self._send_blocked(session_id, name, raw, rt, signature)
-
-    async def _send_blocked(self, session_id: str, name: str, raw: str,
-                            rt: SessionRuntime, signature: str) -> None:
-        """Post the screen of an unparsed wait, with the keys, as a new card."""
-        # Set before sending: a send that fails must not become a retry every
-        # 1.5 seconds. _say_html has already logged the failure.
-        rt.blocked_sig = signature
-        rt.blocked_edited = time.time()
-        msg = await self._say_rich(
-            session_id, blocks=self._blocked_blocks(name, raw),
-            reply_markup=blocked_kb(session_id),
-        )
-        if msg is None:
-            msg = await self._say_html(
-                self._blocked_text(name, raw), session_id=session_id,
-                reply_markup=blocked_kb(session_id),
-            )
-        rt.blocked_msg_id = getattr(msg, "message_id", None)
-
-    async def _still_waiting(self, session_id: str) -> bool:
-        """Ask the agent list again, and believe it only if it just answered.
-
-        `live_agents` falls back to its last reply when the CLI cannot be run,
-        which is exactly what happens for a second or two while Claude Code
-        replaces its own binary. A "waiting" served from that cache described
-        a question the user had already answered.
-        """
-        agents = await sess.live_agents(force=True)
-        if sess.live_age() > _STATUS_MAX_AGE:
-            log.debug("agent list too stale to call %s blocked", session_id[:8])
-            return False
-        return any(a.get("sessionId") == session_id and a.get("status") == "waiting"
-                   for a in agents)
-
-    async def _refresh_blocked(self, session_id: str, name: str, raw: str,
-                               rt: SessionRuntime, signature: str) -> None:
-        """Keep the already-sent card current, in place and without a ping."""
-        now = time.time()
-        if (rt.blocked_msg_id is None or signature == rt.blocked_sig
-                or now - rt.blocked_edited < _BLOCKED_EDIT):
-            return
-        rt.blocked_sig = signature
-        rt.blocked_edited = now
-        if await rich.edit(self.bot, self.chat_id, rt.blocked_msg_id,
-                           blocks=self._blocked_blocks(name, raw),
-                           reply_markup=blocked_kb(session_id)):
-            return
-        try:
-            await self.bot.edit_message_text(
-                self._blocked_text(name, raw), chat_id=self.chat_id,
-                message_id=rt.blocked_msg_id,
-                reply_markup=blocked_kb(session_id), parse_mode="HTML",
-            )
-        except Exception:
-            # Too old to edit, or unchanged after trimming — neither is worth
-            # a word to the user, who already has the card and its buttons.
-            log.debug("blocked card edit skipped", exc_info=True)
-
-    @staticmethod
-    def _blocked_head(name: str) -> str:
-        return _("⚠️ {name} is waiting for an answer, but I did not recognise "
-                 "the question. Here is the screen:").format(name=name)
-
-    @staticmethod
-    def _blocked_foot() -> str:
-        return _("The buttons below work without understanding it: digits "
-                 "pick an option, the arrows walk the list, Esc backs out. "
-                 "🖥 sends a fresh screen.")
-
-    def _blocked_blocks(self, name: str, raw: str) -> list[rich.Block]:
-        """The whole screen, scrollable, with the frame straightened out."""
-        return [
-            rich.para(self._blocked_head(name)),
-            rich.pre(rich.ascii_frame(screenmod.tail_text(raw, rich.PRE_LIMIT))),
-            rich.para(rich.italic(self._blocked_foot())),
-        ]
-
-    def _blocked_text(self, name: str, raw: str) -> str:
-        """The same card for a client that cannot take a rich message."""
-        return (html.escape(self._blocked_head(name)) + "\n"
-                + as_pre_lines(screenmod.tail_text(raw, 1500))
-                + "\n<i>" + html.escape(self._blocked_foot()) + "</i>")
-
-    async def _pulse(self, session_id: str, name: str, raw: str,
-                     rt: SessionRuntime, blocked: bool) -> None:
-        """Show that a long-running session is working, not stuck.
-
-        Claude writes to the transcript in bursts, so a turn with heavy
-        thinking sends nothing to the chat for minutes. From the outside that
-        is indistinguishable from a dead bot — the terminal, meanwhile, is
-        counting elapsed time and tokens out loud.
-        """
-        activity = "" if blocked else screenmod.read_activity(raw)
-        if not activity:
-            rt.work_since = 0.0
-            await self._drop_pulse(rt)
-            return
-        now = time.time()
-        if not rt.work_since:
-            rt.work_since = now
-            return
-        if now - rt.work_since < _PULSE_AFTER:
-            return
-        text = f"⏳ <b>{html.escape(name)}</b>\n{html.escape(activity)}"
-        if rt.pulse_msg_id is None:
-            msg = await self._say_html(text, session_id=session_id)
-            rt.pulse_msg_id = getattr(msg, "message_id", None)
-            rt.pulse_edited = now
-            return
-        if now - rt.pulse_edited < _PULSE_EDIT:
-            return
-        rt.pulse_edited = now
-        try:
-            await self.bot.edit_message_text(
-                text, chat_id=self.chat_id, message_id=rt.pulse_msg_id,
-                parse_mode="HTML",
-            )
-        except Exception:
-            # Too old to edit, or unchanged — neither is worth a word to the user.
-            log.debug("pulse edit skipped", exc_info=True)
-
-    async def _retire_dialog(self, rt: SessionRuntime) -> None:
-        """Settle a card whose question has left the screen some other way.
-
-        A key pressed in the terminal, Esc, the next section of a multi-part
-        question: the buttons left on the card would now act on nothing, or on
-        whatever question stands there next. The card keeps its text — the
-        record of what was asked — and one button saying it is closed.
-        Answers given from the chat never get here: the handler marks the card
-        with the choice itself and lets go of it first (`release_dialog`).
-        """
-        if rt.dialog_msg_id is None:
-            return
-        msg_id, rt.dialog_msg_id = rt.dialog_msg_id, None
-        # A prompt that counted down and left at its deadline was refused by
-        # Claude Code, not answered — "closed" would read as somebody's answer.
-        timed_out = (rt.expires_at is not None
-                     and time.time() >= rt.expires_at - _EXPIRY_SLACK)
-        rt.expires_at = None
-        label = (_("⏱ Blocked by Claude Code: no answer in time") if timed_out
-                 else _("⏹ Question closed"))
-        try:
-            await self.bot.edit_message_reply_markup(
-                chat_id=self.chat_id, message_id=msg_id,
-                reply_markup=done_kb(label))
-        except Exception:
-            # Already stripped by the handler that answered it, or too old.
-            log.debug("dialog card retire skipped", exc_info=True)
-
-    async def _drop_pulse(self, rt: SessionRuntime) -> None:
-        """Remove the heartbeat once the answer itself arrives."""
-        if rt.pulse_msg_id is None:
-            return
-        msg_id, rt.pulse_msg_id = rt.pulse_msg_id, None
-        rt.pulse_edited = 0.0
-        try:
-            await self.bot.delete_message(chat_id=self.chat_id, message_id=msg_id)
-        except Exception:
-            log.debug("pulse delete skipped", exc_info=True)
-
     async def _check_usage(self, name: str, session_id: str,
-                           rt: _Alerted, usage, status) -> None:
+                           rt: _Alerted, usage) -> None:
         """Notify when context or a rate limit crosses a step.
 
         A rate limit belongs to the account, not the session, and an alert
         about one is the moment to switch — so it names the account.
         """
-        for key, pct, note in gauges(usage, status):
+        for key, pct, note in gauges(usage):
             steps = _CTX_STEPS if key == "ctx" else _LIMIT_STEPS
             reached = max([t for t in steps if pct >= t], default=0)
             previous = rt.alerted.get(key, 0)
@@ -1477,7 +201,8 @@ class Watcher:
                 icon = "🔴" if reached >= 90 else ("🟠" if reached >= 75 else "🟡")
                 who = ""
                 if key != "ctx":
-                    # An SDK runtime knows its account from the host.
+                    # The host knows the session's account; the transcript
+                    # is the fallback.
                     email = getattr(rt, "account", "") or await account.email_for(
                         session_id, since=await sess.started_at(session_id))
                     who = f" · {email}" if email else ""
@@ -1485,116 +210,6 @@ class Watcher:
                                 session_id=session_id)
             if reached != previous:
                 rt.alerted[key] = reached
-
-    def _expires_at(self, session_id: str, dialog) -> float | None:
-        """The deadline of a question that counts down, fixed per question."""
-        if dialog.expires_in is None:
-            return None
-        rt = self.runtimes.get(session_id)
-        if rt is not None and rt.expires_at is not None:
-            return rt.expires_at
-        return time.time() + dialog.expires_in
-
-    def _dialog_blocks(self, name: str, session_id: str, dialog) -> tuple:
-        """The question as rich blocks — nothing in here is parsed as markup.
-
-        Labels and diagrams come off a terminal, where "<" is a "<" and not
-        the start of a tag: with blocks there is no escaping step left to
-        forget. The diagram is inline at any width now, because a preformatted
-        block scrolls instead of wrapping.
-        """
-        head = [_DIALOG_ICON.get(dialog.kind, "❓ "), rich.bold(name)]
-        title = _dialog_title(dialog)
-        if title:
-            head.append(f" · {title}")
-        blocks: list[rich.Block] = [rich.para(*head)]
-        question = _dialog_question(dialog)
-        if question:
-            blocks.append(rich.para(question))
-        if dialog.note:
-            blocks.append(rich.para(dialog.note))
-        expires = self._expires_at(session_id, dialog)
-        if expires is not None:
-            blocks.append(rich.para(_expiry_line(expires)))
-        # The slider's levels carry no description, so the buttons already
-        # say everything a list of them would.
-        for o in (dialog.options
-                  if dialog.kind not in ("effort", "drafts", "trust") else []):
-            mark = "▸ " if o.selected else ""
-            box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
-            # A digit is a shortcut in an ordinary question and a lie in the
-            # settings dialogs: /effort has no digits at all, and in /model a
-            # digit also saves the pick as the default.
-            head_text = (f"{o.number}. {o.label}" if dialog.kind == "choice"
-                         else o.label)
-            if o.current:
-                head_text = f"✅ {head_text}"
-            blocks.append(rich.para(mark, box, rich.bold(head_text)))
-            if o.description and o.description != o.label:
-                blocks.append(rich.para(f"    {o.description}"))
-        if dialog.kind in ("model", "effort"):
-            blocks.append(rich.para(_settings_hint(dialog)))
-        if dialog.multi_select:
-            # TRANSLATORS: how a multi-select question is answered from a chat.
-            blocks.append(rich.para(
-                _("The numbered buttons only tick boxes — nothing goes to "
-                  "Claude until the button under them.")))
-        if dialog.preview:
-            sel = next((o.number for o in dialog.options if o.selected), None)
-            blocks.append(rich.para(
-                _("🖼 Diagram for option {n}:").format(n=sel) if sel
-                else _("🖼 Diagram:")))
-            blocks.append(rich.pre(rich.ascii_frame(dialog.preview)))
-        return blocks, dialog_kb(session_id, dialog,
-                                 self.settings_scope.get(session_id, "s"))
-
-    def _render_dialog(self, name: str, session_id: str, dialog):
-        head = f"{_DIALOG_ICON.get(dialog.kind, '❓ ')}<b>{html.escape(name)}</b>"
-        title = _dialog_title(dialog)
-        if title:
-            head += f" · {html.escape(title)}"
-        parts = [head, ""]
-        question = _dialog_question(dialog)
-        if question:
-            parts += [html.escape(question), ""]
-        if dialog.note:
-            parts += [html.escape(dialog.note), ""]
-        expires = self._expires_at(session_id, dialog)
-        if expires is not None:
-            parts += [html.escape(_expiry_line(expires)), ""]
-        for o in (dialog.options
-                  if dialog.kind not in ("effort", "drafts", "trust") else []):
-            mark = "▸ " if o.selected else ""
-            box = "" if o.checked is None else ("☑ " if o.checked else "☐ ")
-            head_text = (f"{o.number}. {o.label}" if dialog.kind == "choice"
-                         else o.label)
-            if o.current:
-                head_text = f"✅ {head_text}"
-            parts.append(f"{mark}{box}<b>{html.escape(head_text)}</b>")
-            if o.description and o.description != o.label:
-                parts.append(f"    {html.escape(o.description)}")
-        if dialog.kind in ("model", "effort"):
-            parts.append("")
-            parts.append(html.escape(_settings_hint(dialog)))
-        if dialog.multi_select:
-            parts.append("")
-            # TRANSLATORS: how a multi-select question is answered from a chat.
-            parts.append(_("The numbered buttons only tick boxes — nothing "
-                           "goes to Claude until the button under them."))
-        if dialog.preview:
-            sel = next((o.number for o in dialog.options if o.selected), None)
-            caption = (_("🖼 Diagram for option {n}:").format(n=sel) if sel
-                       else _("🖼 Diagram:"))
-            if render.max_line_width(dialog.preview) <= _PHONE_COLS:
-                parts += ["", caption, as_pre_lines(dialog.preview)]
-            else:
-                parts += ["", _("🖼 The diagram is wider than the screen — "
-                                "sent as a picture")]
-        text = "\n".join(parts)
-        if len(text) > 3900:
-            text = text[:3900] + "\n…"
-        return text, dialog_kb(session_id, dialog,
-                                 self.settings_scope.get(session_id, "s"))
 
     async def _say(self, text: str, session_id: str | None = None, **kw) -> None:
         try:
@@ -1634,42 +249,3 @@ class Watcher:
         if session_id and msg:
             self.store.remember_message(msg.message_id, session_id)
         return msg
-
-    async def send_preview(self, session_id: str, dialog) -> None:
-        """The highlighted option's drawing, on demand from the 🖼 button.
-
-        Text first: a scrollable block keeps the alignment and can be copied.
-        The PNG stays underneath for a client that has no rich messages.
-        """
-        if not dialog.preview:
-            return
-        sel = next((o.number for o in dialog.options if o.selected), None)
-        caption = (_("🖼 Diagram for option {n}").format(n=sel) if sel
-                   else _("🖼 Diagram"))
-        if await self._say_rich(session_id, blocks=[
-                rich.para(caption),
-                rich.pre(rich.ascii_frame(dialog.preview))]):
-            return
-        if not render.available():
-            return
-        out = Path(tempfile.gettempdir()) / f"ccbot-preview-{session_id[:8]}.png"
-        try:
-            render.text_to_png(dialog.preview, out)
-        except Exception:
-            log.exception("preview render failed")
-            return
-        try:
-            await self.bot.send_photo(self.chat_id, FSInputFile(out), caption=caption)
-        except Exception:
-            log.exception("send_photo failed")
-
-    async def send_screen(self, window_id: str, name: str,
-                          session_id: str | None = None) -> None:
-        raw = await tmux.capture(window_id)
-        if await self._say_rich(session_id, blocks=[
-                rich.para("🖥 ", rich.bold(name)),
-                rich.pre(rich.ascii_frame(screenmod.tail_text(raw, rich.PRE_LIMIT))),
-        ]):
-            return
-        await self._say(f"🖥 {name}\n" + as_pre(screenmod.tail_text(raw, 3200)),
-                        session_id=session_id, parse_mode="HTML")

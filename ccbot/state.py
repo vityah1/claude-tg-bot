@@ -19,10 +19,6 @@ _LABEL_LIMIT = 48
 _ALIAS_TTL = 30 * 24 * 3600.0
 # How long a message stays addressable by reply.
 _ROUTE_TTL = 30 * 24 * 3600.0
-# How long a session the machine took down stays on offer. A restore is worth
-# doing the same day and rarely the next week; after that the transcript is
-# still in 🕘 history, which is where an old one belongs.
-_ORPHAN_TTL = 7 * 24 * 3600.0
 _LEGACY_DB = Path(__file__).resolve().parent.parent / "state.db"
 
 _SCHEMA = """
@@ -80,7 +76,7 @@ CREATE TABLE IF NOT EXISTS session_names (
     updated_at REAL NOT NULL
 );
 -- Where an id a card was printed with has moved to. `/clear` hands the
--- session a new id (Watcher._rebind_cleared follows it), and every button
+-- session a new id (the host's session_reset; `rebind` follows it), and every button
 -- already in the chat still carries the old one in its callback_data — so the
 -- old id has to keep resolving to the session it became.
 CREATE TABLE IF NOT EXISTS session_aliases (
@@ -88,20 +84,9 @@ CREATE TABLE IF NOT EXISTS session_aliases (
     new_id     TEXT NOT NULL,
     created_at REAL NOT NULL
 );
--- Sessions the machine took down: the tmux server died with everything in it
--- (a reboot, `tmux kill-server`), which is an accident and not an ending. The
--- row is moved here instead of being deleted, because everything needed to
--- put the session back — the id, the directory, both names — is in it.
-CREATE TABLE IF NOT EXISTS orphans (
-    session_id  TEXT PRIMARY KEY,
-    cwd         TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    custom_name TEXT,
-    title       TEXT,
-    died_at     REAL NOT NULL
-);
--- Facts about the host that have to outlive the process. The boot id is what
--- tells a reboot from a window somebody closed.
+-- Facts that have to outlive the process: the host journal's ack point, the
+-- prompts offered again after a host restart, the newest Claude Code
+-- announced.
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -119,12 +104,7 @@ CREATE TABLE IF NOT EXISTS request_cards (
 
 
 class _Named:
-    """How a session is called — shared by a live one and a stopped one.
-
-    A session waiting to be restored is shown in the same lists as a live
-    one, under the same name, so the naming rules cannot live in only one of
-    the two dataclasses.
-    """
+    """How a session is called."""
 
     cwd: str
     name: str
@@ -172,34 +152,19 @@ class _Named:
 
 @dataclass
 class Managed(_Named):
+    """A session the bot started (or resumed), held by the session host.
+
+    The table still has the columns of the tmux days (`window_id`, `offset`,
+    `backend`); they are written with fixed values and never read, which
+    `_row_to_managed` makes possible by dropping what it does not know.
+    """
+
     session_id: str
-    window_id: str
     cwd: str
     name: str
     created_at: float
-    offset: int
     title: str | None
     custom_name: str | None = None
-    # "tmux" (a window driven through the terminal) or "sdk" (a client held
-    # by the session host). A tmux-only path must never act on an sdk row:
-    # its window id is empty, and "no such window" reads as a closed session.
-    backend: str = "tmux"
-
-    @property
-    def is_sdk(self) -> bool:
-        return self.backend == "sdk"
-
-
-@dataclass
-class Orphan(_Named):
-    """A managed session that was taken down with the tmux server."""
-
-    session_id: str
-    cwd: str
-    name: str
-    title: str | None
-    custom_name: str | None
-    died_at: float
 
 
 class Store:
@@ -218,7 +183,7 @@ class Store:
         self.conn.commit()
 
     def _add_backend(self) -> None:
-        """Every row written before the SDK path existed is a tmux session."""
+        """A database from before the SDK path lacks the column `add` writes."""
         columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(managed)")}
         if "backend" not in columns:
             self.conn.execute(
@@ -246,21 +211,16 @@ class Store:
                 )
 
     # -- managed sessions -------------------------------------------------
-    def add(self, session_id: str, window_id: str, cwd: str, name: str,
-            backend: str = "tmux") -> None:
+    def add(self, session_id: str, cwd: str, name: str) -> None:
         # A resumed session brings its name back with it: the row in `managed`
         # is new, but the one in `session_names` was never deleted.
         self.conn.execute(
             "INSERT OR REPLACE INTO managed"
             " (session_id, window_id, cwd, name, created_at, offset, title,"
             "  custom_name, backend)"
-            " VALUES (?,?,?,?,?,0,NULL,?,?)",
-            (session_id, window_id, cwd, name, time.time(),
-             self.saved_name(session_id), backend),
+            " VALUES (?,'',?,?,?,0,NULL,?,'sdk')",
+            (session_id, cwd, name, time.time(), self.saved_name(session_id)),
         )
-        # However it came back — the restore card, a resume from history — a
-        # session that is running again has nothing left to restore.
-        self.conn.execute("DELETE FROM orphans WHERE session_id=?", (session_id,))
         self.conn.commit()
 
     @staticmethod
@@ -275,24 +235,17 @@ class Store:
         known = {f.name for f in fields(Managed)}
         return Managed(**{k: v for k, v in dict(row).items() if k in known})
 
-    def all_managed(self, backend: str | None = None) -> list[Managed]:
-        """Every managed session, or only those of one *backend*."""
+    def all_managed(self) -> list[Managed]:
+        """Every managed session, the newest first."""
         rows = self.conn.execute(
             "SELECT * FROM managed ORDER BY created_at DESC"
         ).fetchall()
-        out = [self._row_to_managed(r) for r in rows]
-        return out if backend is None else [m for m in out if m.backend == backend]
-
-    def set_backend(self, session_id: str, backend: str, window_id: str) -> None:
-        """A session carried on by another backend: same id, name and history."""
-        self.conn.execute("UPDATE managed SET backend=?, window_id=? WHERE session_id=?",
-                          (backend, window_id, session_id))
-        self.conn.commit()
+        return [self._row_to_managed(r) for r in rows]
 
     def by_name(self, name: str) -> Managed | None:
-        """An SDK session by its launch name — the key the host knows it by."""
+        """A session by its launch name — the key the host knows it by."""
         r = self.conn.execute(
-            "SELECT * FROM managed WHERE name=? AND backend='sdk'", (name,)
+            "SELECT * FROM managed WHERE name=?", (name,)
         ).fetchone()
         return self._row_to_managed(r) if r else None
 
@@ -316,12 +269,6 @@ class Store:
             "SELECT * FROM managed WHERE session_id=?", (session_id,)
         ).fetchone()
         return self._row_to_managed(r) if r else None
-
-    def set_offset(self, session_id: str, offset: int) -> None:
-        self.conn.execute(
-            "UPDATE managed SET offset=? WHERE session_id=?", (offset, session_id)
-        )
-        self.conn.commit()
 
     def set_custom_name(self, session_id: str, name: str | None) -> None:
         """Set (or clear, with None) the name the user picked for a session."""
@@ -362,13 +309,12 @@ class Store:
     def rebind(self, old_id: str, new_id: str) -> None:
         """Follow a session that got a new id — /clear starts a fresh transcript.
 
-        Everything else about it is unchanged: same window, same process, same
-        name, same chat pointing at it. Only the transcript to read is new, so
-        the offset restarts from zero.
+        Everything else about it is unchanged: same process, same name, same
+        chat pointing at it. Only the transcript is new.
         """
         with self.conn:
             self.conn.execute(
-                "UPDATE managed SET session_id=?, offset=0, title=NULL"
+                "UPDATE managed SET session_id=?, title=NULL"
                 " WHERE session_id=?",
                 (new_id, old_id),
             )
@@ -450,68 +396,6 @@ class Store:
     def remove(self, session_id: str) -> None:
         self.conn.execute("DELETE FROM managed WHERE session_id=?", (session_id,))
         self.conn.execute("DELETE FROM active WHERE session_id=?", (session_id,))
-        self.conn.commit()
-
-    # -- sessions the machine took down ------------------------------------
-    def orphan(self, session_id: str) -> Orphan | None:
-        """Move a managed row to the restore list instead of deleting it.
-
-        A window that goes away because somebody closed it is an ending. A
-        window that goes away with the whole tmux server is an accident, and
-        `remove()` would throw out the only thing that can undo it.
-        """
-        mgd = self.get(session_id)
-        if mgd is None:
-            return None
-        row = Orphan(session_id=mgd.session_id, cwd=mgd.cwd, name=mgd.name,
-                     title=mgd.title, custom_name=mgd.custom_name,
-                     died_at=time.time())
-        with self.conn:
-            self.conn.execute(
-                "INSERT OR REPLACE INTO orphans"
-                " (session_id, cwd, name, custom_name, title, died_at)"
-                " VALUES (?,?,?,?,?,?)",
-                (row.session_id, row.cwd, row.name, row.custom_name,
-                 row.title, row.died_at),
-            )
-            self.conn.execute(
-                "DELETE FROM managed WHERE session_id=?", (session_id,))
-            self.conn.execute(
-                "DELETE FROM active WHERE session_id=?", (session_id,))
-            self.conn.execute(
-                "DELETE FROM orphans WHERE died_at < ?",
-                (time.time() - _ORPHAN_TTL,))
-        return row
-
-    @staticmethod
-    def _row_to_orphan(row: sqlite3.Row) -> Orphan:
-        """Build an Orphan from a row — tolerantly, see `_row_to_managed`."""
-        known = {f.name for f in fields(Orphan)}
-        return Orphan(**{k: v for k, v in dict(row).items() if k in known})
-
-    def orphans(self) -> list[Orphan]:
-        """Sessions waiting to be restored, the most recent loss first."""
-        rows = self.conn.execute(
-            "SELECT * FROM orphans WHERE died_at >= ? ORDER BY died_at DESC",
-            (time.time() - _ORPHAN_TTL,),
-        ).fetchall()
-        return [self._row_to_orphan(r) for r in rows]
-
-    def find_orphan(self, short: str) -> Orphan | None:
-        """One of them by the id prefix a button carries (`sid8`)."""
-        if not short:
-            return None
-        for o in self.orphans():
-            if o.session_id.startswith(short):
-                return o
-        return None
-
-    def drop_orphan(self, session_id: str) -> None:
-        self.conn.execute("DELETE FROM orphans WHERE session_id=?", (session_id,))
-        self.conn.commit()
-
-    def drop_orphans(self) -> None:
-        self.conn.execute("DELETE FROM orphans")
         self.conn.commit()
 
     # -- notes about the host ----------------------------------------------

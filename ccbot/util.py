@@ -1,4 +1,4 @@
-"""Small helpers shared by the bot and the watcher."""
+"""Small helpers shared by the bot, the bridge and the watcher."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ NAME_LIMIT = 40
 
 
 def slug(cwd: str) -> str:
-    """Directory name, reduced to characters tmux and Claude accept."""
+    """Directory name, reduced to characters a launch name may hold."""
     base = Path(cwd).name or "root"
     return re.sub(r"[^A-Za-z0-9_.-]", "-", base)[:20] or "session"
 
@@ -23,16 +23,6 @@ def slug(cwd: str) -> str:
 def default_name(cwd: str, session_id: str) -> str:
     """The name the bot gives a session it just created."""
     return f"{slug(cwd)}-{session_id[:4]}"
-
-
-def window_name(name: str) -> str:
-    """A session name reduced to something tmux can label a window with.
-
-    Unicode is fine there; ':' and '#' are not — the first separates
-    session:window in every target spec, the second starts a format string.
-    """
-    safe = re.sub(r"[\s:#]+", "-", name).strip("-")
-    return safe[:24] or "session"
 
 
 def clean_name(text: str) -> str:
@@ -80,7 +70,7 @@ def as_pre(text: str, limit: int = _SAFE) -> str:
 
 
 def bar(pct: int, width: int = 10) -> str:
-    """Text gauge mirroring the one in the terminal status line."""
+    """A text gauge for /usage."""
     pct = max(0, min(100, pct))
     filled = round(pct / 100 * width)
     return "█" * filled + "░" * (width - filled)
@@ -90,19 +80,14 @@ def _thousands(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
 
-def gauges(usage, status) -> list[tuple[str, int, str]]:
-    """Normalised (key, percent, human label) gauges from either source."""
-    if usage:
-        out = [] if usage.ctx_pct is None else [
-            ("ctx", usage.ctx_pct, _("session context"))]
-        for lim in usage.limits:
-            out.append((lim.key, lim.pct, _limit_note(lim.label, lim.reset_text)))
-        return out
-    out = []
-    if status and status.context_pct:
-        out.append(("ctx", int(status.context_pct), _("session context")))
-    for label, (pct, reset) in (status.limits if status else {}).items():
-        out.append((label, pct, _limit_note(label, reset)))
+def gauges(usage) -> list[tuple[str, int, str]]:
+    """Normalised (key, percent, human label) gauges of a session's metrics."""
+    if not usage:
+        return []
+    out = [] if usage.ctx_pct is None else [
+        ("ctx", usage.ctx_pct, _("session context"))]
+    for lim in usage.limits:
+        out.append((lim.key, lim.pct, _limit_note(lim.label, lim.reset_text)))
     return out
 
 
@@ -117,7 +102,7 @@ def account_line(email: str) -> str:
     return _("👤 Account: {email}").format(email=html.escape(email)) if email else ""
 
 
-def usage_report(name: str, usage, status=None, account: str = "") -> str:
+def usage_report(name: str, usage, account: str = "") -> str:
     """Full context/limit breakdown, shown on demand.
 
     The account goes right under the name: the limits below belong to it,
@@ -152,33 +137,19 @@ def usage_report(name: str, usage, status=None, account: str = "") -> str:
             extra.append(f"${usage.cost_usd:.2f}")
         if extra:
             lines += ["", " · ".join(extra)]
-        if usage.stale:
-            lines.append("\n<i>" + _(
-                "{minutes} min stale — this session has not redrawn its "
-                "status line in a while"
-            ).format(minutes=f"{usage.age / 60:.0f}") + "</i>")
-        return "\n".join(lines)
-
-    # Fallback: the tee wrapper is not installed, so scrape the status line.
-    for _key, pct, note in gauges(None, status):
-        lines.append(f"<code>{note[:12]:<12} {bar(pct)} {pct:>3}%</code>")
     if len(lines) == head:
-        lines.append(_("No metrics yet — the status line has not been drawn."))
-    else:
-        lines.append("\n<i>" + _(
-            "read off the status line; exact figures appear once the "
-            "statusline wrapper is in place"
-        ) + "</i>")
+        lines.append(_("No metrics yet — a session reports them with its "
+                       "first answer."))
     return "\n".join(lines)
 
 
-def usage_suffix(usage, status=None, ctx_floor: int = 50, limit_floor: int = 75) -> str:
+def usage_suffix(usage, ctx_floor: int = 50, limit_floor: int = 75) -> str:
     """Compact tail appended to replies once usage starts to matter.
 
     Silent while there is plenty of room, so routine answers stay clean.
     """
     bits = []
-    for key, pct, _note in gauges(usage, status):
+    for key, pct, _note in gauges(usage):
         floor = ctx_floor if key == "ctx" else limit_floor
         if pct >= floor:
             short = "ctx" if key == "ctx" else key.replace("five_hour", "5h") \
@@ -186,25 +157,3 @@ def usage_suffix(usage, status=None, ctx_floor: int = 50, limit_floor: int = 75)
             bits.append(f"{short} {pct}%")
     return "\n\n· " + " · ".join(bits) if bits else ""
 
-
-def as_pre_lines(text: str, max_lines: int = 28, limit: int = 3000) -> str:
-    """Monospace block trimmed by whole lines.
-
-    Telegram renders <pre> in a fixed-width font and lets the reader scroll it
-    sideways, so lines must never be re-wrapped — cutting mid-line would break
-    the alignment that makes ASCII art readable.
-    """
-    lines = [ln.rstrip() for ln in text.splitlines()]
-    while lines and not lines[-1]:
-        lines.pop()
-    clipped = False
-    if len(lines) > max_lines:
-        lines, clipped = lines[:max_lines], True
-    body = "\n".join(lines)
-    while len(body) > limit and lines:
-        lines.pop()
-        clipped = True
-        body = "\n".join(lines)
-    if clipped:
-        body += "\n…"
-    return f"<pre>{html.escape(body)}</pre>"

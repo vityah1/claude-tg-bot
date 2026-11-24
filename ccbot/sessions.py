@@ -1,12 +1,10 @@
 """Unified view over Claude Code sessions.
 
-Three kinds are surfaced:
+Two kinds are surfaced:
 
-* ``managed``  — created by the bot inside tmux; fully controllable.
-* ``foreign``  — the user's own terminal sessions. Read-only by design: their
-                 stdin is unreachable from outside, and hijacking them would
-                 disturb work in progress.
-* ``closed``   — historical transcripts that can be resumed into a new window.
+* ``managed``  — started (or resumed) by the bot and held by the session host;
+                 fully controllable.
+* ``closed``   — historical transcripts that can be resumed through the host.
 """
 
 from __future__ import annotations
@@ -24,9 +22,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from . import status_feed, tmux, transcript
-from .i18n import N_, _, ngettext
-from .state import Managed, Orphan, Store
+from . import transcript
+from .i18n import N_, _
+from .state import Managed, Store
 
 log = logging.getLogger("ccbot.sessions")
 
@@ -44,39 +42,15 @@ _EMPTY_SESSION_BYTES = 20 * 1024
 _DIR_BUDGET = 22
 
 
-# What each status means, in words. The keys come from `claude agents --json`
-# and from tmux, and are never shown raw: "gone" is a state, not a sentence.
+# What each status means, in words. The keys come from the bridge, and are
+# never shown raw.
 _STATUS_LABELS = {
     "busy": N_("working"),
     "idle": N_("idle"),
     "waiting": N_("waiting for you"),
     "starting": N_("starting"),
-    "dead": N_("dead"),
-    "gone": N_("window is gone"),
     "closed": N_("closed"),
 }
-
-
-def restore_text(orphans: list[Orphan]) -> str:
-    """The 🔌 card: what the machine stopped, and what bringing it back means.
-
-    Worded for both ways the tmux server can die — a reboot and a
-    `kill-server` — because the card is redrawn after every restore and a
-    reason quoted once would then be repeated as a guess.
-    """
-    head = ngettext(
-        "🔌 <b>{count} session was stopped</b> — the tmux server went down "
-        "with it (the machine restarted, most likely).",
-        "🔌 <b>{count} sessions were stopped</b> — the tmux server went down "
-        "with them (the machine restarted, most likely).",
-        len(orphans)).format(count=len(orphans))
-    body = _("Nothing is lost: each one comes back with its whole context, in "
-             "a new tmux window.")
-    warn = _("A restored session opens on an empty prompt — work that was "
-             "running at that moment is not picked up again, and a question "
-             "that was on the screen is gone.")
-    tail = _("Anything not restored stays in 🕘 history.")
-    return f"{head}\n\n{body} {warn}\n\n{tail}"
 
 
 def status_label(status: str) -> str:
@@ -216,17 +190,14 @@ class SessionView:
     session_id: str
     name: str
     cwd: str
-    kind: str                     # managed | foreign | closed
-    status: str = ""              # busy | idle | waiting | dead
+    kind: str                     # managed | closed
+    status: str = ""              # busy | idle | waiting | closed
     waiting_for: str = ""
-    window_id: str | None = None
     title: str | None = None
     mtime: float = 0.0
     size: int = 0
     opening: str = ""
     started_at: float = 0.0
-    pid: int = 0
-    work_dir: str = ""   # where it is working now, if that differs
     saved_name: str = ""  # what the user called it, kept past the session
     launched: str = ""    # `claude -n`, when a human wrote it
     last: str = ""        # the prompt it stopped on
@@ -358,18 +329,11 @@ async def live_agents(force: bool = False) -> list[dict]:
             # Claude Code updating itself moves the binary out from under the
             # path resolved at startup. Forget it, so the next call looks again.
             _claude_path = None
-        # The timestamp is deliberately left alone: the caller still gets the
-        # last known answer, but `live_age` now shows how old that answer is.
-        # Refreshing it here is what let a stale "waiting" look current.
+        # The timestamp is deliberately left alone, so the next call asks
+        # again instead of trusting a stale answer for another five seconds.
         return cached
     _live_cache = (time.time(), data)
     return data
-
-
-def live_age() -> float:
-    """Seconds since `claude agents --json` last actually answered."""
-    ts, _data = _live_cache
-    return time.time() - ts if ts else float("inf")
 
 
 # The state of an SDK session as the bridge knows it ("idle", "busy",
@@ -378,57 +342,14 @@ sdk_state: Callable[[Managed], str] | None = None
 
 
 async def managed_views(store: Store) -> list[SessionView]:
-    live = {a.get("sessionId"): a for a in await live_agents()}
-    windows = {w.id: w for w in await tmux.list_windows()}
     views = []
     for m in store.all_managed():
-        if m.is_sdk:
-            state = sdk_state(m) if sdk_state else "idle"
-            views.append(SessionView(
-                session_id=m.session_id, name=m.label, cwd=m.cwd, kind="managed",
-                status=state if state in ("busy", "waiting") else "idle",
-                waiting_for="", window_id="", title=m.title, mtime=m.created_at,
-                started_at=m.created_at))
-            continue
-        w = windows.get(m.window_id)
-        agent = live.get(m.session_id)
-        if w is None:
-            status = "gone"
-        elif not w.alive:
-            status = "dead"
-        elif agent:
-            status = agent.get("status", "idle")
-        else:
-            status = "starting"
+        state = sdk_state(m) if sdk_state else "idle"
         views.append(SessionView(
             session_id=m.session_id, name=m.label, cwd=m.cwd, kind="managed",
-            status=status, waiting_for=(agent or {}).get("waitingFor", ""),
-            window_id=m.window_id, title=m.title, mtime=m.created_at,
-            started_at=float((agent or {}).get("startedAt") or 0) / 1000,
-        ))
+            status=state if state in ("busy", "waiting") else "idle",
+            title=m.title, mtime=m.created_at, started_at=m.created_at))
     return views
-
-
-async def foreign_views(store: Store) -> list[SessionView]:
-    mine = {m.session_id for m in store.all_managed()}
-    out = []
-    for a in await live_agents():
-        sid = a.get("sessionId")
-        if not sid or sid in mine:
-            continue
-        started = float(a.get("startedAt") or 0) / 1000
-        # The status-line payload knows the current directory; agents --json
-        # only reports the one the session was launched from.
-        usage = status_feed.read(sid)
-        work = (usage.cwd if usage else "") or ""
-        out.append(SessionView(
-            session_id=sid, name=a.get("name") or sid[:8], cwd=a.get("cwd", ""),
-            kind="foreign", status=a.get("status", ""),
-            waiting_for=a.get("waitingFor", ""), mtime=started,
-            started_at=started, pid=int(a.get("pid") or 0),
-            work_dir=work if work != a.get("cwd", "") else "",
-        ))
-    return out
 
 
 async def started_at(session_id: str) -> float:
@@ -563,7 +484,7 @@ async def closed_all(store: Store, roots: tuple[str, ...] = (),
     # A managed session is off the list even when the CLI has stopped naming
     # it: after `/clear` the live process writes under a new id, leaving the
     # old transcript to look closed. Resuming that one would take over the
-    # database row of a session that is still in a tmux window.
+    # database row of a session that is still running.
     live_ids |= {m.session_id for m in store.all_managed()}
     # Throwaway forks the bot made for a side question (/btw) are no
     # sessions of the user's: they never show up in history.

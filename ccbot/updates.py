@@ -2,17 +2,16 @@
 
 Claude Code updates itself in the background, but a running process keeps the
 build it started with: a session picks the new one up only when its `claude`
-is launched again. Nothing in the TUI says that a restart is due, so the two
-numbers are read here and compared.
+is launched again. Nothing in the session says that a restart is due, so the
+two numbers are read here and compared.
 
 Where each number comes from:
 
 * on disk — `claude --version`, cached: it is a node process, and the answer
   only moves when the background updater has been at work.
-* in the session — the ``version`` field of the status-line payload
-  (`status_feed`), with the transcript as the fallback for an install without
-  the tee. Both are written by the process itself, so they name its build and
-  not the file on disk.
+* in the session — the version the session host reports for it
+  (`status_feed`), with the transcript as the fallback. Both come from the
+  process itself, so they name its build and not the file on disk.
 """
 
 from __future__ import annotations
@@ -34,10 +33,6 @@ _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 _INSTALLED_TTL = 300.0
 # How long `claude --version` is given before the answer is written off.
 _PROBE_TIMEOUT = 20.0
-# After a restart both sources need a moment to name the new build: the
-# payload is rewritten on the first status-line render, the transcript on the
-# first record. Until then the session must not be flagged as outdated again.
-_SETTLE = 90.0
 
 # Claude Code keeps the full release notes on disk and refreshes them when it
 # updates itself, so reading them costs nothing and works offline.
@@ -46,8 +41,6 @@ _RELEASE_RE = re.compile(r"^##\s+(\d+(?:\.\d+)+)\s*$")
 
 _installed_at = 0.0
 _installed = ""
-# session_id → when the bot last relaunched it.
-_restarted: dict[str, float] = {}
 
 
 def parse(version: str) -> tuple[int, ...]:
@@ -91,10 +84,9 @@ def cached_installed() -> str:
 def running(session_id: str) -> str:
     """The version the session's own process is running, as far as can be seen.
 
-    The payload is preferred over the transcript because it is rewritten on
-    every status-line render, while a transcript only grows when something is
-    said. Neither is proof against a session that has not drawn or written a
-    thing since it started, which is what the settling window below is for.
+    The host's report is preferred over the transcript, which only grows when
+    something is said. Neither is proof against a session that has not said a
+    thing since it started.
     """
     usage = status_feed.read(session_id)
     if usage and usage.version:
@@ -102,30 +94,10 @@ def running(session_id: str) -> str:
     return transcript.last_version(session_id)
 
 
-def note_restarted(session_id: str) -> None:
-    """Remember that this session was just relaunched by the bot."""
-    _restarted[session_id] = time.monotonic()
-
-
-def settled(session_id: str) -> None:
-    """Its version has been read since the restart — stop holding off."""
-    _restarted.pop(session_id, None)
-
-
-def settling(session_id: str) -> bool:
-    """Whether the session was restarted too recently to judge its version."""
-    since = _restarted.get(session_id)
-    return since is not None and time.monotonic() - since < _SETTLE
-
-
-def forget(session_id: str) -> None:
-    _restarted.pop(session_id, None)
-
-
 def outdated(session_version: str, disk_version: str) -> bool:
     """Whether a restart would actually change anything.
 
-    Unknown on either side means "do not claim anything": a missing payload is
+    Unknown on either side means "do not claim anything": a missing report is
     not evidence of an old build, and an upgrade badge nobody can act on is
     worse than no badge at all.
     """
@@ -135,8 +107,6 @@ def outdated(session_version: str, disk_version: str) -> bool:
 
 def stale(session_id: str, disk_version: str) -> str:
     """The session's version if it is behind *disk_version*, else ""."""
-    if settling(session_id):
-        return ""
     mine = running(session_id)
     return mine if outdated(mine, disk_version) else ""
 

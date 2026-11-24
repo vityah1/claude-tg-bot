@@ -1,30 +1,22 @@
-"""Exact session metrics, straight from the status-line payload.
+"""Exact session metrics: context, rate limits, model, cost, version.
 
-Claude Code hands its status line a JSON document with real numbers. Reading
-those back out of the rendered bars would be lossy — the bars are rounded to
-10 % steps and the reset times to minutes — so `bin/statusline-tee.sh` mirrors
-the payload into ~/.cache/ccbot/status/<session_id>.json and this module reads
-it. Screen scraping stays as a fallback for when the tee is not installed.
+The session host reports them as events, the bridge keeps the latest per
+session and answers `read()` through the `sdk_usage` hook, so every reader —
+the card, /usage, the alerts, the version check — asks here.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
-from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from . import paths
 from .i18n import N_, _
 
 log = logging.getLogger("ccbot.status_feed")
-
-FEED_DIR = paths.STATUS_DIR
 
 
 def _tz() -> tzinfo | None:
@@ -45,9 +37,6 @@ def _tz() -> tzinfo | None:
 
 
 TZ = _tz()
-
-# Beyond this the figures describe a session that has not redrawn in a while.
-STALE_AFTER = 180.0
 
 # Looked up long after import, so marked here and translated at the use site.
 _LIMIT_LABELS = {
@@ -109,11 +98,6 @@ class Usage:
     output_tokens: int = 0
     cost_usd: float = 0.0
     limits: list[Limit] = field(default_factory=list)
-    age: float = 0.0
-
-    @property
-    def stale(self) -> bool:
-        return self.age > STALE_AFTER
 
     @property
     def ctx_tokens(self) -> int:
@@ -121,89 +105,11 @@ class Usage:
         return self.input_tokens
 
 
-def path_for(session_id: str) -> Path:
-    return FEED_DIR / f"{session_id}.json"
-
-
-def available() -> bool:
-    """Whether the tee wrapper is feeding us anything at all."""
-    return FEED_DIR.is_dir() and any(FEED_DIR.glob("*.json"))
-
-
-# SDK sessions run no status line: their metrics come from the session host's
-# events, and the bridge answers for them here (set by the bot at start-up), so
-# every reader — the card, /usage, the alerts, the version check — sees both.
+# The bridge's answer for a session (set by the bot at start-up).
 sdk_usage: Callable[[str], Usage | None] | None = None
 
 
 def read(session_id: str) -> Usage | None:
-    if sdk_usage is not None:
-        u = sdk_usage(session_id)
-        if u is not None:
-            return u
-    p = path_for(session_id)
-    try:
-        raw = p.read_text()
-        age = time.time() - p.stat().st_mtime
-    except OSError:
-        return None
-    try:
-        d = json.loads(raw)
-    except ValueError:
-        return None
+    """The session's latest metrics, or None before it has reported any."""
+    return sdk_usage(session_id) if sdk_usage is not None else None
 
-    ctx = d.get("context_window") or {}
-    cur = ctx.get("current_usage") or {}
-    used = ctx.get("used_percentage")
-    cost = d.get("cost") or {}
-
-    limits = []
-    for key, val in (d.get("rate_limits") or {}).items():
-        if not isinstance(val, dict):
-            continue
-        pct = val.get("used_percentage")
-        if pct is None:
-            continue
-        limits.append(Limit(key=key, pct=round(float(pct)),
-                            resets_at=val.get("resets_at")))
-    # five_hour before seven_day before anything model-specific
-    order = {"five_hour": 0, "seven_day": 1}
-    limits.sort(key=lambda lim: (order.get(lim.key, 2), lim.key))
-
-    return Usage(
-        session_id=d.get("session_id") or session_id,
-        session_name=d.get("session_name") or "",
-        model=(d.get("model") or {}).get("display_name") or "",
-        model_id=(d.get("model") or {}).get("id") or "",
-        effort=(d.get("effort") or {}).get("level") or "",
-        version=d.get("version") or "",
-        cwd=d.get("cwd") or "",
-        transcript_path=d.get("transcript_path") or "",
-        ctx_pct=round(float(used)) if used is not None else None,
-        ctx_window=int(ctx.get("context_window_size") or 0),
-        input_tokens=int(
-            (cur.get("input_tokens") or 0)
-            + (cur.get("cache_read_input_tokens") or 0)
-            + (cur.get("cache_creation_input_tokens") or 0)
-        ),
-        output_tokens=int(ctx.get("total_output_tokens") or 0),
-        cost_usd=float(cost.get("total_cost_usd") or 0.0),
-        limits=limits,
-        age=age,
-    )
-
-
-def cleanup(max_age_days: int = 3) -> int:
-    """Drop payloads for sessions that are long gone."""
-    if not FEED_DIR.is_dir():
-        return 0
-    cutoff = time.time() - max_age_days * 86400
-    removed = 0
-    for f in FEED_DIR.glob("*.json"):
-        try:
-            if f.stat().st_mtime < cutoff:
-                f.unlink()
-                removed += 1
-        except OSError:
-            continue
-    return removed

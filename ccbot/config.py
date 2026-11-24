@@ -16,7 +16,6 @@ load_dotenv(ROOT / ".env")
 class Config:
     token: str
     allowed: frozenset[int]
-    poll_interval: float = 1.5
     # Empty means "no shortlist": directories are discovered from the
     # user's own Claude history instead of being baked into the code.
     dirs: tuple[str, ...] = ()
@@ -46,7 +45,6 @@ def load() -> Config:
     return Config(
         token=token,
         allowed=ids,
-        poll_interval=float(os.getenv("CCBOT_POLL_INTERVAL") or 1.5),
         dirs=dirs,
         log_level=(os.getenv("CCBOT_LOG_LEVEL") or "INFO").upper(),
     )

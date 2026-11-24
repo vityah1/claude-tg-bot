@@ -1,8 +1,9 @@
 """Reading Claude Code session transcripts (`~/.claude/projects/*/<uuid>.jsonl`).
 
-Assistant output is taken from here rather than scraped off the terminal: the
-transcript is clean UTF-8 with no escape sequences, no line wrapping and no
-scrollback limit. The terminal is only consulted for blocking dialogs.
+The live output of a session arrives as events of the session host; the
+transcript is read for what outlives the process — where a session stopped
+(`recap`), the captions of closed sessions, the version and the account a
+session last ran under.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ _VERSION_RE = re.compile(r'"version"\s*:\s*"([^"]+)"')
 
 @dataclass
 class Event:
-    kind: str          # "text" | "tool" | "title" | "enqueue" | "dequeue" | "remove"
+    kind: str          # "text" | "tool"
     text: str
 
 
@@ -77,38 +78,6 @@ def prompt_text(line: str) -> str | None:
     return text
 
 
-def prompt_from_line(line: str, limit: int = 60) -> str | None:
-    """The user's typed message, flattened onto one line for a caption."""
-    text = prompt_text(line)
-    return " ".join(text.split())[:limit] if text else None
-
-
-def first_prompt(session_id: str, limit: int = 60) -> str | None:
-    """What the session was asked first — a label a person can recognise.
-
-    Only the head of the transcript is read: if the opening prompt is not in
-    the first megabyte, it is not going to be found at all.
-    """
-    path = find_transcript(session_id)
-    if path is None:
-        return None
-    try:
-        with path.open("rb") as fh:
-            read = 0
-            for raw in fh:
-                read += len(raw)
-                if read > PROMPT_SCAN_BYTES:
-                    break
-                line = raw.decode("utf-8", "replace")
-                if '"type":"user"' in line.replace(" ", ""):
-                    found = prompt_from_line(line, limit)
-                    if found:
-                        return found
-    except OSError:
-        return None
-    return None
-
-
 def _summarise_tool(block: dict) -> str:
     name = block.get("name", "tool")
     inp = block.get("input") or {}
@@ -130,30 +99,6 @@ def parse_line(raw: str) -> list[Event]:
         return []
 
     rtype = rec.get("type")
-    if rtype == "ai-title":
-        title = rec.get("aiTitle")
-        return [Event("title", title)] if title else []
-
-    if rtype == "queue-operation":
-        # A prompt sent while Claude is busy waits in Claude Code's queue, and
-        # the TUI draws it as "❯ …" right above an open dialog — exactly like
-        # the prompt that opened the turn. The screen cannot tell them apart;
-        # these records can. Text is the item's kind, not words to show:
-        # "prompt" (typed or pasted by a human), "other" (a background-task
-        # notification, a message from another session or agent — none of
-        # them drawn as "❯"), or "" when the record does not say.
-        op = rec.get("operation")
-        if op not in ("enqueue", "dequeue", "remove"):
-            return []
-        content = rec.get("content")
-        if not isinstance(content, str):
-            kind = "prompt" if op == "enqueue" else ""
-        else:
-            head = content.lstrip()
-            kind = ("prompt" if not head.startswith("<")
-                    or head.startswith("<pasted_content") else "other")
-        return [Event(op, kind)]
-
     if rtype != "assistant" or rec.get("isSidechain"):
         return []
 
@@ -176,7 +121,7 @@ def parse_line(raw: str) -> list[Event]:
             # The reasoning itself is stored redacted (an empty string next to
             # a signature). What does arrive non-empty is the short progress
             # note Claude addresses to the user mid-turn ("Backfill is writing
-            # in batches…"); the TUI draws it as an ordinary "●" message, so
+            # in batches…"); Claude Code shows it as an ordinary message, so
             # dropping it lost whole paragraphs (2026-10-09, 4ae7b1ec).
             txt = (block.get("thinking") or "").strip()
             if txt:
@@ -229,89 +174,6 @@ def recap(session_id: str, steps: int = 8, span: int = 800 * 1024) -> Recap:
                 out.answer = ev.text
     out.steps = tools[-steps:]
     return out
-
-
-class TranscriptReader:
-    """Incremental tail of one session's transcript."""
-
-    def __init__(self, session_id: str, offset: int = 0):
-        self.session_id = session_id
-        self.offset = offset
-        self._path: Path | None = None
-
-    @property
-    def path(self) -> Path | None:
-        if self._path is None or not self._path.exists():
-            self._path = find_transcript(self.session_id)
-        return self._path
-
-    def seek_to_end(self) -> None:
-        """Ignore everything written so far (used when adopting a session)."""
-        p = self.path
-        self.offset = p.stat().st_size if p else 0
-
-    def queue_before(self, span: int = 256 * 1024) -> list[Event]:
-        """The queue records among the last *span* bytes behind the offset.
-
-        A reader that starts mid-file (a restarted bot, an adopted session)
-        has not seen the prompts already waiting in Claude Code's queue.
-        """
-        p = self.path
-        if p is None or self.offset <= 0:
-            return []
-        start = max(0, self.offset - span)
-        try:
-            with p.open("rb") as fh:
-                fh.seek(start)
-                data = fh.read(self.offset - start)
-        except OSError:
-            return []
-        lines = data.decode("utf-8", "replace").splitlines()
-        if start:
-            lines = lines[1:]       # the first one is cut
-        return [ev for raw in lines if '"queue-operation"' in raw
-                for ev in parse_line(raw)]
-
-    def queue_ahead(self) -> list[Event]:
-        """The queue records written past the offset, leaving it where it is."""
-        p = self.path
-        if p is None:
-            return []
-        try:
-            with p.open("rb") as fh:
-                fh.seek(self.offset)
-                data = fh.read()
-        except OSError:
-            return []
-        return [ev for raw in data.decode("utf-8", "replace").splitlines()
-                if '"queue-operation"' in raw for ev in parse_line(raw)]
-
-    def read_new(self) -> list[Event]:
-        p = self.path
-        if p is None:
-            return []
-        try:
-            size = p.stat().st_size
-        except OSError:
-            return []
-        if size < self.offset:      # transcript replaced — start over
-            self.offset = 0
-        if size == self.offset:
-            return []
-
-        events: list[Event] = []
-        with p.open("rb") as fh:
-            fh.seek(self.offset)
-            data = fh.read()
-            # Keep a trailing partial line for the next poll.
-            last_nl = data.rfind(b"\n")
-            if last_nl == -1:
-                return []
-            chunk, self.offset = data[:last_nl], self.offset + last_nl + 1
-        for raw in chunk.decode("utf-8", "replace").splitlines():
-            if raw.strip():
-                events.extend(parse_line(raw))
-        return events
 
 
 def last_version(session_id: str) -> str:
