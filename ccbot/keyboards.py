@@ -122,7 +122,7 @@ def sessions_kb(managed: list[SessionView], foreign: list[SessionView],
 
 
 def confirm_kb(session_id: str, kind: str, back: str = "hist",
-               asking: bool = False) -> InlineKeyboardMarkup:
+               asking: bool = False, movable: bool = False) -> InlineKeyboardMarkup:
     """Detail card actions: a button caption is one line, a card is not.
 
     *asking*: the session waits on a choice, so its question can be posted
@@ -151,7 +151,21 @@ def confirm_kb(session_id: str, kind: str, back: str = "hist",
             InlineKeyboardButton(text=_("▶️ Open"), callback_data=f"open:{s}"),
             InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
         )
+        if movable:
+            # Walking the list moving sessions one by one: the result is
+            # shown on this card, which then leads back to the list.
+            kb.row(InlineKeyboardButton(text=_("↗️ Move to SDK"),
+                                        callback_data=f"k:{s}:tosdkl"))
         kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="ls"))
+    return kb.as_markup()
+
+
+def back_to_list_kb(extra: InlineKeyboardMarkup | None = None) -> InlineKeyboardMarkup:
+    """A settled card's way back to /sessions (after any buttons of its own)."""
+    kb = InlineKeyboardBuilder()
+    for row in (extra.inline_keyboard if extra else []):
+        kb.row(*row)
+    kb.row(InlineKeyboardButton(text=_("⬅️ To the list"), callback_data="ls"))
     return kb.as_markup()
 
 
@@ -676,11 +690,12 @@ def auth_link_kb(url: str, serial: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def move_anyway_kb(session_id: str) -> InlineKeyboardMarkup:
+def move_anyway_kb(session_id: str, in_list: bool = False) -> InlineKeyboardMarkup:
     """Past a refusal that only background work stood behind."""
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text=_("↗️ Move anyway — the background work stops"),
-                                callback_data=f"k:{sid8(session_id)}:tosdkf"))
+                                callback_data=f"k:{sid8(session_id)}:"
+                                              f"{'tosdklf' if in_list else 'tosdkf'}"))
     return kb.as_markup()
 
 

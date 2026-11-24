@@ -62,6 +62,7 @@ from .keyboards import (
     ask_kb,
     auth_link_kb,
     auth_retry_kb,
+    back_to_list_kb,
     cancel_rename_kb,
     choice_kb,
     confirm_kb,
@@ -2513,15 +2514,28 @@ class CCBot:
         else:
             await here.answer(text, reply_markup=kb, parse_mode="HTML")
 
-    async def _move_to_sdk(self, chat_id: int, mgd, force: bool = False) -> None:
-        """«↗️ Move to SDK»: the same session, carried on by the session host."""
-        note = await self.bot.send_message(
-            chat_id, _("⏳ Moving <b>{name}</b> to the Agent SDK — /exit in tmux, then "
-                       "the session host resumes it…").format(
-                           name=html.escape(mgd.full_label)), parse_mode="HTML")
+    async def _move_to_sdk(self, chat_id: int, mgd, force: bool = False,
+                           card: Message | None = None) -> None:
+        """«↗️ Move to SDK»: the same session, carried on by the session host.
+
+        From a /sessions card (*card*) the progress and the result take that
+        card's place and lead back to the list, so the whole list can be
+        walked without a message per session piling up below it.
+        """
+        waiting = _("⏳ Moving <b>{name}</b> to the Agent SDK — /exit in tmux, then "
+                    "the session host resumes it…").format(name=html.escape(mgd.full_label))
+        note = card
+        if note is not None:
+            with contextlib.suppress(Exception):
+                await self._safe_edit(note, waiting, parse_mode="HTML", reply_markup=None)
+        else:
+            note = await self.bot.send_message(chat_id, waiting, parse_mode="HTML")
         self.store.remember_message(note.message_id, mgd.session_id)
         res = await self._restart_session(mgd, force=force, to_sdk=True)
-        kb = move_anyway_kb(mgd.session_id) if res.forceable and not res.ok else None
+        kb = move_anyway_kb(mgd.session_id, in_list=card is not None) \
+            if res.forceable and not res.ok else None
+        if card is not None:
+            kb = back_to_list_kb(kb)
         if res.ok:
             text = _("✅ <b>{name}</b> now runs through the Agent SDK — the same session, "
                      "context and all.").format(name=html.escape(mgd.full_label))
@@ -4490,8 +4504,9 @@ class CCBot:
             await self._safe_edit(
                 msg,
                 await self._managed_details(mgd), parse_mode="HTML",
-                reply_markup=confirm_kb(mgd.session_id, "managed",
-                                        asking=self._asking(mgd)),
+                reply_markup=confirm_kb(
+                    mgd.session_id, "managed", asking=self._asking(mgd),
+                    movable=not mgd.is_sdk and self.settings.sdk != "off"),
             )
             # The list became this session's card: a reply to it now means
             # this session, not whichever one happens to be active.
@@ -6178,11 +6193,13 @@ class CCBot:
             self.watcher.screen_when_idle(mgd.session_id)
             await c.answer(_("/context sent — the breakdown comes back as a "
                              "screen"))
-        elif action in ("tosdk", "tosdkf"):
+        elif action in ("tosdk", "tosdkf", "tosdkl", "tosdklf"):
             await c.answer(_("Moving it…"))
             here = _editable(c)
+            in_list = action.startswith("tosdkl")
             await self._move_to_sdk(here.chat.id if here else self.cfg.owner, mgd,
-                                    force=action == "tosdkf")
+                                    force=action.endswith("f"),
+                                    card=here if in_list else None)
         elif action == "restart":
             # Answered first: /exit and the resume take seconds, and a button
             # that seems to do nothing gets pressed again.
