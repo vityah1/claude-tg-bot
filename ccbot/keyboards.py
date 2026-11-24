@@ -155,9 +155,21 @@ def confirm_kb(session_id: str, kind: str, back: str = "hist",
     return kb.as_markup()
 
 
-def session_kb(v: SessionView, asking: bool = False) -> InlineKeyboardMarkup:
+def session_kb(v: SessionView, asking: bool = False,
+               sdk: bool = False) -> InlineKeyboardMarkup:
     s = sid8(v.session_id)
     kb = InlineKeyboardBuilder()
+    if sdk:
+        # An SDK session gets only what works for it today; the screen, the
+        # pickers, /login and a restart come with the later stages, and a
+        # button that answers "not yet" is a button that should not be there.
+        kb.row(InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
+               InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
+               InlineKeyboardButton(text="🗜 /compact", callback_data=f"k:{s}:compact"))
+        kb.row(InlineKeyboardButton(text=_("✏️ Rename"), callback_data=f"ren:{s}"),
+               InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"))
+        kb.row(InlineKeyboardButton(text=_("⬅️ Sessions"), callback_data="ls"))
+        return kb.as_markup()
     if asking:
         # The session waits on a question whose card may be far up the chat
         # by now; this sends it again at the bottom (`CCBot._show_question`).

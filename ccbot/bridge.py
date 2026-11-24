@@ -134,6 +134,17 @@ class SdkBridge:
         self._fail_told = 0.0
         self._down_told = False
         self.epoch: str | None = store.meta_get("host_epoch")
+        # Prompts a host restart or a crash cut off, offered again by
+        # «🔁 Send again» (`again:<n>`): (launch name, text).
+        self.again: dict[int, tuple[str, str]] = {}
+        try:
+            saved = json.loads(store.meta_get("sdk_again") or "{}")
+            self.again = {int(k): (str(v[0]), str(v[1])) for k, v in saved.items()}
+        except (ValueError, TypeError, IndexError):
+            self.again = {}
+        # Never handed out twice: an old button must not reach a newer text.
+        self.again_next = int(store.meta_get("sdk_again_next") or 0) or \
+            (max(self.again, default=0) + 1)
 
     # -- lifecycle -------------------------------------------------------
     def start(self) -> None:
@@ -496,7 +507,8 @@ class SdkBridge:
         if prompts:
             lines += ["", _("Cut off with it:")] + [
                 f"• <code>{html.escape(p[:300])}</code>" for p in prompts]
-        await self._say("\n".join(lines), mgd.session_id, parse_mode="HTML")
+        await self._say("\n".join(lines), mgd.session_id, parse_mode="HTML",
+                        reply_markup=self._again_kb([(name, p) for p in prompts]))
 
     async def _notice(self, name: str, rt: _Rt, d: dict[str, Any], seq: int | None) -> None:
         if d.get("kind") == "compacted":
@@ -523,7 +535,36 @@ class SdkBridge:
             lines += ["", ngettext("❓ {count} open question was closed with it.",
                                    "❓ {count} open questions were closed with it.",
                                    len(lost)).format(count=len(lost))]
-        await self._say("\n".join(lines), parse_mode="HTML")
+        cut = [(str(item.get("name") or ""), str(p)) for item in interrupted
+               for p in item.get("prompts") or []]
+        names = {n for n, _p in cut}
+        only = self.store.by_name(next(iter(names))) if len(names) == 1 else None
+        await self._say("\n".join(lines), only.session_id if only else None,
+                        parse_mode="HTML", reply_markup=self._again_kb(cut))
+
+    def _again_kb(self, items: list[tuple[str, str]]) -> InlineKeyboardMarkup | None:
+        """«🔁 Send again» for each prompt that was cut off (at most five)."""
+        if not items:
+            return None
+        kb = InlineKeyboardBuilder()
+        for name, text in items[:5]:
+            n = self.again_next
+            self.again_next += 1
+            self.again[n] = (name, text)
+            short = " ".join(text.split())
+            kb.row(InlineKeyboardButton(
+                text=_("🔁 Send again: {text}").format(text=short)[:60],
+                callback_data=f"again:{n}"))
+        self.save_again()
+        return kb.as_markup()
+
+    def save_again(self) -> None:
+        """Keep the cut-off prompts across bot restarts, the newest fifty."""
+        for n in sorted(self.again)[:-50]:
+            del self.again[n]
+        self.store.meta_set("sdk_again", json.dumps(
+            {str(k): list(v) for k, v in self.again.items()}, ensure_ascii=False))
+        self.store.meta_set("sdk_again_next", str(self.again_next))
 
     # -- cards -----------------------------------------------------------
     async def _request_open(self, name: str, rt: _Rt, d: dict[str, Any]) -> None:
@@ -583,7 +624,8 @@ class SdkBridge:
             kb.row(InlineKeyboardButton(text=_("✅ Approve"), callback_data=f"rq:{r8}:pa"))
             kb.row(InlineKeyboardButton(text=_("✅ Approve, accept edits"),
                                         callback_data=f"rq:{r8}:pe"))
-            kb.row(InlineKeyboardButton(text=_("❌ Keep planning"),
+            kb.row(InlineKeyboardButton(text=_("✏️ Revise"), callback_data=f"rq:{r8}:pr"),
+                   InlineKeyboardButton(text=_("❌ Keep planning"),
                                         callback_data=f"rq:{r8}:pk"))
             return text, kb.as_markup()
         d = req.data
@@ -606,6 +648,8 @@ class SdkBridge:
             parts.append(f"_{rich.md_escape(str(d['reason']))}_")
         kb.row(InlineKeyboardButton(text=_("✅ Allow"), callback_data=f"rq:{r8}:a"),
                InlineKeyboardButton(text=_("❌ Deny"), callback_data=f"rq:{r8}:d"))
+        kb.row(InlineKeyboardButton(text=_("✏️ Deny with a reason"),
+                                    callback_data=f"rq:{r8}:r"))
         for i, s in enumerate((d.get("suggestions") or [])[:2]):
             label = _rule_label(s)
             if label:
@@ -667,6 +711,9 @@ class SdkBridge:
                 callback_data=f"rq:{r8}:n{req.index}"))
         if nav:
             kb.row(*nav)
+        kb.row(InlineKeyboardButton(text=_("✏️ Own answer"),
+                                    callback_data=f"rq:{r8}:t{req.index}"),
+               InlineKeyboardButton(text=_("💬 Discuss"), callback_data=f"rq:{r8}:c"))
         kb.row(InlineKeyboardButton(text=_("🚫 Don't answer"), callback_data=f"rq:{r8}:x"))
         return "\n".join(lines), kb.as_markup()
 
@@ -676,6 +723,9 @@ class SdkBridge:
         with contextlib.suppress(Exception):
             await self.bot.edit_message_reply_markup(
                 chat_id=self.chat_id, message_id=req.msg_id, reply_markup=done_kb(label))
+
+    async def redraw(self, req: _Req) -> None:
+        await self._redraw(req)
 
     async def _redraw(self, req: _Req) -> None:
         mgd = self.store.by_name(req.name)
@@ -724,6 +774,13 @@ class SdkBridge:
         elif act == "x":
             answer = {"behavior": "deny", "message": "The user chose not to answer."}
             label = _("🚫 Not answered")
+        elif act == "c":
+            # Answers nothing: Claude asks first, and the next message is read
+            # as the reply to that (the TUI's "Chat about this").
+            answer = {"behavior": "deny", "message":
+                      "The user wants to talk about this question before answering. "
+                      "Ask them what they would like to clarify, then wait for the reply."}
+            label = _("💬 To be discussed — your next message goes there")
         else:
             answer = {"behavior": "deny", "message": "The user denied this in Telegram."}
             label = _("❌ Denied")
@@ -767,19 +824,84 @@ class SdkBridge:
         elif act == "n":
             req.answers[str(q.get("question"))] = [opts[i].get("label")
                                                   for i in sorted(req.ticks)]
+        done, ok = await self._advance(req)
+        if not done:
+            await c.answer()
+            return None
+        await c.answer(_("Answered") if ok else _("Could not pass the answer on — see /log"),
+                       show_alert=not ok)
+        return mgd if ok else None
+
+    async def _advance(self, req: _Req) -> tuple[bool, bool]:
+        """After a part is answered: the next part, or the whole answer sent.
+
+        (finished, delivered) — finished False means the card now shows the
+        next part.
+        """
+        qs = req.questions
         req.ticks = set()
         if req.index < len(qs) - 1:
             req.index += 1
-            await c.answer()
             await self._redraw(req)
-            return None
+            return False, False
         summary = "; ".join(v if isinstance(v, str) else ", ".join(v)
                             for v in req.answers.values())
         ok = await self._answer(req, {"behavior": "allow", "updated_input": {
             "questions": qs, "answers": req.answers}}, "✅ " + summary)
-        await c.answer(_("Answered") if ok else _("Could not pass the answer on — see /log"),
-                       show_alert=not ok)
-        return mgd if ok else None
+        return True, ok
+
+    # -- answers typed in the chat ----------------------------------------
+    def open_question(self, mgd: Managed) -> _Req | None:
+        """The session's open AskUserQuestion, if it has one."""
+        return next((q for q in self.requests.values()
+                     if q.name == mgd.name and q.kind == "question"), None)
+
+    def text_fits(self, short: str, act: str) -> bool:
+        """Whether a ✏️ button still matches its request (and its part)."""
+        req = self.find(short)
+        if req is None:
+            return False
+        if act.startswith("t"):
+            return req.kind == "question" and act[1:].isdigit() and int(act[1:]) == req.index
+        return True
+
+    async def answer_text(self, short: str, act: str,
+                          text: str) -> tuple[str, Managed | None, str]:
+        """A message typed after ✏️ on a card: (status, the session, what happened).
+
+        *act* is the button that asked for it: "t<part>" — the text answers
+        that part of a question; "pr" — changes the plan should get; "r" — why
+        a request is denied. Status: "done" — delivered; "next" — a part taken,
+        the card shows the next one; "failed" — not applied (the caller must
+        not drop the text: the session, when known, is returned with it).
+        """
+        req = self.find(short)
+        if req is None:
+            return "failed", None, _("This question is no longer open.")
+        mgd = self.store.by_name(req.name)
+        text = text.strip()
+        if act.startswith("t") and req.kind == "question":
+            if not act[1:].isdigit() or int(act[1:]) != req.index or not req.questions:
+                await self._redraw(req)
+                return "failed", mgd, _("The question has moved on — its card is shown again.")
+            q = req.questions[req.index]
+            req.answers[str(q.get("question"))] = text
+            done, ok = await self._advance(req)
+            if not done:
+                return "next", mgd, _("✏️ Answer taken — the next part is on the card.")
+            return ("done", mgd, _("✏️ Answered.")) if ok else \
+                ("failed", mgd, _("Could not pass the answer on — see /log"))
+        if act == "pr":
+            answer = {"behavior": "deny", "message":
+                      f"The user wants the plan changed: {text}. Revise the plan and "
+                      "present it again with ExitPlanMode."}
+            label = _("✏️ Sent back with changes")
+        else:
+            answer = {"behavior": "deny", "message": f"The user denied this, saying: {text}"}
+            label = _("❌ Denied with a reason")
+        ok = await self._answer(req, answer, label)
+        return ("done", mgd, label) if ok else \
+            ("failed", mgd, _("Could not pass the answer on — see /log"))
 
     async def _answer(self, req: _Req, answer: dict[str, Any], label: str) -> bool:
         try:

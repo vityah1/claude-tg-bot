@@ -2567,6 +2567,59 @@ class CCBot:
         with contextlib.suppress(Exception):
             await note.edit_text(text, parse_mode="HTML")
 
+    async def _ask_sdk_text(self, c: CallbackQuery, msg: Message, chat_id: int,
+                            short: str, act: str) -> None:
+        """✏️ on an SDK card: the next message is the answer, the changes, the reason."""
+        req = self.bridge.find(short)
+        if req is None:
+            await c.answer(_("This question is no longer open"), show_alert=True)
+            return
+        if not self.bridge.text_fits(short, act):
+            await c.answer(_("The card was out of date — it is shown again"))
+            await self.bridge.redraw(req)
+            return
+        await c.answer()
+        prompt = {"pr": _("✏️ Write what to change in the plan — one message."),
+                  "r": _("✏️ Write why — one message; Claude gets it with the refusal.")
+                  }.get(act, _("✏️ Write your answer — one message."))
+        owner = self.store.by_name(req.name)
+        self.pending[chat_id] = ("sdktext", short, act,
+                                 owner.session_id if owner else "", time.time())
+        self.prompt_cards.pop(chat_id, None)
+        self._hold_card(chat_id, msg, "question")
+        ask = await msg.answer(prompt)
+        if owner is not None:
+            self.store.remember_message(ask.message_id, owner.session_id)
+        self._hold_card(chat_id, ask, "prompt")
+
+    async def _send_again(self, c: CallbackQuery, msg: Message, chat_id: int,
+                          arg: str) -> None:
+        """«🔁 Send again» under a cut-off prompt: the same text, same session."""
+        n = int(arg) if arg.isdigit() else -1
+        # Popped before the first await: a double tap must not send it twice.
+        item = self.bridge.again.pop(n, None)
+        mgd = self.store.by_name(item[0]) if item else None
+        if item is None or mgd is None:
+            await c.answer(_("I no longer keep that text — copy it from the card."),
+                           show_alert=True)
+            return
+        try:
+            await self._send_prompt(mgd, item[1], guard=True)
+        except tmux.Refused:
+            self.bridge.again[n] = item
+            await c.answer(_("It has a question open — answer it first."), show_alert=True)
+            return
+        except HostError as exc:
+            self.bridge.again[n] = item
+            await c.answer(_host_refusal(exc)[:190], show_alert=True)
+            return
+        self.bridge.save_again()
+        await c.answer(_("Sent again"))
+        await self._ack(msg, _("🔁 Sent again to <b>{name}</b>").format(
+            name=html.escape(mgd.full_label)), mgd)
+        if self._focus(chat_id, mgd):
+            await self._say_focused(msg, mgd)
+
     async def _interrupt_sdk(self, m: Message | None, mgd, note: str) -> None:
         """Esc for an SDK session: interrupt the turn, keep the session."""
         try:
@@ -2979,6 +3032,12 @@ class CCBot:
                         and dialog.allows_free_text
                         and len(held.batches) == 1
                         and not _is_command(held.batches[0]))
+                if mgd.is_sdk:
+                    # Any SDK question takes a typed answer for its current part.
+                    asked = self.bridge.open_question(mgd)
+                    held.question_sig = f"{asked.rid}:{asked.index}" if asked else ""
+                    free = (asked is not None and len(held.batches) == 1
+                            and not _is_command(held.batches[0]))
                 # Esc on the feedback-drafts question throws the drafts away
                 # and exits, and on the trust question it exits too: not
                 # something to do on the way to sending text.
@@ -3138,6 +3197,39 @@ class CCBot:
                 await self._settle(msg, _(
                     "💬 Question in <b>{name}</b> closed, message sent").format(
                         name=name), held.session_id)
+        elif action == "ans" and mgd.is_sdk:
+            asked = self.bridge.open_question(mgd)
+            if asked is None and not self.bridge.question_open(mgd):
+                # Answered meanwhile from its card: the text goes as it is.
+                await c.answer()
+                if await self._held_deliver_or_rehold(held, mgd):
+                    await self._settle(msg, _(
+                        "➡️ The question had closed — sent to <b>{name}</b> "
+                        "as an ordinary message").format(name=name),
+                        held.session_id)
+                return
+            if (asked is None or f"{asked.rid}:{asked.index}" != held.question_sig
+                    or len(held.batches) != 1):
+                self._rehold(held)
+                await c.answer(_("The question has changed — it is above"),
+                               show_alert=True)
+                await self._ask_held(held, mgd)
+                return
+            await c.answer()
+            status, answered, note = await self.bridge.answer_text(
+                asked.rid[:8], f"t{asked.index}", _batch_text(held.batches[0]))
+            log.info("held batch given as the sdk answer: id=%s status=%s",
+                     held.session_id[:8], status)
+            if status == "failed":
+                # Nothing was delivered: the text waits again, card and all.
+                self._rehold(held)
+                with contextlib.suppress(Exception):
+                    await msg.answer(note)
+                await self._ask_held(held, mgd)
+                return
+            await self._settle(msg, html.escape(note), held.session_id)
+            if status == "done" and answered is not None and self._focus(chat_id, answered):
+                await self._say_focused(msg, answered)
         elif action == "ans":
             blocked, dialog = await self._question_open(mgd)
             if not blocked:
@@ -3767,6 +3859,34 @@ class CCBot:
         # search for "/sessions": let it through to its own handler.
         if pend and pend[0] == "hfind" and not text.startswith("/"):
             await self._search_from_text(m, text)
+            return
+        if pend and pend[0] == "sdktext" and not text.startswith("/"):
+            _kind, short, act, owner_sid, _ts = pend
+            status, mgd, note = await self.bridge.answer_text(short, act, text)
+            if mgd is None and owner_sid:
+                # The request is gone altogether: the session it belonged to
+                # still gets the text.
+                mgd = self.store.get(self.store.follow(owner_sid))
+            # Only the "write your answer" prompt goes: the card is the
+            # bridge's — it shows the next part, or the answer, by now.
+            for msg_id, role in self.prompt_cards.pop(chat_id, []):
+                if role == "prompt":
+                    await self._delete_quietly(chat_id, msg_id)
+            if status == "failed" and mgd is not None:
+                # Not applied, and not lost: it goes to the session the way
+                # any message does — held there, with its own card, while a
+                # question is open.
+                reply = await m.answer(note + "\n" + _(
+                    "Your message goes to the session as an ordinary message."))
+                self.store.remember_message(reply.message_id, mgd.session_id)
+                await self._dispatch(chat_id, [_Item(message=m, text=text,
+                                                     sender=_sender_name(m))], mgd)
+                return
+            reply = await m.answer(note)
+            if mgd is not None:
+                self.store.remember_message(reply.message_id, mgd.session_id)
+                if status == "done" and self._focus(chat_id, mgd):
+                    await self._say_focused(m, mgd)
             return
         if pend and pend[0] == "rename":
             _kind, session_id, _ts = pend
@@ -4679,9 +4799,17 @@ class CCBot:
             return
 
         if data.startswith("rq:"):
+            short, _sep, act = data[3:].partition(":")
+            if act == "pr" or act == "r" or (act[:1] == "t" and act[1:].isdigit()):
+                await self._ask_sdk_text(c, msg, chat_id, short, act)
+                return
             answered = await self.bridge.callback(c, data[3:])
             if answered is not None and self._focus(chat_id, answered):
                 await self._say_focused(msg, answered)
+            return
+
+        if data.startswith("again:"):
+            await self._send_again(c, msg, chat_id, data[6:])
             return
 
         if data.startswith("nds:"):
@@ -5125,7 +5253,7 @@ class CCBot:
         await account.fill([view])
         if view.account:
             text += "\n" + account_line(view.account)
-        return text, session_kb(view, self._asking(mgd))
+        return text, session_kb(view, self._asking(mgd), sdk=mgd.is_sdk)
 
     async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
         msg = _editable(c)
