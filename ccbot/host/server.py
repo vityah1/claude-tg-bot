@@ -23,6 +23,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     PermissionResultDeny,
     ResultMessage,
     TextBlock,
@@ -284,11 +285,27 @@ class Host:
             return PermissionResultDeny(message="This is a side question: answer from "
                                                 "what you already know, without tools.")
 
-        # No tools at all, by the options themselves: a callback is asked only
-        # after the user's allow rules and default mode have had their say.
-        opts = ClaudeAgentOptions(cwd=row.cwd, cli_path=claude_bin(), resume=sid,
-                                  fork_session=True, tools=[], permission_mode="default",
-                                  can_use_tool=no_tools)
+        async def deny_hook(input_data, tool_use_id, context):
+            # Before any allow rule or mode: a side question runs no tools.
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason": "Side question: answer without tools."}}
+
+        # Everything that opens the prompt — the model, the mode, the tool list
+        # — is kept as the session has it, so the fork reads the session's
+        # cached context (~10% of the price) instead of writing it anew
+        # (measured 2026-11-24 on 105k tokens: 108k read / 163 written,
+        # against 57k read / 92k written with the tools taken away).
+        info = (actor.info if actor else row.info) or {}
+        chosen = info.get("chosen") or {}
+        model = chosen.get("model") or info.get("model") or None
+        mode = info.get("mode") if info.get("mode") in (
+            "default", "acceptEdits", "plan", "auto", "bypassPermissions", "dontAsk") else None
+        opts = ClaudeAgentOptions(
+            cwd=row.cwd, cli_path=claude_bin(), resume=sid, fork_session=True,
+            model=model, permission_mode=mode,  # pyright: ignore[reportArgumentType]
+            hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[deny_hook])]},  # pyright: ignore[reportArgumentType]
+            can_use_tool=no_tools)
         texts: list[str] = []
         fork = ""
 
@@ -302,6 +319,10 @@ class Host:
                                      if isinstance(b, TextBlock) and b.text.strip())
                     if isinstance(msg, ResultMessage):
                         fork = msg.session_id
+                        log.info("side question for %s: usage %s", c["name"], {
+                            k: (msg.usage or {}).get(k) for k in (
+                                "cache_read_input_tokens", "cache_creation_input_tokens",
+                                "output_tokens")})
 
         try:
             await asyncio.wait_for(ask(), _SIDE_TIMEOUT)
