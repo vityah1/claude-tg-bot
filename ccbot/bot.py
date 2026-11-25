@@ -66,7 +66,6 @@ from .keyboards import (
     ACTIVE_ICON,
     HISTORY_PAGE,
     STATUS_ICON,
-    ask_kb,
     auth_link_kb,
     auth_retry_kb,
     cancel_kb,
@@ -81,6 +80,7 @@ from .keyboards import (
     history_kb,
     lang_kb,
     project_dirs_kb,
+    recap_kb,
     reroute_kb,
     restart_confirm_kb,
     route_kb,
@@ -1950,7 +1950,8 @@ class CCBot:
         doc = "\n\n".join(parts)
         if len(doc) > rich.DOC_LIMIT:
             doc = doc[:rich.DOC_LIMIT - 1] + "…"
-        kb = ask_kb(mgd.session_id) if self.bridge.question_open(mgd) else None
+        kb = recap_kb(mgd.session_id, asking=self.bridge.question_open(mgd),
+                      can_end=state in ("idle", "dormant"))
         msg = await rich.send(self.bot, chat_id, markdown=doc, reply_markup=kb)
         if msg is None:
             chunks = util.split_text(plain_text(doc))
@@ -4157,15 +4158,37 @@ class CCBot:
                     _close_failed(name), parse_mode="HTML")
                 return
             await self._show_sessions(c)
-            await self.bot.send_message(
-                c.message.chat.id if c.message else self.cfg.owner,
-                _("<b>❌ Session {name} has ended</b>\n\n"
-                  "The transcript stays — it can be brought back from 🕘 in "
-                  "the list.").format(name=html.escape(name)),
-                parse_mode="HTML",
-            )
+            await self._say_ended(c, name)
+        elif action == "quit":
+            # «🚪 End» under a recap: the recap stays readable (the list is
+            # not drawn over it), and a session that went back to work since
+            # is not cut off.
+            if self.bridge.state(mgd) in ("busy", "waiting"):
+                await c.answer(_("{name} is working again — it was not ended.").format(
+                    name=mgd.full_label), show_alert=True)
+                return
+            await c.answer(_("Ending it…"))
+            name = mgd.full_label
+            if not await self._close(mgd.session_id):
+                await self.bot.send_message(
+                    c.message.chat.id if c.message else self.cfg.owner,
+                    _close_failed(name), parse_mode="HTML")
+                return
+            here = _editable(c)
+            if here is not None:
+                await self._mark(here, _("🚪 Ended"))
+            await self._say_ended(c, name)
         else:
             await c.answer(_stale_card("/sessions"), show_alert=True)
+
+    async def _say_ended(self, c: CallbackQuery, name: str) -> None:
+        await self.bot.send_message(
+            c.message.chat.id if c.message else self.cfg.owner,
+            _("<b>❌ Session {name} has ended</b>\n\n"
+              "The transcript stays — it can be brought back from 🕘 in "
+              "the list.").format(name=html.escape(name)),
+            parse_mode="HTML",
+        )
 
     # ------------------------------------------------------------------- run
     # Shown in Telegram's "/" menu, so the commands are discoverable.

@@ -285,12 +285,18 @@ def auth_retry_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def ask_kb(session_id: str) -> InlineKeyboardMarkup:
-    """«🔔 Show the question» on its own, under a recap of a waiting session."""
+def recap_kb(session_id: str, asking: bool, can_end: bool) -> InlineKeyboardMarkup | None:
+    """Under «📜 Where it stopped»: «🔔 Show the question» for a waiting
+    session, «🚪 End» for one that has finished — a recap is mostly read to
+    make sure the work is done, and then the session is left (2026-11-25)."""
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
-                                callback_data=f"k:{sid8(session_id)}:ask"))
-    return kb.as_markup()
+    if asking:
+        kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
+                                    callback_data=f"k:{sid8(session_id)}:ask"))
+    if can_end:
+        kb.row(InlineKeyboardButton(text=_("🚪 End"),
+                                    callback_data=f"k:{sid8(session_id)}:quit"))
+    return kb.as_markup() if asking or can_end else None
 
 
 def held_kb(session_id: str, free_text: bool) -> InlineKeyboardMarkup:
