@@ -3640,7 +3640,9 @@ class CCBot:
         await account.fill([view])
         if view.account:
             text += "\n" + account_line(view.account)
-        return text, session_kb(view, self._asking(mgd))
+        has_transcript = await asyncio.to_thread(
+            transcript.find_transcript, mgd.session_id) is not None
+        return text, session_kb(view, self._asking(mgd), has_transcript)
 
     async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
         msg = _editable(c)

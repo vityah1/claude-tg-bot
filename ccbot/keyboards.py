@@ -115,9 +115,11 @@ def confirm_kb(session_id: str, kind: str, back: str = "hist",
     return kb.as_markup()
 
 
-def session_kb(v: SessionView, asking: bool = False) -> InlineKeyboardMarkup:
+def session_kb(v: SessionView, asking: bool = False,
+               has_transcript: bool = True) -> InlineKeyboardMarkup:
     """A session's controls. «📜 Where it stopped» is the recap read from its
-    transcript — there is no screen to show."""
+    transcript — there is no screen to show — so a session that has not
+    written one yet (a fresh launch) does not get the button."""
     s = sid8(v.session_id)
     kb = InlineKeyboardBuilder()
     if asking:
@@ -125,8 +127,9 @@ def session_kb(v: SessionView, asking: bool = False) -> InlineKeyboardMarkup:
         # by now; this sends it again at the bottom (`CCBot._show_question`).
         kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
                                     callback_data=f"k:{s}:ask"))
-    kb.row(InlineKeyboardButton(text=_("📜 Where it stopped"),
-                                callback_data=f"k:{s}:recap"))
+    if has_transcript:
+        kb.row(InlineKeyboardButton(text=_("📜 Where it stopped"),
+                                    callback_data=f"k:{s}:recap"))
     kb.row(InlineKeyboardButton(text="⏸ Esc", callback_data=f"k:{s}:esc"),
            InlineKeyboardButton(text=_("📊 Limits"), callback_data=f"k:{s}:usage"))
     kb.row(InlineKeyboardButton(text="🧹 /clear", callback_data=f"k:{s}:clear"),
