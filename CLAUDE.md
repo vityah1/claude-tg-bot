@@ -201,6 +201,10 @@ is restarted after a schema change.
   `bin/setup.py` and README "Manual install" — change both.
 - **The bot's files go through `paths.py`** (XDG); `.env` is the only file a
   human edits.
+- 🔴 **A chat text reads at a glance**: its point (which session, what
+  happened) bold on a line of its own, an empty line, then the details — never
+  one run-on sentence. Check it as the real message on a phone before shipping
+  (2026-11-25, «🟢 Text now goes to …» ran together: `_switch_note`).
 - 🔴 **UI strings only through gettext** (`_()`, `ngettext()` with a number;
   then `pybabel extract` → `update` → translate → `compile`, README "Adding a
   language"). Comments, docstrings and logs: English, no `_()`. No `_()` at

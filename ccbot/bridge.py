@@ -410,7 +410,7 @@ class SdkBridge:
                 self.link.down_since = loop_now
             return
         self._down_told = True
-        await self._say(_("⚠️ <b>The session host is not answering.</b>\n"
+        await self._say(_("⚠️ <b>The session host is not answering.</b>\n\n"
                           "The sessions cannot be reached until it is back. It "
                           "restarts by itself — if this lasts, see <code>journalctl "
                           "--user -u claude-tg-host</code>."), parse_mode="HTML")

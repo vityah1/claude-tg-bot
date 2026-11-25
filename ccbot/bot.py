@@ -81,6 +81,7 @@ from .keyboards import (
     history_kb,
     lang_kb,
     project_dirs_kb,
+    reroute_kb,
     restart_confirm_kb,
     route_kb,
     route_pick_kb,
@@ -384,8 +385,9 @@ def _picker_failed() -> str:
 
 
 def _close_failed(name: str) -> str:
-    return _("❌ <b>{name}</b> was not ended: the session host is not answering. "
-             "The session may still be running — try again in a minute.").format(
+    return _("<b>❌ {name} was not ended</b>\n\n"
+             "The session host is not answering. The session may still be "
+             "running — try again in a minute.").format(
                  name=html.escape(name))
 
 
@@ -624,6 +626,18 @@ def _is_command(items: list[_Item]) -> bool:
     return len(head) > 1 and head.startswith("/") and "/" not in head[1:]
 
 
+def _switch_note(mgd, previous=None) -> str:
+    """Where plain text goes now: that on a bold line of its own, the rest
+    after an empty one — run together, the session's name was lost in the
+    sentence (2026-11-25)."""
+    head = _("<b>🟢 Text now goes to {name}</b>").format(name=html.escape(mgd.full_label))
+    if previous is None:
+        return head
+    return head + "\n\n" + _(
+        "{previous} keeps working — to write to it, reply to one of its "
+        "messages.").format(previous=html.escape(previous.full_label))
+
+
 def _not_sent_text(count: int) -> str:
     """A batch whose session ended before it could go.
 
@@ -704,6 +718,11 @@ class CCBot:
         self.held: dict[str, _Held] = {}
         # Sent text that can still be taken back («↩️ Cancel»), by token.
         self.outgoing: dict[str, _Outgoing] = {}
+        # Batches taken back, kept for «📋 To another session»: token ->
+        # (chat, items, when).
+        self.cancelled: dict[str, tuple[int, list[_Item], float]] = {}
+        # Tokens already handed to a picker: a second tap is not "lost".
+        self.rerouted: set[str] = set()
         self.bridge.on_taken = self._on_taken
         # Sessions a restart is under way in: a second press must not ask
         # the host for a second one.
@@ -875,7 +894,7 @@ class CCBot:
                     await note.edit_text(_close_failed(mgd.full_label), parse_mode="HTML")
                     return
                 await note.edit_text(
-                    _("❌ Session <b>{name}</b> has ended.\n"
+                    _("<b>❌ Session {name} has ended</b>\n\n"
                       "The transcript stays — it can be brought back from 🕘 in "
                       "the list.").format(name=html.escape(mgd.full_label)),
                     parse_mode="HTML",
@@ -1186,7 +1205,8 @@ class CCBot:
                         reply_markup=done_kb(mark))
 
     async def _settle(self, msg: Message, summary: str,
-                      session_id: str | None = None) -> None:
+                      session_id: str | None = None,
+                      reply_markup: InlineKeyboardMarkup | None = None) -> None:
         """Turn a picker into the line saying what was picked on it.
 
         A line that names the session it launched belongs to that session: a
@@ -1194,7 +1214,7 @@ class CCBot:
         unregistered line sent it to whichever was active (2026-10-03).
         """
         with contextlib.suppress(Exception):
-            await msg.edit_text(summary, parse_mode="HTML")
+            await msg.edit_text(summary, parse_mode="HTML", reply_markup=reply_markup)
         if session_id:
             self.store.remember_message(msg.message_id, session_id)
 
@@ -1219,7 +1239,7 @@ class CCBot:
         """
         self.pending[chat_id] = ("rename", mgd.session_id, time.time())
         self.prompt_cards.pop(chat_id, None)
-        return _("✏️ What should <b>{name}</b> be called?\n"
+        return _("<b>✏️ What should {name} be called?</b>\n\n"
                  "Send the name in your next message (up to {limit} "
                  "characters).\n<code>-</code> gives the automatic name "
                  "back.").format(name=html.escape(mgd.full_label),
@@ -1407,16 +1427,9 @@ class CCBot:
         mgd = self.store.get(session_id)
         if mgd is None:
             return
-        tail = [_("🟢 Text now goes to <b>{name}</b>").format(
-            name=html.escape(mgd.full_label))]
         prev = self.store.get(previous) if previous and previous != session_id \
             else None
-        if prev:
-            tail = [_("🟢 Text now goes to <b>{name}</b>.\n"
-                      "<b>{previous}</b> keeps working — to write to it, "
-                      "reply to one of its messages.").format(
-                          name=html.escape(mgd.full_label),
-                          previous=html.escape(prev.full_label))]
+        tail = [_switch_note(mgd, prev)]
         note = " · " + (_("resumed") if resumed else _("new"))
         card = await self._session_card(mgd, note, chat_id=chat_id)
         if card is None:
@@ -1996,26 +2009,14 @@ class CCBot:
         log.info("active switched by pick: chat=%s -> %s (%s)",
                  chat_id, mgd.full_label, mgd.session_id[:8])
         prev = self.store.get(previous) if previous else None
-        if prev:
-            text = _("🟢 Text now goes to <b>{name}</b>.\n"
-                     "<b>{previous}</b> keeps working — to write to it, "
-                     "reply to one of its messages.").format(
-                         name=html.escape(mgd.full_label),
-                         previous=html.escape(prev.full_label))
-        else:
-            text = _("🟢 Text now goes to <b>{name}</b>").format(
-                name=html.escape(mgd.full_label))
         with contextlib.suppress(Exception):
-            note = await msg.answer(text, parse_mode="HTML")
+            note = await msg.answer(_switch_note(mgd, prev), parse_mode="HTML")
             self.store.remember_message(note.message_id, mgd.session_id)
 
     async def _say_focused(self, msg, mgd) -> None:
         """Tell the chat where its text goes now. Silence here is a trap."""
         with contextlib.suppress(Exception):
-            note = await msg.answer(
-                _("🟢 Text now goes to <b>{name}</b>").format(
-                    name=html.escape(mgd.full_label)),
-                parse_mode="HTML")
+            note = await msg.answer(_switch_note(mgd), parse_mode="HTML")
             # Registered: a reply to it means this session, not the active one.
             self.store.remember_message(note.message_id, mgd.session_id)
 
@@ -2405,7 +2406,7 @@ class CCBot:
             self._save_delayed()
             log.info("delayed batch cancelled: tok=%s items=%d", tok, len(rec.items))
             await c.answer()
-            await self._settle(msg, done, rec.session_id)
+            await self._settle(msg, done, rec.session_id, reply_markup=self._keep_cancelled(rec))
             return
         if rec.state in ("sending", "cancelling"):
             # On its way to the host, or a tap already being answered.
@@ -2433,7 +2434,7 @@ class CCBot:
             log.info("queued prompt cancelled: tok=%s uuid=%s", tok, rec.uuid[:8])
             with contextlib.suppress(Exception):
                 await c.answer()
-            await self._settle(msg, done, rec.session_id)
+            await self._settle(msg, done, rec.session_id, reply_markup=self._keep_cancelled(rec))
             return
         rec.state = "done"
         log.info("cancel too late: tok=%s why=%s", tok, res.get("why"))
@@ -2443,6 +2444,76 @@ class CCBot:
                 else _("This message can no longer be cancelled."), show_alert=True)
         with contextlib.suppress(Exception):
             await msg.edit_reply_markup(reply_markup=None)
+
+    def _prune_cancelled(self) -> None:
+        now = time.time()
+        for tok, kept in list(self.cancelled.items()):
+            if now - kept[2] > _PARKED_TTL:
+                del self.cancelled[tok]
+        if len(self.rerouted) > 200:
+            self.rerouted.clear()
+
+    def _keep_cancelled(self, rec: _Outgoing) -> InlineKeyboardMarkup:
+        """Keep a cancelled batch for a while so it can go elsewhere untyped."""
+        self._prune_cancelled()
+        self.cancelled[rec.tok] = (rec.chat_id, list(rec.items), time.time())
+        return reroute_kb(rec.tok)
+
+    async def _reroute_cancelled(self, c: CallbackQuery, msg: Message, tok: str) -> None:
+        """«📋 To another session»: the cancelled batch waits for a destination.
+
+        It becomes a held batch (`_Parked`), the way a forward does, and the
+        list of destinations is asked at the bottom of the chat: the picked
+        session gets it at once, and text typed meanwhile joins it.
+        """
+        self._prune_cancelled()
+        kept = self.cancelled.pop(tok, None)
+        if kept is None and tok in self.rerouted:
+            await c.answer()        # a second tap: the picker is already below
+            return
+        with contextlib.suppress(Exception):
+            await msg.edit_reply_markup(reply_markup=None)
+        if kept is None:
+            await c.answer(_("I no longer keep that text — send it again."), show_alert=True)
+            return
+        chat_id, items, _at = kept
+        parked = self._parked_of(chat_id)
+        fresh = parked is None
+        if parked is None:
+            parked = self.parked[chat_id] = _Parked(items=list(items), at=time.time())
+        else:
+            parked.items.extend(items)
+            parked.items.sort(key=lambda i: i.message.message_id)
+            parked.at = time.time()
+        old_ask = parked.ask_id
+        count = len(parked.items)
+        head = ngettext("📥 <b>{count} message</b> is waiting",
+                        "📥 <b>{count} messages</b> are waiting", count).format(count=count)
+        try:
+            sent = await self.bot.send_message(
+                chat_id, head + "\n\n" + self._route_picker_text(chat_id), parse_mode="HTML",
+                reply_markup=route_pick_kb(await sess.managed_views(self.store),
+                                           self.store.get_active(chat_id), back=False))
+        except Exception:
+            log.exception("reroute picker not sent: chat=%s", chat_id)
+            # Undone, so the text is not held where nobody can see it.
+            if fresh:
+                self.parked.pop(chat_id, None)
+            else:
+                parked.items = [i for i in parked.items if i not in items]
+            self.cancelled[tok] = kept
+            with contextlib.suppress(Exception):
+                await msg.edit_reply_markup(reply_markup=reroute_kb(tok))
+            with contextlib.suppress(Exception):
+                await c.answer(_("❌ Could not pass that on — see /log"), show_alert=True)
+            return
+        self.rerouted.add(tok)
+        await c.answer()
+        parked.ask_id = sent.message_id
+        if old_ask:
+            await self._delete_quietly(chat_id, old_ask)
+        log.info("cancelled batch parked for another session: chat=%s items=%d",
+                 chat_id, count)
 
     async def _recover_delayed(self) -> None:
         """Batches a restart caught inside their wait: say they were not sent."""
@@ -2454,12 +2525,13 @@ class CCBot:
         for row in rows.values() if isinstance(rows, dict) else []:
             try:
                 n = int(row.get("count") or 1)
-                text = (_("⚠️ The bot restarted before your message went to <b>{name}</b> — "
-                          "it was not sent.") if n == 1 else ngettext(
-                    "⚠️ The bot restarted before your {count} message went to "
-                    "<b>{name}</b> — it was not sent.",
-                    "⚠️ The bot restarted before your {count} messages went to "
-                    "<b>{name}</b> — they were not sent.", n)).format(
+                text = (_("<b>⚠️ Not sent to {name}</b>\n\n"
+                          "The bot restarted before your message went there.")
+                        if n == 1 else ngettext(
+                    "<b>⚠️ Not sent to {name}</b>\n\n"
+                    "The bot restarted before your {count} message went there.",
+                    "<b>⚠️ Not sent to {name}</b>\n\n"
+                    "The bot restarted before your {count} messages went there.", n)).format(
                         name=html.escape(str(row.get("label") or row.get("name"))), count=n)
                 kb = self.bridge.again_kb([(str(row["name"]), str(row["text"]))])
                 log.info("delayed batch lost to a restart: %s", row.get("name"))
@@ -2630,15 +2702,21 @@ class CCBot:
                 held.question_sig = f"{asked.rid}:{asked.index}" if asked else ""
                 free = (asked is not None and len(held.batches) == 1
                         and not _is_command(held.batches[0]))
-                text = ngettext(
-                    "❓ <b>{name}</b> has an open question (it is above — you "
-                    "may have missed it). Your message has not been sent yet, "
-                    "so that it does not pick an option for you.",
-                    "❓ <b>{name}</b> has an open question (it is above — you "
-                    "may have missed it). Your {count} messages have not been "
-                    "sent yet, so that they do not pick an option for you.",
-                    held.count).format(count=held.count,
-                                       name=html.escape(mgd.full_label))
+                text = (_(
+                    "<b>❓ {name} has an open question</b>\n\n"
+                    "It is above — you may have missed it. Your message has "
+                    "not been sent yet, so that it does not pick an option for "
+                    "you.") if held.count == 1 else ngettext(
+                    "<b>❓ {name} has an open question</b>\n\n"
+                    "It is above — you may have missed it. Your {count} message "
+                    "has not been sent yet, so that it does not pick an option "
+                    "for you.",
+                    "<b>❓ {name} has an open question</b>\n\n"
+                    "It is above — you may have missed it. Your {count} "
+                    "messages have not been sent yet, so that they do not pick "
+                    "an option for you.",
+                    held.count)).format(count=held.count,
+                                        name=html.escape(mgd.full_label))
                 kb = held_kb(held.session_id, free)
             try:
                 msg = await self.bot.send_message(
@@ -3137,19 +3215,22 @@ class CCBot:
             return
         await c.answer()
 
-    async def _show_route_picker(self, msg: Message, chat_id: int) -> None:
-        """The session list, as a list of destinations for the held batch."""
-        views = await sess.managed_views(self.store)
-        active = self.store.get_active(chat_id)
+    def _route_picker_text(self, chat_id: int) -> str:
+        """The words above the list of destinations for the held batch."""
         parked = self.parked.get(chat_id)
         title = (_("📋 <b>Where should the forwarded messages go?</b>")
                  if parked is None or parked.forwarded
                  else _("📋 <b>Where should the messages go?</b>"))
-        text = title + "\n\n" + _(
+        return title + "\n\n" + _(
             "A running session takes them straight away. ➕ starts a new one "
             "in a directory you pick, 🕘 brings a closed one back — either "
             "way they are sent as soon as it is up.")
-        await self._safe_edit(msg, text, parse_mode="HTML",
+
+    async def _show_route_picker(self, msg: Message, chat_id: int) -> None:
+        """The session list, as a list of destinations for the held batch."""
+        views = await sess.managed_views(self.store)
+        active = self.store.get_active(chat_id)
+        await self._safe_edit(msg, self._route_picker_text(chat_id), parse_mode="HTML",
                               reply_markup=route_pick_kb(views, active))
 
     # ----------------------------------------------------------------- media
@@ -3378,7 +3459,7 @@ class CCBot:
         chat_id = msg.chat.id
         # Pressing anything else abandons a half-finished prompt, so a later
         # message is not swallowed as a directory path.
-        if not data.startswith(("nd:manual", "hfind", "done", "x:")):
+        if not data.startswith(("nd:manual", "hfind", "done", "x:", "xr:")):
             self.pending.pop(chat_id, None)
             # Not deleted: the button pressed may have turned one of them
             # into its own card («Cancel» on a rename opens the session).
@@ -3397,6 +3478,10 @@ class CCBot:
 
         if data.startswith("x:"):
             await self._cancel_outgoing(c, msg, data[2:])
+            return
+
+        if data.startswith("xr:"):
+            await self._reroute_cancelled(c, msg, data[3:])
             return
 
         if data.startswith("upd:"):
@@ -4074,7 +4159,7 @@ class CCBot:
             await self._show_sessions(c)
             await self.bot.send_message(
                 c.message.chat.id if c.message else self.cfg.owner,
-                _("❌ Session <b>{name}</b> has ended.\n"
+                _("<b>❌ Session {name} has ended</b>\n\n"
                   "The transcript stays — it can be brought back from 🕘 in "
                   "the list.").format(name=html.escape(name)),
                 parse_mode="HTML",
@@ -4170,7 +4255,7 @@ class CCBot:
             log.info("came back from a requested restart in %s", took)
             await self.bot.send_message(
                 pending["chat_id"],
-                _("✅ The bot is back — the restart took {duration}.\n"
+                _("<b>✅ The bot is back — the restart took {duration}.</b>\n\n"
                   "Code: <code>{version}</code>").format(
                       duration=took, version=html.escape(service.version())),
                 parse_mode="HTML",
@@ -4180,9 +4265,9 @@ class CCBot:
         if not sess.claude_bin():
             await self.bot.send_message(
                 self.cfg.owner,
-                _("⚠️ I could not find the <code>claude</code> executable: "
-                  "the Claude Code version on disk cannot be read, and the "
-                  "session host most likely cannot start sessions either.\n"
+                _("<b>⚠️ I could not find the claude executable</b>\n\n"
+                  "The Claude Code version on disk cannot be read, and the "
+                  "session host most likely cannot start sessions either.\n\n"
                   "Set the path in .env: "
                   "<code>CCBOT_CLAUDE_BIN=/path/to/claude</code>"),
                 parse_mode="HTML",

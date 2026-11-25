@@ -102,6 +102,13 @@ def closed_kb(session_id: str, back: str = "hist") -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def reroute_kb(tok: str) -> InlineKeyboardMarkup:
+    """«📋 To another session» on a cancelled batch: no typing it again."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("📋 To another session"), callback_data=f"xr:{tok}"))
+    return kb.as_markup()
+
+
 def cancel_kb(tok: str) -> InlineKeyboardMarkup:
     """«↩️ Cancel» on a sent message the session has not taken in yet."""
     kb = InlineKeyboardBuilder()
