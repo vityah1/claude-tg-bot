@@ -19,7 +19,8 @@ import shutil
 import time
 import uuid
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -38,6 +39,7 @@ from claude_agent_sdk import (
     ThinkingBlock,
     ToolPermissionContext,
     ToolUseBlock,
+    UserMessage,
 )
 from claude_agent_sdk.types import SystemPromptPreset
 
@@ -104,6 +106,61 @@ class StartError(Exception):
     pass
 
 
+@dataclass
+class Prompt:
+    """A prompt sent to the CLI and not yet answered by a result.
+
+    The CLI does not hold a prompt sent mid-turn until the turn ends: it takes
+    it into the running turn once the current tool call finishes. Until then
+    (`taken` False) it can still be taken back (`SessionActor.cancel`).
+    """
+    uuid: str
+    text: str
+    taken: bool = False
+
+
+def encode_inflight(prompts: list[Prompt]) -> str | None:
+    return json.dumps([{"u": p.uuid, "t": p.text, "k": p.taken} for p in prompts]) \
+        if prompts else None
+
+
+def decode_inflight(raw: str | None) -> list[Prompt]:
+    """The prompts a host left unanswered; rows of an older build are dropped.
+
+    Builds before per-prompt uuids wrote a plain list of texts, and they
+    never cleared a prompt merged into another's turn, so such a row cannot
+    be told from a stale one: reporting it would announce long-answered
+    prompts as cut off.
+    """
+    try:
+        rows = json.loads(raw or "[]")
+    except ValueError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [Prompt(str(r.get("u") or ""), str(r.get("t") or ""), bool(r.get("k")))
+            for r in rows if isinstance(r, dict)]
+
+
+async def _one(uid: str, text: str) -> AsyncIterator[dict[str, Any]]:
+    """A prompt as the dict the CLI takes, carrying our uuid."""
+    yield {"type": "user", "uuid": uid, "parent_tool_use_id": None,
+           "message": {"role": "user", "content": text}}
+
+
+async def _cancel_async(client: ClaudeSDKClient, uid: str) -> dict[str, Any]:
+    """Take a prompt back from the CLI's queue (`cancel_async_message`).
+
+    The SDK has no public call for it: this is its private control channel,
+    usable because the SDK version is pinned — re-check it on an upgrade.
+    """
+    query = getattr(client, "_query", None)
+    send = getattr(query, "_send_control_request", None)
+    if send is None:
+        raise RuntimeError("this SDK cannot take a prompt back")
+    return await send({"subtype": "cancel_async_message", "message_uuid": uid}, 15.0)
+
+
 class SessionActor:
     def __init__(self, host: Host, name: str, sid: str, cwd: str):
         self.host = host
@@ -111,7 +168,9 @@ class SessionActor:
         self.sid = sid
         self.cwd = cwd
         self.state = "starting"       # starting | idle | busy | waiting | dormant | closed
-        self.prompts: list[str] = []  # sent and not answered by a result yet
+        self.prompts: list[Prompt] = []  # sent and not answered by a result yet
+        # Prompts answered lately: taking one back is "too late", not "unknown".
+        self.answered: deque[str] = deque(maxlen=200)
         self.requests: dict[str, tuple[asyncio.Future, ToolPermissionContext]] = {}
         self.calls: asyncio.Queue[tuple[Callable[[ClaudeSDKClient], Awaitable[Any]],
                                         asyncio.Future] | None] = asyncio.Queue()
@@ -154,8 +213,9 @@ class SessionActor:
             resume=self.sid if resume else None,
             session_id=None if resume else self.sid,
             # The launch name, exactly as `claude -n` gives it: history shows
-            # it, and it is the key the bot finds a session by.
-            extra_args={"name": self.name},
+            # it, and it is the key the bot finds a session by. The replay
+            # echoes each prompt back at the moment a turn takes it in.
+            extra_args={"name": self.name, "replay-user-messages": None},
             # Claude Code's own system prompt, as the terminal has it. Left
             # unset, the SDK passes `--system-prompt ""`: every SDK session ran
             # without it from the move on 2026-11-24 (found the same evening).
@@ -226,7 +286,7 @@ class SessionActor:
                 if not self.stopping and not self.host.shutting_down:
                     self.host.emit(self.name, "fault",
                                    {"kind": "session_ended", "message": self._explain(reason),
-                                    "prompts": list(self.prompts)})
+                                    "prompts": [p.text for p in self.prompts]})
                 self.host.actor_ended(self, ended)
 
     def _explain(self, reason: str) -> str:
@@ -283,20 +343,78 @@ class SessionActor:
             self.state = new
             self.host.emit(self.name, "session_state", {"state": new}, journal=False)
 
-    async def send(self, text: str) -> None:
+    def _persist(self) -> None:
+        self.host.store.set_session(self.name, inflight=encode_inflight(self.prompts))
+
+    async def send(self, text: str) -> tuple[Prompt, bool]:
+        """A prompt, and whether it has to wait: the session was working."""
+        waits = self.state in ("busy", "waiting") or bool(self.prompts)
+        prompt = Prompt(uuid.uuid4().hex, text)
         # The intent is written down before the call: a host that dies in the
         # middle of the turn can still say which prompt it was.
-        self.prompts.append(text)
-        self.host.store.set_session(self.name, inflight=json.dumps(self.prompts))
+        self.prompts.append(prompt)
+        self._persist()
         self._update_state()
         try:
-            await self.call(lambda c: c.query(text))
+            await self.call(lambda c: c.query(_one(prompt.uuid, text)))
         except Exception:
-            self.prompts.remove(text)
-            self.host.store.set_session(self.name, inflight=json.dumps(self.prompts) or None)
+            if prompt in self.prompts:
+                self.prompts.remove(prompt)
+            self._persist()
             self._update_state()
             raise
         self.host.emit(self.name, "turn_start", {"text": text[:500]})
+        return prompt, waits
+
+    def _prompt(self, uid: str | None) -> Prompt | None:
+        return next((p for p in self.prompts if uid and p.uuid == uid), None)
+
+    def _mark_taken(self, uid: str | None) -> None:
+        """A turn took the prompt in: from now on it is past taking back."""
+        prompt = self._prompt(uid)
+        if prompt is None or prompt.taken:
+            return
+        prompt.taken = True
+        self._persist()
+        self.host.emit(self.name, "prompt_taken", {"uuid": prompt.uuid}, journal=False)
+
+    async def cancel(self, uid: str) -> dict[str, Any]:
+        """Take back a prompt no turn has taken in yet."""
+        prompt = self._prompt(uid)
+        if prompt is None:
+            return {"cancelled": False, "why": "taken" if uid in self.answered else "unknown"}
+        if prompt.taken:
+            return {"cancelled": False, "why": "taken"}
+        res = await self.call(lambda c: _cancel_async(c, uid), timeout=20)
+        if not res.get("cancelled"):
+            self._mark_taken(uid)
+            return {"cancelled": False, "why": "taken"}
+        if prompt in self.prompts:
+            self.prompts.remove(prompt)
+        self._persist()
+        self._update_state()
+        log.info("[%s] prompt %s taken back", self.name, uid[:8])
+        return {"cancelled": True}
+
+    def _close_prompts(self, msg: ResultMessage) -> None:
+        """Drop the prompts this result answered.
+
+        A result names the prompts its turn took in; those, and every prompt
+        already seen taken, are done. A result naming none of ours ends a turn
+        the session started itself (a background task's notice: its origin
+        says so, and its names are empty when it took in nothing of ours).
+        Only a result with no names that no injected turn produced — an older
+        CLI — falls back to the oldest prompt.
+        """
+        ids = set(msg.user_message_uuids or [])
+        if msg.user_message_uuid:
+            ids.add(msg.user_message_uuid)
+        done = [p for p in self.prompts if p.taken or p.uuid in ids]
+        kind = (msg.origin or {}).get("kind")
+        if not done and not ids and self.prompts and kind in (None, "human"):
+            done = self.prompts[:1]
+        self.prompts = [p for p in self.prompts if p not in done]
+        self.answered.extend(p.uuid for p in done)
 
     # -- what Claude sends ---------------------------------------------
     async def _read(self, client: ClaudeSDKClient) -> None:
@@ -353,8 +471,16 @@ class SessionActor:
             elif msg.subtype == "background_tasks_changed":
                 self.host.emit(self.name, "background", {"tasks": data.get("tasks") or []})
             return
+        if isinstance(msg, UserMessage):
+            # The replay of a prompt at the moment a turn takes it in; tool
+            # results carry uuids of their own, never one of ours.
+            if not msg.parent_tool_use_id:
+                self._mark_taken(msg.uuid)
+            return
         if isinstance(msg, AssistantMessage):
             self._follow_sid(msg.session_id, strong=False)
+            for uid in msg.user_message_uuids or []:
+                self._mark_taken(uid)
             if msg.parent_tool_use_id:
                 return                  # a subagent's own words stay with it
             if msg.model:
@@ -376,11 +502,9 @@ class SessionActor:
             return
         if isinstance(msg, ResultMessage):
             self._follow_sid(msg.session_id, strong=True)
-            if self.prompts:
-                self.prompts.pop(0)
+            self._close_prompts(msg)
             self.host.store.set_session(
-                self.name, inflight=json.dumps(self.prompts) if self.prompts else None,
-                info=self.info)
+                self.name, inflight=encode_inflight(self.prompts), info=self.info)
             if msg.total_cost_usd is not None:
                 self.info["cost"] = msg.total_cost_usd
             usage = msg.model_usage or {}

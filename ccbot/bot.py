@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
+import json
 import logging
 import os
+import secrets
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -67,9 +69,10 @@ from .keyboards import (
     ask_kb,
     auth_link_kb,
     auth_retry_kb,
+    cancel_kb,
     cancel_rename_kb,
     choice_kb,
-    confirm_kb,
+    closed_kb,
     dirs_kb,
     done_kb,
     held_kb,
@@ -131,6 +134,14 @@ _PENDING_TTL = 180.0
 # outlast a phone call, but not a night: a message typed tomorrow belongs to
 # tomorrow's conversation, not to yesterday's forward.
 _PARKED_TTL = 3600.0
+# How long text that goes to a busy session by default (not as a reply) waits
+# in the bot with «↩️ Cancel». The CLI takes a prompt sent mid-turn into the
+# turn as soon as the current tool call ends — half the time within 5 s —
+# which is too soon to notice it went to the wrong session (2026-11-25).
+_DELAY = 10.0
+# More typing pushes a delayed batch back, but never past this from its start.
+_DELAY_CAP = 30.0
+_DELAY_TICK = 0.5
 # Where an attachment lands while no session owns it yet — a forwarded batch
 # is downloaded before the chat has said which session it is for.
 _INBOX_DIR = "inbox"
@@ -577,6 +588,30 @@ class _Held:
         return sum(len(b) for b in self.batches)
 
 
+@dataclass
+class _Outgoing:
+    """A batch on its way to a session that the chat can still take back.
+
+    *delayed*: held in the bot for `_DELAY` (the session is busy and the text
+    was not a reply); *sending*: in the hands of the host; *queued*: in the
+    CLI, not yet taken into a turn (`cancel_async_message` can still drop
+    it); *cancelling*: a tap is being answered. A record leaves the registry
+    once the batch is taken in, cancelled or failed.
+    """
+
+    tok: str
+    chat_id: int
+    session_id: str
+    items: list[_Item]
+    state: str = "delayed"
+    note: str = ""
+    uuid: str = ""
+    ack: Message | None = None
+    first: float = 0.0
+    deadline: float = 0.0
+    task: asyncio.Task | None = None
+
+
 def _is_command(items: list[_Item]) -> bool:
     """Whether a batch is a lone Claude command such as "/compact".
 
@@ -587,6 +622,19 @@ def _is_command(items: list[_Item]) -> bool:
         return False
     head = items[0].text.split(maxsplit=1)[0] if items[0].text.strip() else ""
     return len(head) > 1 and head.startswith("/") and "/" not in head[1:]
+
+
+def _not_sent_text(count: int) -> str:
+    """A batch whose session ended before it could go.
+
+    One message has its own wording; every other count carries the number,
+    since Ukrainian's first plural form also serves 21, 31…
+    """
+    if count == 1:
+        return _("🗑 The session has ended — the message was not sent.")
+    return ngettext("🗑 The session has ended — {count} message was not sent.",
+                    "🗑 The session has ended — {count} messages were not sent.",
+                    count).format(count=count)
 
 
 def _batch_text(items: list[_Item]) -> str:
@@ -654,6 +702,9 @@ class CCBot:
         self.parked: dict[int, _Parked] = {}
         # Text kept out of a session that has a question open, per session.
         self.held: dict[str, _Held] = {}
+        # Sent text that can still be taken back («↩️ Cancel»), by token.
+        self.outgoing: dict[str, _Outgoing] = {}
+        self.bridge.on_taken = self._on_taken
         # Sessions a restart is under way in: a second press must not ask
         # the host for a second one.
         self.restarting: set[str] = set()
@@ -1012,21 +1063,31 @@ class CCBot:
         return mgd, " · " + _("in reply, now active")
 
     async def _ack(self, m: Message, text: str, mgd,
-                   reply_markup: InlineKeyboardMarkup | None = None) -> None:
+                   reply_markup: InlineKeyboardMarkup | None = None,
+                   edit: Message | None = None) -> Message | None:
         """Confirm an action, and let a reply to that confirmation land back.
 
         The last message in the chat is the one a phone replies to fastest, so
         the bot's own acknowledgements route like the session's output does.
+        *edit* turns an earlier notice (a delayed batch's) into this one.
         """
+        msg: Message | None = None
         try:
-            msg = await m.answer(text, parse_mode="HTML", reply_markup=reply_markup)
+            if edit is not None:
+                with contextlib.suppress(TelegramBadRequest):
+                    done = await edit.edit_text(text, parse_mode="HTML",
+                                                reply_markup=reply_markup)
+                    msg = done if isinstance(done, Message) else edit
+            if msg is None:
+                msg = await m.answer(text, parse_mode="HTML", reply_markup=reply_markup)
         except TelegramBadRequest:
             log.exception("ack failed: %r", text[:120])
-            return
+            return None
         log.info("out msg id=%s -> %s: %r",
                  getattr(msg, "message_id", "—"), mgd.session_id[:8], text[:120])
         if msg:
             self.store.remember_message(msg.message_id, mgd.session_id)
+        return msg
 
     def _service_kb(self) -> InlineKeyboardMarkup:
         return service_kb(service.under_systemd())
@@ -1357,7 +1418,7 @@ class CCBot:
                           name=html.escape(mgd.full_label),
                           previous=html.escape(prev.full_label))]
         note = " · " + (_("resumed") if resumed else _("new"))
-        card = await self._session_card(mgd, note)
+        card = await self._session_card(mgd, note, chat_id=chat_id)
         if card is None:
             head = (_("✅ Resumed: <b>{name}</b>") if resumed
                     else _("✅ Created: <b>{name}</b>")).format(
@@ -1922,16 +1983,44 @@ class CCBot:
                  chat_id, mgd.full_label, mgd.session_id[:8])
         return True
 
+    async def _activate(self, chat_id: int, msg: Message, mgd) -> None:
+        """Make *mgd* active from a list or a card, said at the bottom of the chat.
+
+        The list being redrawn may be far up the chat; the line saying where
+        text goes now is a new message, where the next one will be typed.
+        """
+        previous = self.store.get_active(chat_id)
+        if previous == mgd.session_id:
+            return
+        self.store.set_active(chat_id, mgd.session_id)
+        log.info("active switched by pick: chat=%s -> %s (%s)",
+                 chat_id, mgd.full_label, mgd.session_id[:8])
+        prev = self.store.get(previous) if previous else None
+        if prev:
+            text = _("🟢 Text now goes to <b>{name}</b>.\n"
+                     "<b>{previous}</b> keeps working — to write to it, "
+                     "reply to one of its messages.").format(
+                         name=html.escape(mgd.full_label),
+                         previous=html.escape(prev.full_label))
+        else:
+            text = _("🟢 Text now goes to <b>{name}</b>").format(
+                name=html.escape(mgd.full_label))
+        with contextlib.suppress(Exception):
+            note = await msg.answer(text, parse_mode="HTML")
+            self.store.remember_message(note.message_id, mgd.session_id)
+
     async def _say_focused(self, msg, mgd) -> None:
         """Tell the chat where its text goes now. Silence here is a trap."""
         with contextlib.suppress(Exception):
-            await msg.answer(
+            note = await msg.answer(
                 _("🟢 Text now goes to <b>{name}</b>").format(
                     name=html.escape(mgd.full_label)),
                 parse_mode="HTML")
+            # Registered: a reply to it means this session, not the active one.
+            self.store.remember_message(note.message_id, mgd.session_id)
 
-    async def _send_prompt(self, mgd, text: str, guard: bool = False) -> None:
-        """Send *text* to the session as a prompt.
+    async def _send_prompt(self, mgd, text: str, guard: bool = False) -> dict | None:
+        """Send *text* to the session as a prompt; the host's reply (None for /btw).
 
         *guard* refuses (`Refused`) when the session has a question open —
         checked by the host, so nothing can slip in between.
@@ -1946,9 +2035,9 @@ class CCBot:
             else:
                 await self.bot.send_message(self.cfg.owner, _(
                     "/btw needs the question after it, in the same message."))
-            return
+            return None
         try:
-            await self.bridge.send(mgd, text, guard=guard)
+            return await self.bridge.send(mgd, text, guard=guard)
         except HostError as exc:
             if exc.code == "request_open":
                 raise Refused(text) from exc
@@ -2062,7 +2151,9 @@ class CCBot:
         mgd, note = routed if routed else await self._target(items[-1].message)
         if not mgd:
             return
-        await self._dispatch(chat_id, items, mgd, note)
+        # Only text that went to the active session by default waits: a
+        # reply names its session, so it is not the mistake the wait is for.
+        await self._dispatch(chat_id, items, mgd, note, delay=routed is None)
 
     def _homeless(self, chat_id: int, items: list[_Item]) -> bool:
         """A batch with no session to go to, held rather than refused.
@@ -2077,11 +2168,27 @@ class CCBot:
         return not _is_command(items)
 
     async def _send_batch(self, items: list[_Item], mgd, note: str = "",
-                          guard: bool = False) -> None:
-        """Fold a batch into one prompt, send it, and say where it went."""
+                          guard: bool = False, rec: _Outgoing | None = None) -> None:
+        """Fold a batch into one prompt, send it, and say where it went.
+
+        While the session has not taken the prompt in, the confirmation
+        carries «↩️ Cancel»; *rec* is the batch's record when it was delayed,
+        and its notice becomes the confirmation.
+        """
         paths = [p for i in items for p in i.paths]
         prompt = _batch_text(items)
-        await self._send_prompt(mgd, prompt, guard=guard)
+        info = await self._send_prompt(mgd, prompt, guard=guard) or {}
+        uid = str(info.get("uuid") or "")
+        edit = rec.ack if rec else None
+        if info.get("waiting") and uid and uid not in self.bridge.taken:
+            if rec is None:
+                rec = self._new_outgoing(items[-1].message.chat.id, mgd, items)
+            rec.state, rec.uuid = "queued", uid
+        elif rec is not None:
+            rec.state = "done"
+            self.outgoing.pop(rec.tok, None)
+            rec = None
+        kb = cancel_kb(rec.tok) if rec else None
         parts = []
         if len(items) > 1:
             parts.append(ngettext("{count} message", "{count} messages",
@@ -2094,7 +2201,13 @@ class CCBot:
             extra=(" · " + " · ".join(parts)) if parts else "",
             note=note)
         try:
-            await self._ack(items[-1].message, text, mgd)
+            shown = await self._ack(items[-1].message, text, mgd, reply_markup=kb, edit=edit)
+            if rec is not None:
+                rec.ack = shown
+                if rec.state == "done" and shown:
+                    # Taken in while the confirmation was on its way.
+                    with contextlib.suppress(Exception):
+                        await shown.edit_reply_markup(reply_markup=None)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -2104,20 +2217,267 @@ class CCBot:
             # confirmation is sent again later instead.
             log.warning("ack not delivered, retrying later: %s", exc)
             task = asyncio.create_task(
-                self._ack_later(items[-1].message, text, mgd))
+                self._ack_later(items[-1].message, text, mgd, rec))
             self.expiries.add(task)
             task.add_done_callback(self.expiries.discard)
 
-    async def _ack_later(self, m: Message, text: str, mgd) -> None:
+    async def _ack_later(self, m: Message, text: str, mgd,
+                         rec: _Outgoing | None = None) -> None:
         """Keep trying a delivery confirmation that met a network failure."""
         for delay in _ACK_RETRIES:
             await asyncio.sleep(delay)
             try:
-                await self._ack(m, text, mgd)
+                live = rec is not None and rec.state == "queued"
+                shown = await self._ack(m, text, mgd,
+                                        reply_markup=cancel_kb(rec.tok) if live and rec else None,
+                                        edit=rec.ack if rec else None)
+                if rec is not None:
+                    rec.ack = shown
                 return
             except Exception as exc:
                 log.warning("ack still not delivered: %s", exc)
         log.error("ack given up: %r", text[:120])
+
+    # ------------------------------------------- taking back what was sent
+    def _new_outgoing(self, chat_id: int, mgd, items: list[_Item],
+                      state: str = "queued", note: str = "") -> _Outgoing:
+        now = time.monotonic()
+        for tok, old in list(self.outgoing.items()):
+            if now - old.first > _PARKED_TTL:
+                del self.outgoing[tok]
+        rec = _Outgoing(tok=secrets.token_hex(4), chat_id=chat_id,
+                        session_id=mgd.session_id, items=list(items), state=state,
+                        note=note, first=now, deadline=now + _DELAY)
+        self.outgoing[rec.tok] = rec
+        return rec
+
+    def _delayed_of(self, session_id: str) -> _Outgoing | None:
+        return next((r for r in self.outgoing.values() if r.state == "delayed"
+                     and self.store.follow(r.session_id) == session_id), None)
+
+    def _save_delayed(self) -> None:
+        """Keep delayed batches in state.db: a restart inside the wait must
+        say the text was not sent rather than drop it without a word."""
+        rows = {}
+        for r in self.outgoing.values():
+            mgd = self.store.get(self.store.follow(r.session_id))
+            if r.state != "delayed" or mgd is None:
+                continue
+            rows[r.tok] = {"chat_id": r.chat_id, "ack_id": r.ack.message_id if r.ack else None,
+                           "name": mgd.name, "label": mgd.full_label,
+                           "text": _batch_text(r.items), "count": len(r.items)}
+        self.store.meta_set("delayed_batches", json.dumps(rows, ensure_ascii=False))
+
+    @staticmethod
+    def _delayed_text(rec: _Outgoing, mgd) -> str:
+        seconds = max(1, round(rec.deadline - time.monotonic()))
+        n = len(rec.items)
+        text = _("⏳ <b>{name}</b> — sending in {seconds} s: the session is busy.") \
+            if n == 1 else ngettext(
+                "⏳ <b>{name}</b> — sending your {count} message in {seconds} s: "
+                "the session is busy.",
+                "⏳ <b>{name}</b> — sending your {count} messages in {seconds} s: "
+                "the session is busy.", n)
+        return text.format(name=html.escape(mgd.full_label), count=n, seconds=seconds)
+
+    async def _show_delayed(self, rec: _Outgoing, mgd) -> None:
+        """Post the notice at the bottom, where it is seen; an older one goes."""
+        old = rec.ack
+        rec.ack = None
+        try:
+            rec.ack = await self.bot.send_message(
+                rec.chat_id, self._delayed_text(rec, mgd), parse_mode="HTML",
+                reply_markup=cancel_kb(rec.tok))
+            self.store.remember_message(rec.ack.message_id, mgd.session_id)
+        except Exception:
+            log.exception("delayed notice not sent: tok=%s", rec.tok)
+        if old is not None:
+            await self._delete_quietly(rec.chat_id, old.message_id)
+        self._save_delayed()
+
+    async def _delay(self, chat_id: int, items: list[_Item], mgd, note: str) -> None:
+        rec = self._new_outgoing(chat_id, mgd, items, state="delayed", note=note)
+        log.info("delayed batch: id=%s items=%d tok=%s",
+                 mgd.session_id[:8], len(items), rec.tok)
+        await self._show_delayed(rec, mgd)
+        rec.task = asyncio.create_task(self._delay_loop(rec.tok))
+
+    async def _join_delayed(self, rec: _Outgoing, items: list[_Item], mgd) -> None:
+        rec.items.extend(items)
+        rec.deadline = min(time.monotonic() + _DELAY, rec.first + _DELAY_CAP)
+        log.info("delayed batch grew to %d item(s): tok=%s", len(rec.items), rec.tok)
+        await self._show_delayed(rec, mgd)
+
+    async def _delay_loop(self, tok: str) -> None:
+        try:
+            while True:
+                await asyncio.sleep(_DELAY_TICK)
+                rec = self.outgoing.get(tok)
+                if rec is None or rec.state != "delayed":
+                    return
+                if time.monotonic() >= rec.deadline:
+                    break
+            with use_locale(self._locale()):
+                await self._send_delayed(rec)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("delayed batch failed: tok=%s", tok)
+            rec = self.outgoing.pop(tok, None)
+            if rec is not None and rec.state in ("delayed", "sending"):
+                self._save_delayed()
+                with contextlib.suppress(Exception), use_locale(self._locale()):
+                    await self._say_not_passed(rec)
+
+    async def _send_delayed(self, rec: _Outgoing) -> None:
+        """The wait is over (or earlier text has to go first): send it now."""
+        if rec.state != "delayed":
+            return
+        rec.state = "sending"
+        self._save_delayed()
+        mgd = self.store.get(self.store.follow(rec.session_id))
+        if mgd is None:
+            self.outgoing.pop(rec.tok, None)
+            log.info("delayed batch dropped, session gone: tok=%s", rec.tok)
+            if rec.ack is not None:
+                with contextlib.suppress(Exception):
+                    await rec.ack.edit_text(_not_sent_text(len(rec.items)))
+            return
+        try:
+            sent = await self._try_send(rec.items, mgd, rec.note, rec=rec)
+        except Exception:
+            self.outgoing.pop(rec.tok, None)
+            log.exception("delayed batch not delivered: tok=%s", rec.tok)
+            await self._say_not_passed(rec)
+            return
+        if sent:
+            log.info("delayed batch delivered: tok=%s items=%d", rec.tok, len(rec.items))
+            return
+        # A question opened during the wait: the held-text card takes over.
+        self.outgoing.pop(rec.tok, None)
+        if rec.ack is not None:
+            await self._delete_quietly(rec.chat_id, rec.ack.message_id)
+        await self._hold_for_dialog(rec.chat_id, mgd, rec.items)
+
+    async def _say_not_passed(self, rec: _Outgoing) -> None:
+        """A delayed batch that failed: said on its notice, with «🔁 Send again»."""
+        mgd = self.store.get(self.store.follow(rec.session_id))
+        text = _("❌ Could not pass that on — see /log")
+        kb = self.bridge.again_kb([(mgd.name, _batch_text(rec.items))]) if mgd else None
+        if rec.ack is not None:
+            with contextlib.suppress(Exception):
+                await rec.ack.edit_text(text, reply_markup=kb)
+                return
+        sent = await self.bot.send_message(rec.chat_id, text, reply_markup=kb)
+        if mgd is not None:
+            self.store.remember_message(sent.message_id, mgd.session_id)
+
+    async def _on_taken(self, name: str, uid: str) -> None:
+        """A turn took the prompt in: «↩️ Cancel» can do nothing any more."""
+        rec = next((r for r in self.outgoing.values() if r.uuid == uid), None)
+        if rec is None or rec.state != "queued":
+            return
+        rec.state = "done"
+        self.outgoing.pop(rec.tok, None)
+        if rec.ack is not None:
+            with contextlib.suppress(Exception):
+                await rec.ack.edit_reply_markup(reply_markup=None)
+
+    async def _cancel_outgoing(self, c: CallbackQuery, msg: Message, tok: str) -> None:
+        rec = self.outgoing.get(tok)
+        if rec is None:
+            await c.answer(_("This message can no longer be cancelled."), show_alert=True)
+            with contextlib.suppress(Exception):
+                await msg.edit_reply_markup(reply_markup=None)
+            return
+        mgd = self.store.get(self.store.follow(rec.session_id))
+        label = mgd.full_label if mgd else rec.session_id[:8]
+        n = len(rec.items)
+        done = (_("↩️ Cancelled — <b>{name}</b> did not get it.") if n == 1
+                else ngettext("↩️ Cancelled — <b>{name}</b> did not get your {count} message.",
+                              "↩️ Cancelled — <b>{name}</b> did not get your {count} messages.",
+                              n)).format(name=html.escape(label), count=n)
+        if rec.state == "delayed":
+            rec.state = "done"
+            self.outgoing.pop(tok, None)
+            if rec.task is not None:
+                rec.task.cancel()
+            self._save_delayed()
+            log.info("delayed batch cancelled: tok=%s items=%d", tok, len(rec.items))
+            await c.answer()
+            await self._settle(msg, done, rec.session_id)
+            return
+        if rec.state in ("sending", "cancelling"):
+            # On its way to the host, or a tap already being answered.
+            await c.answer(_("It is being sent right now — tap again in a moment."),
+                           show_alert=True)
+            return
+        if rec.state != "queued" or mgd is None:
+            self.outgoing.pop(tok, None)
+            await c.answer(_("This message can no longer be cancelled."), show_alert=True)
+            with contextlib.suppress(Exception):
+                await msg.edit_reply_markup(reply_markup=None)
+            return
+        rec.state = "cancelling"
+        try:
+            res = await self.bridge.cancel(mgd, rec.uuid)
+        except HostError as exc:
+            rec.state = "queued"
+            log.info("cancel refused tok=%s: %s", tok, exc)
+            with contextlib.suppress(Exception):
+                await c.answer(_("Could not cancel it — try again."), show_alert=True)
+            return
+        self.outgoing.pop(tok, None)
+        if res.get("cancelled"):
+            rec.state = "done"
+            log.info("queued prompt cancelled: tok=%s uuid=%s", tok, rec.uuid[:8])
+            with contextlib.suppress(Exception):
+                await c.answer()
+            await self._settle(msg, done, rec.session_id)
+            return
+        rec.state = "done"
+        log.info("cancel too late: tok=%s why=%s", tok, res.get("why"))
+        with contextlib.suppress(Exception):
+            await c.answer(_("Too late — {name} has already taken it in.").format(
+                name=label) if res.get("why") == "taken"
+                else _("This message can no longer be cancelled."), show_alert=True)
+        with contextlib.suppress(Exception):
+            await msg.edit_reply_markup(reply_markup=None)
+
+    async def _recover_delayed(self) -> None:
+        """Batches a restart caught inside their wait: say they were not sent."""
+        try:
+            rows = json.loads(self.store.meta_get("delayed_batches") or "{}")
+        except ValueError:
+            rows = {}
+        self.store.meta_set("delayed_batches", "{}")
+        for row in rows.values() if isinstance(rows, dict) else []:
+            try:
+                n = int(row.get("count") or 1)
+                text = (_("⚠️ The bot restarted before your message went to <b>{name}</b> — "
+                          "it was not sent.") if n == 1 else ngettext(
+                    "⚠️ The bot restarted before your {count} message went to "
+                    "<b>{name}</b> — it was not sent.",
+                    "⚠️ The bot restarted before your {count} messages went to "
+                    "<b>{name}</b> — they were not sent.", n)).format(
+                        name=html.escape(str(row.get("label") or row.get("name"))), count=n)
+                kb = self.bridge.again_kb([(str(row["name"]), str(row["text"]))])
+                log.info("delayed batch lost to a restart: %s", row.get("name"))
+                mgd = self.store.by_name(str(row["name"]))
+                if row.get("ack_id"):
+                    try:
+                        await self.bot.edit_message_text(
+                            text, chat_id=row["chat_id"], message_id=row["ack_id"],
+                            parse_mode="HTML", reply_markup=kb)
+                        continue
+                    except TelegramBadRequest:
+                        pass
+                sent = await self.bot.send_message(row["chat_id"], text, parse_mode="HTML",
+                                                   reply_markup=kb)
+                if mgd is not None:
+                    self.store.remember_message(sent.message_id, mgd.session_id)
+            except Exception:
+                log.exception("could not report a delayed batch lost to a restart")
 
     # ------------------------------------------------- held for an open question
     def _question_open(self, mgd) -> bool:
@@ -2125,26 +2485,40 @@ class CCBot:
         return self.bridge.question_open(mgd)
 
     async def _dispatch(self, chat_id: int, items: list[_Item], mgd,
-                        note: str = "") -> None:
+                        note: str = "", delay: bool = False) -> None:
         """Send a batch, or hold it while the session has a question open.
 
         The only road user text takes into a session: sent while a question
         stands, it would land beside the question nobody has answered.
+        *delay*: the batch went to the active session by default, so if that
+        session is busy it waits `_DELAY` with «↩️ Cancel» — the window to
+        notice it went to the wrong place.
         """
         held = self._held_of(mgd.session_id)
         if held is not None:
             await self._join_held(held, items, mgd)
             return
+        pending = self._delayed_of(mgd.session_id)
+        if pending is not None:
+            if delay and not _is_command(items):
+                await self._join_delayed(pending, items, mgd)
+                return
+            # A reply or a command must not overtake text typed before it.
+            await self._send_delayed(pending)
+        if delay and not _is_command(items) and self.bridge.state(mgd) == "busy":
+            await self._delay(chat_id, items, mgd, note)
+            return
         if await self._try_send(items, mgd, note):
             return
         await self._hold_for_dialog(chat_id, mgd, items)
 
-    async def _try_send(self, items: list[_Item], mgd, note: str = "") -> bool:
+    async def _try_send(self, items: list[_Item], mgd, note: str = "",
+                        rec: _Outgoing | None = None) -> bool:
         """Send unless a question is open — checked here, and again by the host."""
         if self._question_open(mgd):
             return False
         try:
-            await self._send_batch(items, mgd, note, guard=True)
+            await self._send_batch(items, mgd, note, guard=True, rec=rec)
         except Refused:
             log.info("held: send refused, a question appeared id=%s",
                      mgd.session_id[:8])
@@ -2466,8 +2840,9 @@ class CCBot:
 
         "Gone" means no dialog at all for `_HELD_CLEAR`: a multi-part question
         draws its next section at once, and a frame caught in between must
-        not send the text into the middle of it. A busy session is fine — a
-        prompt sent mid-turn is queued, as typing it would be.
+        not send the text into the middle of it. A busy session is fine — the
+        CLI takes a prompt sent mid-turn into the running turn once the
+        current tool call ends.
         """
         clear_since = 0.0
         held: _Held | None = None
@@ -2490,12 +2865,7 @@ class CCBot:
                              session_id[:8])
                     with contextlib.suppress(Exception):
                         await self.bot.edit_message_text(
-                            ngettext(
-                                "🗑 The session has ended — the message was "
-                                "not sent.",
-                                "🗑 The session has ended — {count} messages "
-                                "were not sent.", held.count).format(
-                                    count=held.count),
+                            _not_sent_text(held.count),
                             chat_id=held.chat_id, message_id=held.ask_id)
                     return
                 blocked = self._question_open(mgd)
@@ -3008,7 +3378,7 @@ class CCBot:
         chat_id = msg.chat.id
         # Pressing anything else abandons a half-finished prompt, so a later
         # message is not swallowed as a directory path.
-        if not data.startswith(("nd:manual", "hfind", "done")):
+        if not data.startswith(("nd:manual", "hfind", "done", "x:")):
             self.pending.pop(chat_id, None)
             # Not deleted: the button pressed may have turned one of them
             # into its own card («Cancel» on a rename opens the session).
@@ -3023,6 +3393,10 @@ class CCBot:
         if data == "ls":
             await c.answer()
             await self._show_sessions(c)
+            return
+
+        if data.startswith("x:"):
+            await self._cancel_outgoing(c, msg, data[2:])
             return
 
         if data.startswith("upd:"):
@@ -3172,7 +3546,7 @@ class CCBot:
             await self._safe_edit(
                 msg,
                 self._closed_details(v), parse_mode="HTML",
-                reply_markup=confirm_kb(v.session_id, "closed", back=back),
+                reply_markup=closed_kb(v.session_id, back=back),
             )
             return
 
@@ -3198,44 +3572,29 @@ class CCBot:
                         path=html.escape(v.cwd)), sid)
             return
 
-        if data.startswith("s:"):
+        if data.startswith(("sp:", "s:", "open:")):
+            # A row of /sessions (`sp:`) makes its session active at once and
+            # turns the list into the session's card. Cards drawn before
+            # 2026-11-25 carry `s:` on their rows (and on a picker's Back) and
+            # «▶️ Open» (`open:`); they now do the same.
             # A list card sent between 0f4fb67 and its revert says "s:<id>:l".
-            mgd = self._resolve(data[2:].partition(":")[0])
+            mgd = self._resolve(data.partition(":")[2].partition(":")[0])
+            if not mgd:
+                await c.answer(_("That session is gone"), show_alert=True)
+                return
+            await self._activate(chat_id, msg, mgd)
+            await c.answer(_("Active: {name}").format(name=mgd.full_label))
+            await self._show_session_card(c, mgd)
+            return
+
+        if data.startswith("sc:"):
+            # The «⬅️ Back» of a session's pickers, «🎛 Session controls»:
+            # the card, with no switch.
+            mgd = self._resolve(data[3:])
             if not mgd:
                 await c.answer(_("That session is gone"), show_alert=True)
                 return
             await c.answer()
-            await self._safe_edit(
-                msg,
-                await self._managed_details(mgd), parse_mode="HTML",
-                reply_markup=confirm_kb(
-                    mgd.session_id, "managed", asking=self._asking(mgd)),
-            )
-            # The list became this session's card: a reply to it now means
-            # this session, not whichever one happens to be active.
-            self.store.remember_message(msg.message_id, mgd.session_id)
-            return
-
-        if data.startswith("open:"):
-            mgd = self._resolve(data[5:])
-            if not mgd:
-                await c.answer(_("That session is gone"), show_alert=True)
-                return
-            previous = self.store.get_active(chat_id)
-            self.store.set_active(chat_id, mgd.session_id)
-            if previous and previous != mgd.session_id:
-                prev = self.store.get(previous)
-                if prev:
-                    note = await msg.answer(
-                        _("🟢 Text now goes to <b>{name}</b>.\n"
-                          "<b>{previous}</b> keeps working — to write to it, "
-                          "reply to one of its messages.").format(
-                              name=html.escape(mgd.full_label),
-                              previous=html.escape(prev.full_label)),
-                        parse_mode="HTML",
-                    )
-                    self.store.remember_message(note.message_id, mgd.session_id)
-            await c.answer(_("Active: {name}").format(name=mgd.full_label))
             await self._show_session_card(c, mgd)
             return
 
@@ -3519,53 +3878,6 @@ class CCBot:
         """
         return self.bridge.request_repost(mgd)
 
-    async def _managed_details(self, mgd) -> str:
-        views = await sess.managed_views(self.store)
-        view = next((v for v in views if v.session_id == mgd.session_id), None)
-        mode = self.bridge.mode(mgd)
-        u = status_feed.read(mgd.session_id)
-
-        lines = [f"▶️ <b>{html.escape(mgd.full_label)}</b>", ""]
-        lines.append(f"📁 <code>{html.escape(mgd.cwd)}</code>")
-        if view:
-            status = sess.status_label(view.status) + (
-                f" — {view.waiting_for}" if view.waiting_for else "")
-            lines.append(_("📊 Status: <b>{status}</b>").format(status=status))
-            await account.fill([view])
-            if view.account:
-                lines.append(account_line(view.account))
-        bits = [b for b in (u.model if u else "", f"◉ {u.effort}" if u and u.effort else "",
-                            f"🔐 {_mode_label(mode)}" if mode else "") if b]
-        if bits:
-            lines.append("🧠 " + " · ".join(bits))
-        behind = self._stale(mgd, await updates.installed())
-        if behind:
-            lines.append(_("⬆️ Claude Code <code>{old}</code> — "
-                           "<code>{new}</code> is on disk; /update restarts it "
-                           "without losing the context.").format(
-                               old=html.escape(behind),
-                               new=html.escape(updates.cached_installed())))
-        if u and u.ctx_pct is not None:
-            tok = f"{u.ctx_tokens:,}".replace(",", " ")
-            lines.append(ngettext("📈 Context: {pct}% ({tokens} token)",
-                                  "📈 Context: {pct}% ({tokens} tokens)",
-                                  u.ctx_tokens).format(pct=u.ctx_pct, tokens=tok))
-        elif view and view.status in ("starting", "idle"):
-            # A session that has not sent a request yet reports no usage at all.
-            lines.append(_("📈 Context: metrics appear after the first request"))
-        for lim in (u.limits if u else []):
-            lines.append(f"    {lim.label}: {lim.pct}%"
-                         + (" · " + _("resets {when}").format(when=lim.reset_text)
-                            if lim.reset_text else ""))
-        if u and u.cost_usd:
-            lines.append(_("💵 Session cost: ${amount}").format(
-                amount=f"{u.cost_usd:.2f}"))
-        started = datetime.fromtimestamp(mgd.created_at)
-        lines.append(_("🕘 Created: {when}").format(
-            when=started.strftime(_("%d.%m %H:%M"))))
-        lines.append(f"🔑 <code>{mgd.session_id}</code>")
-        return "\n".join(lines)
-
     def _closed_details(self, v) -> str:
         # A heading is a heading: when the name is only the first prompt, it
         # can run to a paragraph, and the whole of it belongs further down.
@@ -3601,7 +3913,7 @@ class CCBot:
             mgd.session_id, since=await sess.started_at(mgd.session_id))
 
     async def _session_card(
-        self, mgd, note: str = "",
+        self, mgd, note: str = "", chat_id: int | None = None,
     ) -> tuple[str, InlineKeyboardMarkup] | None:
         """One managed session's card: its text and its controls.
 
@@ -3630,8 +3942,10 @@ class CCBot:
         behind = self._stale(mgd, await updates.installed())
         if behind:
             bits.append(f"⬆️ {behind} → {updates.cached_installed()}")
-        text = (_("▶️ Active session: <b>{name}</b>").format(
-                    name=html.escape(view.name)) + note
+        active = self.store.get_active(chat_id or self.cfg.owner) == mgd.session_id
+        head = (_("▶️ Active session: <b>{name}</b>") if active
+                else _("▶️ Session: <b>{name}</b>"))
+        text = (head.format(name=html.escape(view.name)) + note
                 + f"\n<code>{view.short_cwd}</code>\n"
                 + _("Status: {status}").format(
                     status=sess.status_label(view.status)))
@@ -3649,7 +3963,7 @@ class CCBot:
         if msg is None:
             await c.answer(_stale_card("/sessions"), show_alert=True)
             return
-        card = await self._session_card(mgd)
+        card = await self._session_card(mgd, chat_id=msg.chat.id)
         if card is None:
             return
         text, kb = card
@@ -3669,7 +3983,7 @@ class CCBot:
         session, so a reply to it has to reach that one rather than whichever
         happens to be active by then.
         """
-        card = await self._session_card(mgd, note)
+        card = await self._session_card(mgd, note, chat_id=m.chat.id)
         if card is None:
             await m.answer(_("That session has already ended — see /sessions"))
             return
@@ -3876,6 +4190,7 @@ class CCBot:
         dropped = media.cleanup()
         if dropped:
             log.info("removed %d stale attachments", dropped)
+        await self._recover_delayed()
         self.watcher.start()
         self.bridge.start()
         log.info("polling started")

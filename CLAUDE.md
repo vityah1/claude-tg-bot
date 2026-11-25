@@ -19,8 +19,9 @@ messages and cards. The long "why" lives in `README.md` — don't duplicate it.
   in `ccbot/` needs only the bot restart. Log: `~/.cache/ccbot/host.log`.
 - 🔴 **Restarting the bot is your job**: after a tested change, restart it and
   say so (2026-10-01). Before that, check the log tail — an `in msg` from the
-  last ~10 s with no `prompt ->`, or a `held batch` with no `delivered` /
-  `dropped`, is still in memory and a restart drops it. Sessions survive a bot
+  last ~10 s with no `prompt ->`, a `held batch` with no `delivered` /
+  `dropped`, or a `delayed batch` with no `delivered` / `cancelled`, is still
+  in memory and a restart drops it. Sessions survive a bot
   restart (the bot replays the host journal from its last ack).
 - 🔴 **The bot's chat is the user's live workplace.** Live tests through it are
   allowed (he addresses his sessions by reply), but: never create a test
@@ -122,6 +123,15 @@ is restarted after a schema change.
   «⏳ Send after the answer» (`_held_loop`, `_HELD_CLEAR`), «🗑 Don't send».
   Typed text after a card's ✏️ is never dropped: if it no longer applies it
   goes to the session as an ordinary message.
+- 🔴 **Sent text can be taken back until a turn takes it in** (2026-11-25).
+  The CLI takes a prompt sent mid-turn into the running turn once the current
+  tool call ends, so text sent by default (not a reply) to a busy session
+  waits `_DELAY` in the bot (`_Outgoing`, kept in `meta.delayed_batches` for a
+  restart) with «↩️ Cancel», then goes with a uuid; until the host's
+  `--replay-user-messages` echo (`prompt_taken`) the button takes it back from
+  the CLI (`cancel_async_message`, a private SDK call — re-check on upgrade).
+  A result closes the prompts it names (`user_message_uuids`), never "one per
+  result": merged prompts used to stay "in flight" for good.
 - 🔴 **«💬 Discuss» answers nothing**: it denies with "ask what to clarify",
   so the next message is the reply to that.
 - 🔴 **Answering a card makes its session active**, announced (`_focus`,
@@ -132,6 +142,10 @@ is restarted after a schema change.
 - 🔴 **«🔔 Show the question» is posted by the bridge tick, only on a tap**
   (`bridge.request_repost`; the old card gets «⬇️ Shown again below»). Picking
   a session from the list never posts it by itself (2026-11-10).
+- 🔴 **A row of /sessions makes its session active at once** (`sp:` →
+  `_activate`, the line saying so posted at the bottom): the old «▶️ Open» step
+  drew its button on the list far up the chat and the next text went to the
+  previous session (2026-11-25). `s:` is the pickers' «⬅️ Back»: card only.
 - 🔴 **A launch ends on the session's own card** (`_create` → `_launch_card`:
   the picked name, «🟢 Text now goes to …», the previous active session named),
   card and settled picker both registered (2026-10-03).

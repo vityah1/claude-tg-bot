@@ -76,10 +76,13 @@ def sessions_kb(managed: list[SessionView],
         label = _distinct_name(v.name, v.dir_name)
         hint = _("waiting") if v.status == "waiting" else ""
         # 🟢 marks where plain text goes; everything else needs a reply.
+        # A tap makes the session active at once (`sp:`): a separate «Open»
+        # step drew its button on the list, often far up the chat, and text
+        # typed next went to the old session (2026-11-25).
         mark = ACTIVE_ICON if v.session_id == active else icon
         kb.row(InlineKeyboardButton(
             text=_fit(f"{mark} {v.dir_name} · {label}", hint),
-            callback_data=f"s:{sid8(v.session_id)}",
+            callback_data=f"sp:{sid8(v.session_id)}",
         ))
     kb.row(
         InlineKeyboardButton(text=_("➕ New session"), callback_data="new"),
@@ -89,29 +92,20 @@ def sessions_kb(managed: list[SessionView],
     return kb.as_markup()
 
 
-def confirm_kb(session_id: str, kind: str, back: str = "hist",
-               asking: bool = False) -> InlineKeyboardMarkup:
-    """Detail card actions: a button caption is one line, a card is not.
-
-    *asking*: the session waits on a choice, so its question can be posted
-    again at the bottom — on a tap, never by itself (`CCBot._show_question`).
-    """
-    s = sid8(session_id)
+def closed_kb(session_id: str, back: str = "hist") -> InlineKeyboardMarkup:
+    """A closed session's detail card: resume it, or go back to the list."""
     kb = InlineKeyboardBuilder()
-    if asking and kind == "managed":
-        kb.row(InlineKeyboardButton(text=_("🔔 Show the question"),
-                                    callback_data=f"k:{s}:ask"))
-    if kind == "closed":
-        kb.row(
-            InlineKeyboardButton(text=_("▶️ Resume"), callback_data=f"dores:{s}"),
-            InlineKeyboardButton(text=_("⬅️ Back"), callback_data=back),
-        )
-    else:
-        kb.row(
-            InlineKeyboardButton(text=_("▶️ Open"), callback_data=f"open:{s}"),
-            InlineKeyboardButton(text=_("🚪 End"), callback_data=f"k:{s}:close"),
-        )
-        kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data="ls"))
+    kb.row(
+        InlineKeyboardButton(text=_("▶️ Resume"), callback_data=f"dores:{sid8(session_id)}"),
+        InlineKeyboardButton(text=_("⬅️ Back"), callback_data=back),
+    )
+    return kb.as_markup()
+
+
+def cancel_kb(tok: str) -> InlineKeyboardMarkup:
+    """«↩️ Cancel» on a sent message the session has not taken in yet."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("↩️ Cancel"), callback_data=f"x:{tok}"))
     return kb.as_markup()
 
 
@@ -155,7 +149,7 @@ def choice_kb(session_id: str, kind: str, current: str = "") -> InlineKeyboardMa
         kb.row(InlineKeyboardButton(
             text=f"{mark}{label}", callback_data=f"set:{s}:{kind}:{value}",
         ))
-    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
+    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"sc:{s}"))
     return kb.as_markup()
 
 
@@ -221,7 +215,7 @@ def menu_kb(session_id: str) -> InlineKeyboardMarkup:
     """
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text=_("🎛 Session controls"),
-                                callback_data=f"s:{sid8(session_id)}"))
+                                callback_data=f"sc:{sid8(session_id)}"))
     return kb.as_markup()
 
 
@@ -254,7 +248,7 @@ def sdk_models_kb(session_id: str, models: list[dict],
         if value and len(f"smd:{s}:{value}".encode()) <= 64:
             kb.row(InlineKeyboardButton(text=f"{mark}{m.get('displayName') or value}"[:60],
                                         callback_data=f"smd:{s}:{value}"))
-    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
+    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"sc:{s}"))
     return kb.as_markup()
 
 
@@ -265,7 +259,7 @@ def sdk_effort_kb(session_id: str, levels: list[str], now: str) -> InlineKeyboar
     for lv in levels:
         kb.row(InlineKeyboardButton(text=("✅ " if lv == now else "") + lv,
                                     callback_data=f"sef:{s}:{lv}"))
-    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"s:{s}"))
+    kb.row(InlineKeyboardButton(text=_("⬅️ Back"), callback_data=f"sc:{s}"))
     return kb.as_markup()
 
 
@@ -344,7 +338,7 @@ def cancel_rename_kb(session_id: str) -> InlineKeyboardMarkup:
     """
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text=_("⬅️ Cancel"),
-                                callback_data=f"s:{sid8(session_id)}"))
+                                callback_data=f"sc:{sid8(session_id)}"))
     return kb.as_markup()
 
 

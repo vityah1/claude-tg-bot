@@ -25,6 +25,7 @@ import html
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -164,6 +165,10 @@ class SdkBridge:
             self.again = {int(k): (str(v[0]), str(v[1])) for k, v in saved.items()}
         except (ValueError, TypeError, IndexError):
             self.again = {}
+        # Prompts a turn has taken in (`prompt_taken`, uuid -> when): the
+        # event can beat the confirmation it would update.
+        self.taken: dict[str, float] = {}
+        self.on_taken: Callable[[str, str], Awaitable[None]] | None = None
         # Never handed out twice: an old button must not reach a newer text.
         self.again_next = int(store.meta_get("sdk_again_next") or 0) or \
             (max(self.again, default=0) + 1)
@@ -193,10 +198,19 @@ class SdkBridge:
         return await self.link.call("create", timeout=150, name=mgd.name, cwd=mgd.cwd,
                                     sid=mgd.session_id, resume=resume)
 
-    async def send(self, mgd: Managed, text: str, guard: bool = False) -> None:
-        """A prompt; HostError("request_open") when a question is open and *guard*."""
+    async def send(self, mgd: Managed, text: str, guard: bool = False) -> dict[str, Any]:
+        """A prompt; HostError("request_open") when a question is open and *guard*.
+
+        The reply carries the prompt's `uuid` and whether it is `waiting` for
+        the running turn to take it in — until then it can be taken back.
+        """
         self._rt(mgd.name).work_since = self._rt(mgd.name).work_since or time.time()
-        await self.link.call("send", timeout=150, name=mgd.name, text=text, guard=guard)
+        return await self.link.call("send", timeout=150, name=mgd.name, text=text,
+                                    guard=guard) or {}
+
+    async def cancel(self, mgd: Managed, uid: str) -> dict[str, Any]:
+        """Take back a prompt no turn has taken in: {"cancelled", "why"}."""
+        return await self.link.call("cancel", timeout=30, name=mgd.name, uuid=uid) or {}
 
     def side(self, mgd: Managed, question: str) -> None:
         """A /btw for an SDK session: answered off the turn, in the background."""
@@ -538,6 +552,14 @@ class SdkBridge:
         elif ev == "tool":
             if d.get("name") not in _CARD_TOOLS:
                 self._buffer(rt, "🔧 " + _summarise_tool(d), seq)
+        elif ev == "prompt_taken":
+            uid = str(d.get("uuid") or "")
+            now = time.time()
+            self.taken[uid] = now
+            for old in [k for k, at in self.taken.items() if now - at > 600]:
+                del self.taken[old]
+            if self.on_taken is not None:
+                await self.on_taken(name, uid)
         elif ev == "turn_start":
             rt.state = "busy"
             rt.work_since = rt.work_since or time.time()
@@ -669,7 +691,7 @@ class SdkBridge:
             lines += ["", _("Cut off with it:")] + [
                 f"• <code>{html.escape(p[:300])}</code>" for p in prompts]
         await self._say("\n".join(lines), mgd.session_id, parse_mode="HTML",
-                        reply_markup=self._again_kb([(name, p) for p in prompts]))
+                        reply_markup=self.again_kb([(name, p) for p in prompts]))
 
     async def _notice(self, name: str, rt: _Rt, d: dict[str, Any], seq: int | None) -> None:
         if d.get("kind") == "compacted":
@@ -702,9 +724,9 @@ class SdkBridge:
         names = {n for n, _p in cut}
         only = self.store.by_name(next(iter(names))) if len(names) == 1 else None
         await self._say("\n".join(lines), only.session_id if only else None,
-                        parse_mode="HTML", reply_markup=self._again_kb(cut))
+                        parse_mode="HTML", reply_markup=self.again_kb(cut))
 
-    def _again_kb(self, items: list[tuple[str, str]]) -> InlineKeyboardMarkup | None:
+    def again_kb(self, items: list[tuple[str, str]]) -> InlineKeyboardMarkup | None:
         """«🔁 Send again» for each prompt that was cut off (at most five)."""
         if not items:
             return None

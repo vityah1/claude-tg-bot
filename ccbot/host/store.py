@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     sid        TEXT NOT NULL,
     cwd        TEXT NOT NULL,
     state      TEXT NOT NULL,     -- live | dormant | closed
-    inflight   TEXT,              -- the prompt of a turn not finished yet
+    inflight   TEXT,              -- prompts not answered yet: [{u, t, k}] (actor.encode_inflight)
     info       TEXT,              -- last init / metrics, for the bot's card
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL

@@ -30,7 +30,7 @@ from claude_agent_sdk import (
 )
 
 from . import protocol
-from .actor import CLAUDE_CODE_PROMPT, SessionActor, StartError, claude_bin
+from .actor import CLAUDE_CODE_PROMPT, SessionActor, StartError, claude_bin, decode_inflight
 from .store import HostStore
 
 log = logging.getLogger("ccbot.host")
@@ -122,12 +122,12 @@ class Host:
                 dormant.append(row.name)
                 self.store.set_session(row.name, state="dormant")
             if row.inflight:
-                try:
-                    prompts = json.loads(row.inflight)
-                except ValueError:
-                    prompts = []
+                prompts = [p.text for p in decode_inflight(row.inflight)]
                 if prompts:
                     interrupted.append({"name": row.name, "prompts": prompts})
+                else:
+                    log.info("dropped an unreadable or older in-flight record of %s",
+                             row.name)
                 self.store.set_session(row.name, inflight=None)
         if dormant or lost or interrupted:
             log.info("recovered: %d dormant, %d lost request(s), %d interrupted",
@@ -219,8 +219,17 @@ class Host:
         actor = await self._actor(c["name"])
         if c.get("guard") and actor.asking:
             raise CommandError("request_open")
-        await actor.send(c["text"])
-        return {"state": actor.state, "queued": len(actor.prompts)}
+        prompt, waits = await actor.send(c["text"])
+        return {"state": actor.state, "queued": len(actor.prompts), "uuid": prompt.uuid,
+                "waiting": waits and not prompt.taken}
+
+    async def cmd_cancel(self, c: dict[str, Any]) -> dict[str, Any]:
+        """Take back a prompt the session has not taken into a turn yet."""
+        try:
+            actor = await self._actor(c["name"], wake=False)
+        except CommandError:
+            return {"cancelled": False, "why": "unknown"}
+        return await actor.cancel(str(c["uuid"]))
 
     async def cmd_answer(self, c: dict[str, Any]) -> dict[str, Any]:
         rid = c["rid"]
