@@ -226,6 +226,14 @@ def menu_kb(session_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def model_kb(session_id: str) -> InlineKeyboardMarkup:
+    """Under a turn the API refused for its model: the session's model list."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text=_("🧠 Change model"),
+                                callback_data=f"cfg:{sid8(session_id)}:model"))
+    return kb.as_markup()
+
+
 def service_kb(can_restart: bool) -> InlineKeyboardMarkup:
     """Bot-process actions. Restart is offered only when something can bring
     the bot back — otherwise the button would end the conversation."""

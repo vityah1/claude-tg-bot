@@ -189,6 +189,9 @@ class SessionActor:
         self.stderr: deque[str] = deque(maxlen=_STDERR_KEEP)
         self.info: dict[str, Any] = {}
         self.limits: dict[str, Any] = {}
+        # Why the API refused this turn (`errorCode` of a rejected rate-limit
+        # event, e.g. "credits_required"); handed over with the turn's end.
+        self.limit_code = ""
         self.last_event = time.monotonic()
         self._end_reason = ""
         self.effort: str | None = None
@@ -500,7 +503,8 @@ class SessionActor:
                                                       "input": _cut(block.input, 2000)})
             if msg.error:
                 self.host.emit(self.name, "notice", {"kind": "assistant_error",
-                                                    "error": msg.error})
+                                                    "error": msg.error,
+                                                    "code": self.limit_code})
             return
         if isinstance(msg, ResultMessage):
             self._follow_sid(msg.session_id, strong=True)
@@ -518,7 +522,8 @@ class SessionActor:
                 "api_error_status": msg.api_error_status, "errors": msg.errors,
                 "cost": msg.total_cost_usd, "duration_ms": msg.duration_ms,
                 "denials": len(msg.permission_denials or []), "context_window": window,
-                "queued": len(self.prompts)})
+                "queued": len(self.prompts), "limit_code": self.limit_code})
+            self.limit_code = ""
             self._update_state()
             task = asyncio.create_task(self._metrics())
             self.tasks.add(task)
@@ -527,6 +532,8 @@ class SessionActor:
         if isinstance(msg, RateLimitEvent):
             raw = msg.rate_limit_info.raw or {}
             self.limits = raw.get("unifiedWindows") or self.limits
+            if msg.rate_limit_info.status == "rejected":
+                self.limit_code = str(raw.get("errorCode") or "")
             self.host.emit(self.name, "metrics", {"limits": self.limits,
                                                  "status": msg.rate_limit_info.status},
                            journal=False)

@@ -38,7 +38,7 @@ from .host.protocol import SYNTHETIC_MODEL
 from .hostlink import HostError, HostLink
 from .i18n import _, ngettext
 from .i18n import use as use_locale
-from .keyboards import done_kb, menu_kb
+from .keyboards import done_kb, menu_kb, model_kb
 from .sessions import clean_prompt
 from .state import Managed, Store
 from .status_feed import Limit, Usage
@@ -49,6 +49,9 @@ if TYPE_CHECKING:
     from .watcher import Watcher
 
 log = logging.getLogger("ccbot.bridge")
+# The rate-limit `errorCode` of a model the account may not use without paid
+# credits (Fable 5.2 on Pro, 2026-11-26): another model is the way on.
+_MODEL_REFUSED = "credits_required"
 
 _FLUSH_IDLE = 2.0
 _MAX_BUFFER_AGE = 25.0
@@ -646,10 +649,13 @@ class SdkBridge:
 
     async def _turn_end(self, name: str, rt: _Rt, d: dict[str, Any], seq: int | None) -> None:
         result = (d.get("result") or "").strip()
+        refused = False
         if d.get("cost") is not None:
             rt.cost = float(d["cost"] or 0.0)
         if d.get("terminal_reason") in ("aborted_streaming", "aborted_tools"):
             self._buffer(rt, _("⏹ Interrupted."), seq)
+        elif d.get("is_error") and d.get("limit_code") == _MODEL_REFUSED:
+            refused = True      # Claude Code's own words are already buffered
         elif d.get("is_error"):
             detail = "; ".join(d.get("errors") or []) or result or d.get("subtype") or ""
             status = d.get("api_error_status")
@@ -664,6 +670,21 @@ class SdkBridge:
             rt.work_since = 0.0
         if not self._holding(name):
             await self._flush(name)
+        if refused:
+            await self._model_refused(name)
+
+    async def _model_refused(self, name: str) -> None:
+        """The turn's model needs credits this account lacks: say so plainly,
+        under Claude Code's own words, with the way out on a button."""
+        mgd = self.store.by_name(name)
+        if mgd is None:
+            return
+        text = (_("⛔ <b>{name}: this model is not available on this account</b>").format(
+                    name=html.escape(mgd.full_label))
+                + "\n\n" + _("The message was not carried out. Pick another model "
+                               "and send it again."))
+        await self._say(text, mgd.session_id, parse_mode="HTML",
+                        reply_markup=model_kb(mgd.session_id))
 
     async def _session_reset(self, name: str, d: dict[str, Any]) -> None:
         old, new = d.get("old_sid") or "", d.get("new_sid") or ""
@@ -700,6 +721,8 @@ class SdkBridge:
         if d.get("kind") == "compacted":
             self._forget_context(rt)
             self._buffer(rt, _("🗜 Context compacted."), seq)
+        elif d.get("kind") == "assistant_error" and d.get("code") == _MODEL_REFUSED:
+            pass                # the turn's end says it, with a button
         elif d.get("kind") == "assistant_error":
             self._buffer(rt, _("⚠️ Claude reported an error: {error}").format(
                 error=d.get("error")), seq)
