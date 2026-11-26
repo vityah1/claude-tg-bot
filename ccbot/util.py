@@ -130,7 +130,7 @@ def usage_report(name: str, usage, account: str = "") -> str:
             lines.append(f"<code>{lim.label:<12} {bar(lim.pct)} {lim.pct:>3}%</code>{tail}")
         extra = []
         if usage.model:
-            extra.append(usage.model)
+            extra.append(html.escape(usage.model))
         if usage.effort:
             extra.append(f"◉ {usage.effort}")
         if usage.cost_usd:

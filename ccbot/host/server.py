@@ -308,6 +308,8 @@ class Host:
         info = (actor.info if actor else row.info) or {}
         chosen = info.get("chosen") or {}
         model = chosen.get("model") or info.get("model") or None
+        if model == protocol.SYNTHETIC_MODEL:
+            model = None        # recorded by an older host
         mode = info.get("mode") if info.get("mode") in (
             "default", "acceptEdits", "plan", "auto", "bypassPermissions", "dontAsk") else None
         opts = ClaudeAgentOptions(

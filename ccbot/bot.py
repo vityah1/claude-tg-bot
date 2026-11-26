@@ -4018,7 +4018,7 @@ class CCBot:
         effort = u.effort if u else ""
         ctx = f"{u.ctx_pct}%" if u and u.ctx_pct is not None else ""
         if model:
-            bits.append(f"🧠 {model}")
+            bits.append(f"🧠 {html.escape(model)}")
         if effort:
             bits.append(f"◉ {effort}")
         if mode:

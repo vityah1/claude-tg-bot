@@ -34,6 +34,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from . import rich
+from .host.protocol import SYNTHETIC_MODEL
 from .hostlink import HostError, HostLink
 from .i18n import _, ngettext
 from .i18n import use as use_locale
@@ -324,6 +325,8 @@ class SdkBridge:
         order = {"five_hour": 0, "seven_day": 1}
         limits.sort(key=lambda lim: (order.get(lim.key, 2), lim.key))
         model = str(rt.info.get("model") or "")
+        if model == SYNTHETIC_MODEL:
+            model = ""          # an error message, not the model in force
         pct = ctx.get("percentage")
         return Usage(
             session_id=session_id, session_name=mgd.name, model=_model_name(model),
@@ -589,7 +592,7 @@ class SdkBridge:
             rt.limits = d.get("limits") or rt.limits
             rt.context = d.get("context") or rt.context
             rt.metrics_at = time.time()
-            if d.get("model"):
+            if d.get("model") and d["model"] != SYNTHETIC_MODEL:
                 rt.info["model"] = d["model"]
             if self._holding(name):
                 rt.usage_due = True     # announced once the card is answered

@@ -25,6 +25,9 @@ PROTO = 1
 # A frame bigger than this is a bug, not a message: the host cuts tool input
 # and text before it gets anywhere near it.
 MAX_FRAME = 8 * 1024 * 1024
+# The model Claude Code puts on a message it made itself (a rate-limit or API
+# error), not one the session runs on: never record or show it as a model.
+SYNTHETIC_MODEL = "<synthetic>"
 
 
 def runtime_dir() -> Path:

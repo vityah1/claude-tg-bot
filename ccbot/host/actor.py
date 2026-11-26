@@ -43,6 +43,8 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk.types import SystemPromptPreset
 
+from .protocol import SYNTHETIC_MODEL
+
 if TYPE_CHECKING:
     from .server import Host
 
@@ -483,7 +485,7 @@ class SessionActor:
                 self._mark_taken(uid)
             if msg.parent_tool_use_id:
                 return                  # a subagent's own words stay with it
-            if msg.model:
+            if msg.model and msg.model != SYNTHETIC_MODEL:
                 self.info["model"] = msg.model
             for block in msg.content:
                 if isinstance(block, TextBlock) and block.text.strip():
