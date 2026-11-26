@@ -52,6 +52,14 @@ log = logging.getLogger("ccbot.bridge")
 # The rate-limit `errorCode` of a model the account may not use without paid
 # credits (Fable 5.2 on Pro, 2026-11-26): another model is the way on.
 _MODEL_REFUSED = "credits_required"
+# A session stopped by the account limit is sent "Continue" this long after
+# the limit lifts: a minute of slack so it is not refused again (2026-11-26).
+_RESUME_SLACK = 60
+# How long past that an offline host is waited for before giving up.
+_RESUME_GIVEUP = 3600
+# A limit that lifted longer ago than this (a journal replayed after a long
+# outage) is history, not a reason to continue.
+_RESUME_STALE = 6 * 3600
 
 _FLUSH_IDLE = 2.0
 _MAX_BUFFER_AGE = 25.0
@@ -176,6 +184,18 @@ class SdkBridge:
         # Never handed out twice: an old button must not reach a newer text.
         self.again_next = int(store.meta_get("sdk_again_next") or 0) or \
             (max(self.again, default=0) + 1)
+        # Sessions stopped by the account limit, continued once it lifts
+        # (launch name -> {"at": resetsAt}); `fired` keeps the limit last
+        # continued after, so a session refused again is not looped on.
+        self.resume_due: dict[str, dict[str, Any]] = {}
+        self.resume_fired: dict[str, int] = {}
+        try:
+            saved = json.loads(store.meta_get("limit_resume") or "{}")
+            self.resume_due = {str(k): {"at": int(v["at"]), "type": str(v.get("type") or "")}
+                               for k, v in (saved.get("due") or {}).items()}
+            self.resume_fired = {str(k): int(v) for k, v in (saved.get("fired") or {}).items()}
+        except (ValueError, TypeError, KeyError, AttributeError):
+            self.resume_due, self.resume_fired = {}, {}
 
     # -- lifecycle -------------------------------------------------------
     def start(self) -> None:
@@ -208,6 +228,7 @@ class SdkBridge:
         The reply carries the prompt's `uuid` and whether it is `waiting` for
         the running turn to take it in — until then it can be taken back.
         """
+        self._drop_resume(mgd.name)     # somebody is driving it again
         self._rt(mgd.name).work_since = self._rt(mgd.name).work_since or time.time()
         return await self.link.call("send", timeout=150, name=mgd.name, text=text,
                                     guard=guard) or {}
@@ -255,6 +276,7 @@ class SdkBridge:
 
     def forget(self, name: str) -> None:
         self.rt.pop(name, None)
+        self._drop_resume(name)
         for rid in [r for r, q in self.requests.items() if q.name == name]:
             self.requests.pop(rid, None)
 
@@ -361,6 +383,7 @@ class SdkBridge:
         now = time.time()
         self._refresh_ids()
         await self._check_down()
+        await self._resume_due(now)
         for name, rt in list(self.rt.items()):
             if rt.usage_due and not self._holding(name):
                 rt.usage_due = False
@@ -567,6 +590,7 @@ class SdkBridge:
             if self.on_taken is not None:
                 await self.on_taken(name, uid)
         elif ev == "turn_start":
+            self._drop_resume(name)
             rt.state = "busy"
             rt.work_since = rt.work_since or time.time()
             self._title_from(name, d.get("text") or "")
@@ -672,6 +696,93 @@ class SdkBridge:
             await self._flush(name)
         if refused:
             await self._model_refused(name)
+        else:
+            await self._limit_wait(name, d)
+
+    # -- continuing after the account limit ------------------------------
+    def _save_resume(self) -> None:
+        old = time.time() - 86400
+        self.resume_fired = {k: v for k, v in self.resume_fired.items() if v > old}
+        self.store.meta_set("limit_resume", json.dumps(
+            {"due": self.resume_due, "fired": self.resume_fired}))
+
+    def _drop_resume(self, name: str) -> None:
+        if self.resume_due.pop(name, None) is not None:
+            log.info("limit resume dropped: %s", name)
+            self._save_resume()
+
+    async def _limit_wait(self, name: str, d: dict[str, Any]) -> None:
+        """A turn the account limit stopped: continue it once the limit lifts."""
+        at = int(d.get("limit_resets_at") or 0)
+        if (not d.get("is_error") or not at or d.get("queued")
+                or d.get("limit_code") == _MODEL_REFUSED or at < time.time() - _RESUME_STALE):
+            return
+        mgd = self.store.by_name(name)
+        if mgd is None:
+            return
+        if self.resume_fired.get(name) == at:
+            log.info("limit resume: %s refused again before %s, not looping", name, at)
+            return
+        if (self.resume_due.get(name) or {}).get("at") == at:
+            return                      # a replayed turn end
+        self.resume_due[name] = {"at": at, "type": str(d.get("limit_type") or "")}
+        self._save_resume()
+        log.info("limit resume scheduled: %s at %s", name, at)
+        await self._say(
+            _("⏸ <b>{name}: the account limit is reached</b>").format(
+                name=html.escape(mgd.full_label))
+            + "\n\n" + _("It lifts: {when}.\nI will continue it myself: {resume}.").format(
+                when=Limit("", 0, at).reset_text,
+                resume=Limit("", 0, at + _RESUME_SLACK).reset_text),
+            mgd.session_id, parse_mode="HTML")
+
+    async def _resume_due(self, now: float) -> None:
+        for name, entry in list(self.resume_due.items()):
+            at = int(entry.get("at") or 0)
+            if at + _RESUME_SLACK > now:
+                continue
+            try:
+                await self._resume_one(name, at, now)
+            except Exception as exc:
+                # One session's failure must not hold up the others.
+                log.exception("limit resume of %s failed", name)
+                await self._report_failure(exc)
+
+    async def _resume_one(self, name: str, at: int, now: float) -> None:
+        mgd = self.store.by_name(name)
+        if mgd is None:
+            self._drop_resume(name)
+            return
+        state = self.state(mgd)
+        if state == "offline":
+            if now - at > _RESUME_GIVEUP:
+                self._drop_resume(name)
+                await self._resume_failed(mgd)
+            return
+        if state in ("busy", "waiting"):
+            self._drop_resume(name)     # already moving, or asking something
+            return
+        # The intent is written before the call: a crash never sends it twice.
+        self.resume_due.pop(name, None)
+        self.resume_fired[name] = at
+        self._save_resume()
+        try:
+            # TRANSLATORS: the prompt sent to Claude when a limit lifts, an imperative.
+            await self.send(mgd, _("Continue."), guard=True)
+        except HostError as exc:
+            log.warning("limit resume of %s refused: %s", name, exc)
+            await self._resume_failed(mgd)
+            return
+        log.info("limit resume sent: %s", name)
+        await self._say(_("▶️ <b>{name}: limit reset — continuing</b>").format(
+            name=html.escape(mgd.full_label)), mgd.session_id, parse_mode="HTML")
+
+    async def _resume_failed(self, mgd: Managed) -> None:
+        await self._say(
+            _("⚠️ <b>{name}: could not continue after the limit</b>").format(
+                name=html.escape(mgd.full_label))
+            + "\n\n" + _("Send it a message yourself to carry on."),
+            mgd.session_id, parse_mode="HTML")
 
     async def _model_refused(self, name: str) -> None:
         """The turn's model needs credits this account lacks: say so plainly,

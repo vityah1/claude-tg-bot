@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-11-26 21:07+0000\n"
+"POT-Creation-Date: 2026-11-26 21:21+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -654,11 +654,11 @@ msgstr ""
 msgid "Effort: {value}"
 msgstr ""
 
-#: ccbot/bot.py:1807 ccbot/bridge.py:971
+#: ccbot/bot.py:1807 ccbot/bridge.py:1081
 msgid "This question is no longer open"
 msgstr ""
 
-#: ccbot/bot.py:1810 ccbot/bridge.py:1020
+#: ccbot/bot.py:1810 ccbot/bridge.py:1130
 msgid "The card was out of date — it is shown again"
 msgstr ""
 
@@ -1493,38 +1493,38 @@ msgid ""
 "Set the path in .env: <code>CCBOT_CLAUDE_BIN=/path/to/claude</code>"
 msgstr ""
 
-#: ccbot/bridge.py:231
+#: ccbot/bridge.py:252
 #, python-brace-format
 msgid "⚠️ The side question to <b>{name}</b> got no answer: <code>{error}</code>"
 msgstr ""
 
-#: ccbot/bridge.py:243
+#: ccbot/bridge.py:264
 #, python-brace-format
 msgid "🗨 Side question (/btw): {question}"
 msgstr ""
 
-#: ccbot/bridge.py:245
+#: ccbot/bridge.py:266
 msgid "(no answer)"
 msgstr ""
 
-#: ccbot/bridge.py:279
+#: ccbot/bridge.py:301
 msgid "⏹ Closed to send a message"
 msgstr ""
 
-#: ccbot/bridge.py:380 ccbot/bridge.py:509 ccbot/bridge.py:587
-#: ccbot/bridge.py:975 ccbot/bridge.py:1138
+#: ccbot/bridge.py:403 ccbot/bridge.py:532 ccbot/bridge.py:611
+#: ccbot/bridge.py:1085 ccbot/bridge.py:1248
 msgid "⏹ Question closed"
 msgstr ""
 
-#: ccbot/bridge.py:385
+#: ccbot/bridge.py:408
 msgid "⬇️ Shown again below"
 msgstr ""
 
-#: ccbot/bridge.py:406
+#: ccbot/bridge.py:429
 msgid "✅ The session host is back — SDK sessions are reachable again."
 msgstr ""
 
-#: ccbot/bridge.py:419
+#: ccbot/bridge.py:442
 msgid ""
 "⚠️ <b>The session host is not answering.</b>\n"
 "\n"
@@ -1532,7 +1532,7 @@ msgid ""
 "if this lasts, see <code>journalctl --user -u claude-tg-host</code>."
 msgstr ""
 
-#: ccbot/bridge.py:430
+#: ccbot/bridge.py:453
 #, python-brace-format
 msgid ""
 "⚠️ <b>The SDK session bridge has crashed</b>\n"
@@ -1541,231 +1541,262 @@ msgid ""
 "Details in /log."
 msgstr ""
 
-#: ccbot/bridge.py:446
+#: ccbot/bridge.py:469
 #, python-brace-format
 msgid ""
 "⏳ <b>{name}</b>\n"
 "working for {minutes} min"
 msgstr ""
 
-#: ccbot/bridge.py:520
+#: ccbot/bridge.py:543
 msgid ""
 "⚠️ The bot was away longer than the session host keeps its journal: some "
 "SDK output may be missing from the chat."
 msgstr ""
 
-#: ccbot/bridge.py:656
+#: ccbot/bridge.py:680
 msgid "⏹ Interrupted."
 msgstr ""
 
-#: ccbot/bridge.py:662
+#: ccbot/bridge.py:686
 #, python-brace-format
 msgid "⚠️ The turn ended with an error{status}: {detail}"
 msgstr ""
 
-#: ccbot/bridge.py:683
+#: ccbot/bridge.py:732
+#, python-brace-format
+msgid "⏸ <b>{name}: the account limit is reached</b>"
+msgstr ""
+
+#: ccbot/bridge.py:734
+#, python-brace-format
+msgid ""
+"It lifts: {when}.\n"
+"I will continue it myself: {resume}."
+msgstr ""
+
+#. TRANSLATORS: the prompt sent to Claude when a limit lifts, an imperative.
+#: ccbot/bridge.py:771
+msgid "Continue."
+msgstr ""
+
+#: ccbot/bridge.py:777
+#, python-brace-format
+msgid "▶️ <b>{name}: limit reset — continuing</b>"
+msgstr ""
+
+#: ccbot/bridge.py:782
+#, python-brace-format
+msgid "⚠️ <b>{name}: could not continue after the limit</b>"
+msgstr ""
+
+#: ccbot/bridge.py:784
+msgid "Send it a message yourself to carry on."
+msgstr ""
+
+#: ccbot/bridge.py:793
 #, python-brace-format
 msgid "⛔ <b>{name}: this model is not available on this account</b>"
 msgstr ""
 
-#: ccbot/bridge.py:685
+#: ccbot/bridge.py:795
 msgid "The message was not carried out. Pick another model and send it again."
 msgstr ""
 
-#: ccbot/bridge.py:699
+#: ccbot/bridge.py:809
 #, python-brace-format
 msgid ""
 "🧹 <b>{name}</b>: context cleared — the session was given a new id, and I "
 "am following it there."
 msgstr ""
 
-#: ccbot/bridge.py:711
+#: ccbot/bridge.py:821
 #, python-brace-format
 msgid "⚠️ <b>{name}</b>: the Claude process has ended."
 msgstr ""
 
-#: ccbot/bridge.py:714
+#: ccbot/bridge.py:824
 msgid "The session is resting: your next message resumes it with its context."
 msgstr ""
 
-#: ccbot/bridge.py:716
+#: ccbot/bridge.py:826
 msgid "Cut off with it:"
 msgstr ""
 
-#: ccbot/bridge.py:724
+#: ccbot/bridge.py:834
 msgid "🗜 Context compacted."
 msgstr ""
 
-#: ccbot/bridge.py:728
+#: ccbot/bridge.py:838
 #, python-brace-format
 msgid "⚠️ Claude reported an error: {error}"
 msgstr ""
 
-#: ccbot/bridge.py:736
+#: ccbot/bridge.py:846
 msgid "🔌 <b>The session host was restarted.</b>"
 msgstr ""
 
-#: ccbot/bridge.py:737
+#: ccbot/bridge.py:847
 msgid "SDK sessions are resting and wake up with your next message."
 msgstr ""
 
-#: ccbot/bridge.py:741
+#: ccbot/bridge.py:851
 #, python-brace-format
 msgid "✂️ <b>{name}</b> was cut off in the middle of:"
 msgstr ""
 
-#: ccbot/bridge.py:746
+#: ccbot/bridge.py:856
 #, python-brace-format
 msgid "❓ {count} open question was closed with it."
 msgid_plural "❓ {count} open questions were closed with it."
 msgstr[0] ""
 msgstr[1] ""
 
-#: ccbot/bridge.py:767
+#: ccbot/bridge.py:877
 #, python-brace-format
 msgid "🔁 Send again: {text}"
 msgstr ""
 
-#: ccbot/bridge.py:842
+#: ccbot/bridge.py:952
 #, python-brace-format
 msgid "**📋 {name}: a plan for your approval**"
 msgstr ""
 
-#: ccbot/bridge.py:844
+#: ccbot/bridge.py:954
 msgid "✅ Approve"
 msgstr ""
 
-#: ccbot/bridge.py:845
+#: ccbot/bridge.py:955
 msgid "✅ Approve, accept edits"
 msgstr ""
 
-#: ccbot/bridge.py:847
+#: ccbot/bridge.py:957
 msgid "✏️ Revise"
 msgstr ""
 
-#: ccbot/bridge.py:848 ccbot/bridge.py:993
+#: ccbot/bridge.py:958 ccbot/bridge.py:1103
 msgid "❌ Keep planning"
 msgstr ""
 
-#: ccbot/bridge.py:852
+#: ccbot/bridge.py:962
 #, python-brace-format
 msgid "Claude wants to use {tool}"
 msgstr ""
 
-#: ccbot/bridge.py:869 ccbot/bridge.py:888
+#: ccbot/bridge.py:979 ccbot/bridge.py:998
 msgid "✅ Allow"
 msgstr ""
 
-#: ccbot/bridge.py:870 ccbot/bridge.py:889
+#: ccbot/bridge.py:980 ccbot/bridge.py:999
 msgid "❌ Deny"
 msgstr ""
 
-#: ccbot/bridge.py:871
+#: ccbot/bridge.py:981
 msgid "✏️ Deny with a reason"
 msgstr ""
 
-#: ccbot/bridge.py:877
+#: ccbot/bridge.py:987
 #, python-brace-format
 msgid "✅ Always: {rule}"
 msgstr ""
 
-#: ccbot/bridge.py:886 ccbot/bridge.py:898 ccbot/bridge.py:937
+#: ccbot/bridge.py:996 ccbot/bridge.py:1008 ccbot/bridge.py:1047
 msgid "🚫 Don't answer"
 msgstr ""
 
-#: ccbot/bridge.py:900
+#: ccbot/bridge.py:1010
 #, python-brace-format
 msgid "**❓ {name}** asks a question this bot cannot read."
 msgstr ""
 
-#: ccbot/bridge.py:917
+#: ccbot/bridge.py:1027
 #, python-brace-format
 msgid "_Several can be ticked; then press {button}._"
 msgstr ""
 
-#: ccbot/bridge.py:918 ccbot/bridge.py:930
+#: ccbot/bridge.py:1028 ccbot/bridge.py:1040
 msgid "✅ Next"
 msgstr ""
 
-#: ccbot/bridge.py:918 ccbot/bridge.py:930
+#: ccbot/bridge.py:1028 ccbot/bridge.py:1040
 msgid "✅ Send"
 msgstr ""
 
-#: ccbot/bridge.py:926 ccbot/keyboards.py:100 ccbot/keyboards.py:159
+#: ccbot/bridge.py:1036 ccbot/keyboards.py:100 ccbot/keyboards.py:159
 #: ccbot/keyboards.py:208 ccbot/keyboards.py:266 ccbot/keyboards.py:277
 msgid "⬅️ Back"
 msgstr ""
 
-#: ccbot/bridge.py:934
+#: ccbot/bridge.py:1044
 msgid "✏️ Own answer"
 msgstr ""
 
-#: ccbot/bridge.py:936
+#: ccbot/bridge.py:1046
 msgid "💬 Discuss"
 msgstr ""
 
-#: ccbot/bridge.py:982
+#: ccbot/bridge.py:1092
 msgid "✅ Allowed"
 msgstr ""
 
-#: ccbot/bridge.py:983
+#: ccbot/bridge.py:1093
 msgid "✅ Plan approved"
 msgstr ""
 
-#: ccbot/bridge.py:986
+#: ccbot/bridge.py:1096
 msgid "✅ Approved, edits accepted"
 msgstr ""
 
-#: ccbot/bridge.py:989
+#: ccbot/bridge.py:1099
 msgid "✅ Always allowed"
 msgstr ""
 
-#: ccbot/bridge.py:996
+#: ccbot/bridge.py:1106
 msgid "🚫 Not answered"
 msgstr ""
 
-#: ccbot/bridge.py:1003
+#: ccbot/bridge.py:1113
 msgid "💬 To be discussed — your next message goes there"
 msgstr ""
 
-#: ccbot/bridge.py:1006
+#: ccbot/bridge.py:1116
 msgid "❌ Denied"
 msgstr ""
 
-#: ccbot/bridge.py:1008 ccbot/bridge.py:1051 ccbot/bridge.py:1113
-#: ccbot/bridge.py:1124
+#: ccbot/bridge.py:1118 ccbot/bridge.py:1161 ccbot/bridge.py:1223
+#: ccbot/bridge.py:1234
 msgid "Could not pass the answer on — see /log"
 msgstr ""
 
-#: ccbot/bridge.py:1051
+#: ccbot/bridge.py:1161
 msgid "Answered"
 msgstr ""
 
-#: ccbot/bridge.py:1100
+#: ccbot/bridge.py:1210
 msgid "This question is no longer open."
 msgstr ""
 
-#: ccbot/bridge.py:1106
+#: ccbot/bridge.py:1216
 msgid "The question has moved on — its card is shown again."
 msgstr ""
 
-#: ccbot/bridge.py:1111
+#: ccbot/bridge.py:1221
 msgid "✏️ Answer taken — the next part is on the card."
 msgstr ""
 
-#: ccbot/bridge.py:1112
+#: ccbot/bridge.py:1222
 msgid "✏️ Answered."
 msgstr ""
 
-#: ccbot/bridge.py:1118
+#: ccbot/bridge.py:1228
 msgid "✏️ Sent back with changes"
 msgstr ""
 
-#: ccbot/bridge.py:1121
+#: ccbot/bridge.py:1231
 msgid "❌ Denied with a reason"
 msgstr ""
 
-#: ccbot/bridge.py:1139
+#: ccbot/bridge.py:1249
 msgid "✅ Already answered"
 msgstr ""
 

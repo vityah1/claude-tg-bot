@@ -132,6 +132,12 @@ is restarted after a schema change.
   the CLI (`cancel_async_message`, a private SDK call — re-check on upgrade).
   A result closes the prompts it names (`user_message_uuids`), never "one per
   result": merged prompts used to stay "in flight" for good.
+- 🔴 **A session the account limit stopped continues by itself** (2026-11-26,
+  no cancel button — he is asleep): the host hands `limit_resets_at` with
+  `turn_end`, the bridge keeps `meta.limit_resume` and sends «Continue.»
+  `_RESUME_SLACK` (60 s) after it; any send or `turn_start` drops the entry,
+  `fired` stops a loop on the same limit. `credits_required` is not a wait
+  but «🧠 Change model» (`_model_refused`).
 - 🔴 **«💬 Discuss» answers nothing**: it denies with "ask what to clarify",
   so the next message is the reply to that.
 - 🔴 **Answering a card makes its session active**, announced (`_focus`,
