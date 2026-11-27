@@ -185,6 +185,59 @@ def recap(session_id: str, steps: int = 8, span: int = 800 * 1024) -> Recap:
     return out
 
 
+# How far back `last_model_effort` may look: one record can now be megabytes
+# (a long tool result), and a window holding only it finds nothing.
+MODEL_SCAN_MAX_BYTES = 8 * 1024 * 1024
+
+
+def last_model_effort(path: Path) -> tuple[str, str]:
+    """The model and reasoning effort of the latest answer in a transcript.
+
+    Every assistant record carries both, so a session's card can name them
+    before the host has reported any: it sends the model only after a turn,
+    and the effort only when one was picked in the bot (2026-11-27: a card of
+    a working session showed neither). Subagent records are skipped — their
+    model is their own. The model keeps a context suffix ("[1m]") the way
+    the host reports it: `requestedModel` has it, `message.model` does not.
+    """
+    span = VERSION_SCAN_BYTES
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            while True:
+                fh.seek(max(0, size - span))
+                lines = fh.read().decode("utf-8", "replace").splitlines()
+                if size > span:
+                    lines = lines[1:]   # the first one is cut in half
+                found = _model_effort(lines)
+                if found or span >= min(size, MODEL_SCAN_MAX_BYTES):
+                    return found or ("", "")
+                span *= 4
+    except OSError:
+        return "", ""
+
+
+def _model_effort(lines: list[str]) -> tuple[str, str] | None:
+    for raw in reversed(lines):
+        if '"assistant"' not in raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        message = rec.get("message")
+        model = str(message.get("model") or "") if isinstance(message, dict) else ""
+        if not model or model.startswith("<"):
+            continue            # "<synthetic>": an error notice, not a model
+        requested = str(rec.get("requestedModel") or "")
+        if requested.startswith(model + "["):
+            model = requested
+        return model, str(rec.get("effort") or "")
+    return None
+
+
 def last_version(session_id: str) -> str:
     """The Claude Code build that wrote to this transcript most recently.
 

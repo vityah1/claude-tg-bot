@@ -84,6 +84,8 @@ class _Rt:
 
     buffer: list[str] = field(default_factory=list)
     seqs: set[int] = field(default_factory=set)
+    # When each buffered text arrived: what is left after a flush keeps its age.
+    stamps: list[float] = field(default_factory=list)
     buffer_since: float = 0.0
     state: str = "idle"
     turn_texts: int = 0
@@ -151,6 +153,7 @@ class SdkBridge:
         self.chat_id = chat_id
         self.rt: dict[str, _Rt] = {}
         self.requests: dict[str, _Req] = {}
+        self._flush_locks: dict[str, asyncio.Lock] = {}
         self.acked = int(store.meta_get("host_seq") or 0)
         self.seen = self.acked
         # Seqs past the ack point that have already reached the chat. The ack
@@ -372,7 +375,7 @@ class SdkBridge:
             model = ""          # an error message, not the model in force
         pct = ctx.get("percentage")
         return Usage(
-            session_id=session_id, session_name=mgd.name, model=_model_name(model),
+            session_id=session_id, session_name=mgd.name, model=model_name(model),
             model_id=model,
             version=str(rt.info.get("version") or ""), cwd=mgd.cwd,
             effort=str(rt.info.get("effort") or ""),
@@ -428,7 +431,7 @@ class SdkBridge:
             elif req.msg_id is None and time.monotonic() - req.tried > 15:
                 await self._card(req)
         for name, rt in list(self.rt.items()):
-            if rt.buffer and not self._holding(name):
+            if rt.buffer and not self._flushing(name).locked() and not self._holding(name):
                 age = now - rt.buffer_since
                 quiet = rt.state != "busy"
                 if (quiet and age >= _FLUSH_IDLE) or age >= _MAX_BUFFER_AGE:
@@ -668,27 +671,47 @@ class SdkBridge:
         if not text.strip():
             return
         rt.buffer.append(text)
-        rt.buffer_since = rt.buffer_since or time.time()
+        rt.stamps.append(time.time())
+        rt.buffer_since = rt.buffer_since or rt.stamps[-1]
         if seq is not None:
             rt.seqs.add(seq)
 
     async def _flush(self, name: str) -> None:
         rt = self._rt(name)
-        if not rt.buffer:
-            return
-        body = "\n\n".join(rt.buffer).strip()
-        mgd = self.store.by_name(name)
-        if mgd is None:
-            log.info("dropping output of an unknown sdk session %s", name)
-        else:
-            log.info("flush id=%s name=%s chars=%d", mgd.session_id[:8], name, len(body))
-            await self._drop_pulse(rt)
-            await self.watcher._emit(mgd.session_id, mgd.full_label, body,
-                                     self.usage_for(mgd.session_id))
-        self._deliver(rt.seqs)
-        rt.buffer.clear()
-        rt.seqs.clear()
-        rt.buffer_since = 0.0
+        async with self._flushing(name):
+            if not rt.buffer:
+                return          # sent by the caller this one waited for
+            # Only what goes out now leaves the buffer: text that arrives
+            # while Telegram answers waits for the next flush. Its seqs stay
+            # buffered until then, so the ack never passes them.
+            count, seqs = len(rt.buffer), set(rt.seqs)
+            body = "\n\n".join(rt.buffer).strip()
+            mgd = self.store.by_name(name)
+            if mgd is None:
+                log.info("dropping output of an unknown sdk session %s", name)
+            else:
+                log.info("flush id=%s name=%s chars=%d", mgd.session_id[:8], name, len(body))
+                await self._drop_pulse(rt)
+                await self.watcher._emit(mgd.session_id, mgd.full_label, body,
+                                         self.usage_for(mgd.session_id))
+            self._deliver(seqs)
+            del rt.buffer[:count]
+            del rt.stamps[:count]
+            rt.seqs -= seqs
+            rt.buffer_since = rt.stamps[0] if rt.stamps else 0.0
+
+    def _flushing(self, name: str) -> asyncio.Lock:
+        """One flush per session at a time.
+
+        `_flush` awaits Telegram before it trims the buffer, and a second
+        caller in that gap sent the same text again (2026-11-27: `turn_end`
+        and the tick both sent one reply). Kept apart from `_Rt`, which
+        `forget` drops while a flush may still be running.
+        """
+        lock = self._flush_locks.get(name)
+        if lock is None:
+            lock = self._flush_locks[name] = asyncio.Lock()
+        return lock
 
     async def _turn_end(self, name: str, rt: _Rt, d: dict[str, Any], seq: int | None) -> None:
         result = (d.get("result") or "").strip()
@@ -1398,11 +1421,11 @@ class SdkBridge:
         return msg
 
 
-def _model_name(model_id: str) -> str:
+def model_name(model_id: str) -> str:
     """"claude-opus-5-5" → "Opus 5.5", the way Claude Code names models."""
     base, _br, tail = model_id.partition("[")
     if tail:
-        name = _model_name(base)
+        name = model_name(base)
         return f"{name} [{tail}" if name != base else model_id
     parts = model_id.removeprefix("claude-").split("-")
     if len(parts) < 2 or not parts[0].isalpha():

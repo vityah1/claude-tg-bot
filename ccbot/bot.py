@@ -45,7 +45,7 @@ from . import (
 from . import sessions as sess
 from .authlogin import AuthLogin, LoginError
 from .authlogin import status as auth_status
-from .bridge import SdkBridge
+from .bridge import SdkBridge, model_name
 from .bridge import _plain as plain_text
 from .config import Config
 from .hostlink import HostError
@@ -4016,11 +4016,19 @@ class CCBot:
         bits = []
         model = u.model if u else ""
         effort = u.effort if u else ""
+        path = await asyncio.to_thread(transcript.find_transcript, mgd.session_id)
+        if path is not None and (not model or not effort):
+            # The host names them late (the model after a turn, the effort
+            # only when picked here); the session's own answers name both.
+            seen_model, seen_effort = await asyncio.to_thread(
+                transcript.last_model_effort, path)
+            model = model or (model_name(seen_model) if seen_model else "")
+            effort = effort or seen_effort
         ctx = f"{u.ctx_pct}%" if u and u.ctx_pct is not None else ""
         if model:
             bits.append(f"🧠 {html.escape(model)}")
         if effort:
-            bits.append(f"◉ {effort}")
+            bits.append(f"◉ {html.escape(effort)}")
         if mode:
             bits.append(f"🔐 {_mode_label(mode)}")
         if ctx:
@@ -4040,9 +4048,7 @@ class CCBot:
         await account.fill([view])
         if view.account:
             text += "\n" + account_line(view.account)
-        has_transcript = await asyncio.to_thread(
-            transcript.find_transcript, mgd.session_id) is not None
-        return text, session_kb(view, self._asking(mgd), has_transcript)
+        return text, session_kb(view, self._asking(mgd), path is not None)
 
     async def _show_session_card(self, c: CallbackQuery, mgd) -> None:
         msg = _editable(c)
