@@ -116,11 +116,12 @@ class Host:
         """
         lost = [{"rid": r["rid"], "name": r["name"], "tool": r["tool"]}
                 for r in self.store.lose_open_requests()]
-        dormant, interrupted = [], []
+        dormant, interrupted, background = [], [], []
         for row in self.store.sessions():
             if row.state == "live":
                 dormant.append(row.name)
                 self.store.set_session(row.name, state="dormant")
+            prompts: list[str] = []
             if row.inflight:
                 prompts = [p.text for p in decode_inflight(row.inflight)]
                 if prompts:
@@ -129,11 +130,22 @@ class Host:
                     log.info("dropped an unreadable or older in-flight record of %s",
                              row.name)
                 self.store.set_session(row.name, inflight=None)
-        if dormant or lost or interrupted:
-            log.info("recovered: %d dormant, %d lost request(s), %d interrupted",
-                     len(dormant), len(lost), len(interrupted))
+            info = row.info or {}
+            tasks = info.get("background") or []
+            if tasks:
+                # Its background tasks died with the old process: said once.
+                background.append({"name": row.name, "tasks": tasks,
+                                   "interrupted": bool(prompts)})
+                self.store.set_session(row.name, info={k: v for k, v in info.items()
+                                                       if k != "background"})
+        if dormant or lost or interrupted or background:
+            log.info("recovered: %d dormant, %d lost request(s), %d interrupted, "
+                     "%d with background tasks cut", len(dormant), len(lost),
+                     len(interrupted), len(background))
             self.emit(None, "host_restarted", {"dormant": dormant, "lost": lost,
-                                               "interrupted": interrupted})
+                                               "interrupted": interrupted,
+                                               "background": background,
+                                               "epoch": self.epoch})
         acked = int(self.store.meta_get("acked") or 0)
         self.store.prune(acked)
 
@@ -165,10 +177,18 @@ class Host:
     def actor_ended(self, actor: SessionActor, how: str) -> None:
         if self.actors.get(actor.name) is actor:
             del self.actors[actor.name]
+        info: dict[str, Any] | None = None
+        if "background" in actor.info and (how == "closed" or not self.shutting_down):
+            # Ended for good or by a fault: its tasks are gone, nothing to
+            # report at the next start. A shutdown keeps them for `recover()`.
+            actor.info.pop("background", None)
+            info = actor.info
         if how == "closed":
-            self.store.set_session(actor.name, state="closed", inflight=None)
+            self.store.set_session(actor.name, state="closed", inflight=None,
+                                   **({"info": info} if info is not None else {}))
         else:
-            self.store.set_session(actor.name, state="dormant")
+            self.store.set_session(actor.name, state="dormant",
+                                   **({"info": info} if info is not None else {}))
         self.emit(actor.name, "session_state", {"state": how})
 
     async def _start(self, name: str, sid: str, cwd: str, resume: bool,

@@ -477,7 +477,9 @@ class SessionActor:
                 self.host.emit(self.name, "notice", {"kind": "compacted",
                                                     "meta": data.get("compact_metadata")})
             elif msg.subtype == "background_tasks_changed":
-                self.host.emit(self.name, "background", {"tasks": data.get("tasks") or []})
+                tasks = data.get("tasks") or []
+                self._save_background(tasks)
+                self.host.emit(self.name, "background", {"tasks": tasks})
             return
         if isinstance(msg, UserMessage):
             # The replay of a prompt at the moment a turn takes it in; tool
@@ -546,6 +548,22 @@ class SessionActor:
             self.host.emit(self.name, "metrics", {"limits": self.limits,
                                                  "status": msg.rate_limit_info.status},
                            journal=False)
+
+    def _save_background(self, tasks: list[dict[str, Any]]) -> None:
+        """Keep the running background tasks on disk before telling anyone:
+        a host restart kills them silently, and `recover()` reads them back to
+        say so (2026-11-27). Not while stopping — the CLI's dying "none left"
+        would erase exactly what recovery needs."""
+        if self.host.shutting_down:
+            return
+        kept = [{"task_id": str(t.get("task_id") or ""), "task_type": str(t.get("task_type") or ""),
+                 "description": str(t.get("description") or "")[:200]}
+                for t in tasks[:10] if isinstance(t, dict)]
+        if kept:
+            self.info["background"] = kept
+        elif self.info.pop("background", None) is None:
+            return
+        self.host.store.set_session(self.name, info=self.info)
 
     async def _metrics(self) -> None:
         """Context use after a turn: asked of the CLI, never in the reader."""

@@ -60,6 +60,9 @@ _RESUME_GIVEUP = 3600
 # A limit that lifted longer ago than this (a journal replayed after a long
 # outage) is history, not a reason to continue.
 _RESUME_STALE = 6 * 3600
+# A session whose background tasks a host restart cut is woken at most this
+# often: a host that keeps crashing must not keep waking it.
+_BG_COOLDOWN = 600
 
 _FLUSH_IDLE = 2.0
 _MAX_BUFFER_AGE = 25.0
@@ -198,6 +201,17 @@ class SdkBridge:
             self.resume_fired = {str(k): int(v) for k, v in (saved.get("fired") or {}).items()}
         except (ValueError, TypeError, KeyError, AttributeError):
             self.resume_due, self.resume_fired = {}, {}
+        # Sessions to wake after a host restart cut their background tasks
+        # (launch name -> {"epoch", "tasks", "at"}); `done` keeps the last wake
+        # per session, so a replay or a crash loop never wakes it twice.
+        self.bg_due: dict[str, dict[str, Any]] = {}
+        self.bg_done: dict[str, dict[str, Any]] = {}
+        try:
+            saved = json.loads(store.meta_get("bg_resume") or "{}")
+            self.bg_due = {str(k): dict(v) for k, v in (saved.get("due") or {}).items()}
+            self.bg_done = {str(k): dict(v) for k, v in (saved.get("done") or {}).items()}
+        except (ValueError, TypeError, AttributeError):
+            self.bg_due, self.bg_done = {}, {}
 
     # -- lifecycle -------------------------------------------------------
     def start(self) -> None:
@@ -231,6 +245,8 @@ class SdkBridge:
         the running turn to take it in — until then it can be taken back.
         """
         self._drop_resume(mgd.name)     # somebody is driving it again
+        if self.bg_due.pop(mgd.name, None) is not None:
+            self._save_bg()
         self._rt(mgd.name).work_since = self._rt(mgd.name).work_since or time.time()
         return await self.link.call("send", timeout=150, name=mgd.name, text=text,
                                     guard=guard) or {}
@@ -386,6 +402,7 @@ class SdkBridge:
         self._refresh_ids()
         await self._check_down()
         await self._resume_due(now)
+        await self._bg_resume_due()
         for name, rt in list(self.rt.items()):
             if rt.usage_due and not self._holding(name):
                 rt.usage_due = False
@@ -869,7 +886,8 @@ class SdkBridge:
     async def _host_restarted(self, d: dict[str, Any]) -> None:
         interrupted = d.get("interrupted") or []
         lost = d.get("lost") or []
-        if not interrupted and not lost:
+        background = [b for b in d.get("background") or [] if b.get("tasks")]
+        if not interrupted and not lost and not background:
             return
         lines = [_("🔌 <b>The session host was restarted.</b>"),
                  _("SDK sessions are resting and wake up with your next message.")]
@@ -880,16 +898,107 @@ class SdkBridge:
                 name=html.escape(str(label)))]
             lines += [f"• <code>{html.escape(str(p)[:300])}</code>"
                       for p in item.get("prompts") or []]
+        epoch = str(d.get("epoch") or "")
+        now = time.time()
+        for item in background:
+            name = str(item.get("name") or "")
+            mgd = self.store.by_name(name)
+            label = mgd.full_label if mgd else name
+            tasks = [str(t.get("description") or t.get("task_id") or "")
+                     for t in item.get("tasks") or [] if isinstance(t, dict)]
+            lines += ["", ngettext("⏳ <b>{name}</b>: a background task was cut off:",
+                                   "⏳ <b>{name}</b>: background tasks were cut off:",
+                                   len(tasks)).format(name=html.escape(str(label)))]
+            lines += [f"• <code>{html.escape(t[:200])}</code>" for t in tasks]
+            if (rt_ := self.rt.get(name)) is not None:
+                rt_.info.pop("background", None)
+            if mgd is None or item.get("interrupted"):
+                continue            # gone, or «🔁 Send again» below covers it
+            done = self.bg_done.get(name) or {}
+            if (name in self.bg_due or (epoch and done.get("epoch") == epoch)
+                    or now - float(done.get("at") or 0) < _BG_COOLDOWN):
+                continue
+            # The intent is on disk before the chat hears of it.
+            self.bg_due[name] = {"epoch": epoch, "tasks": tasks, "at": now}
+            self._save_bg()
+            lines.append(_("▶️ I will wake it myself to check on them."))
         if lost:
             lines += ["", ngettext("❓ {count} open question was closed with it.",
                                    "❓ {count} open questions were closed with it.",
                                    len(lost)).format(count=len(lost))]
         cut = [(str(item.get("name") or ""), str(p)) for item in interrupted
                for p in item.get("prompts") or []]
-        names = {n for n, _p in cut}
+        names = {n for n, _p in cut} | {str(b.get("name") or "") for b in background}
         only = self.store.by_name(next(iter(names))) if len(names) == 1 else None
         await self._say("\n".join(lines), only.session_id if only else None,
                         parse_mode="HTML", reply_markup=self.again_kb(cut))
+
+    # -- waking sessions whose background tasks a restart cut ------------
+    def _save_bg(self) -> None:
+        old = time.time() - 86400
+        self.bg_done = dict(sorted(((k, v) for k, v in self.bg_done.items()
+                                    if float(v.get("at") or 0) > old),
+                                   key=lambda kv: float(kv[1].get("at") or 0))[-50:])
+        self.store.meta_set("bg_resume", json.dumps({"due": self.bg_due, "done": self.bg_done}))
+
+    async def _bg_resume_due(self) -> None:
+        for name, entry in list(self.bg_due.items()):
+            try:
+                await self._bg_resume_one(name, entry)
+            except Exception as exc:
+                # One session's failure must not hold up the others.
+                log.exception("waking %s after the host restart failed", name)
+                await self._report_failure(exc)
+
+    async def _bg_resume_one(self, name: str, entry: dict[str, Any]) -> None:
+        mgd = self.store.by_name(name)
+        if mgd is None:
+            log.info("bg wake dropped: %s is gone", name)
+            self.bg_due.pop(name, None)
+            self._save_bg()
+            return
+        state = self.state(mgd)
+        if state == "offline":
+            if time.time() - float(entry.get("at") or 0) > _RESUME_GIVEUP:
+                self.bg_due.pop(name, None)
+                self._save_bg()
+                await self._bg_failed(mgd)
+            return
+        if state in ("busy", "waiting"):
+            log.info("bg wake dropped: %s is %s", name, state)
+            self.bg_due.pop(name, None)
+            self._save_bg()
+            return
+        # The intent is written before the call: a crash never sends it twice.
+        self.bg_due.pop(name, None)
+        self.bg_done[name] = {"epoch": entry.get("epoch") or "", "at": time.time()}
+        self._save_bg()
+        tasks = [str(t) for t in entry.get("tasks") or []]
+        listed = "\n".join(f"- {t[:120]}" for t in tasks[:5])
+        # TRANSLATORS: a prompt sent to Claude itself, not a chat text.
+        prompt = ngettext(
+            "Continue. The session host restarted and your background task was cut off:\n"
+            "{tasks}\nCheck what it managed to do, finish what is left and do what you promised.",
+            "Continue. The session host restarted and your background tasks were cut off:\n"
+            "{tasks}\nCheck what they managed to do, finish what is left and do what you promised.",
+            len(tasks)).format(tasks=listed)
+        try:
+            await self.send(mgd, prompt, guard=True)
+        except HostError as exc:
+            log.warning("bg wake of %s refused: %s", name, exc)
+            if exc.code not in ("no_session", "request_open"):
+                await self._bg_failed(mgd)
+            return
+        log.info("bg wake sent: %s", name)
+        await self._say(_("⏳ <b>{name}</b>: waking it after the restart").format(
+            name=html.escape(mgd.full_label)), mgd.session_id, parse_mode="HTML")
+
+    async def _bg_failed(self, mgd: Managed) -> None:
+        await self._say(
+            _("⚠️ <b>{name}: could not wake it after the host restart</b>").format(
+                name=html.escape(mgd.full_label))
+            + "\n\n" + _("Send it a message yourself to carry on."),
+            mgd.session_id, parse_mode="HTML")
 
     def again_kb(self, items: list[tuple[str, str]]) -> InlineKeyboardMarkup | None:
         """«🔁 Send again» for each prompt that was cut off (at most five)."""
