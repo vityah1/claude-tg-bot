@@ -20,7 +20,11 @@ _TOOL_HINT_KEYS = ("command", "file_path", "pattern", "path", "url", "prompt", "
 # Wrappers Claude injects as "user" messages; none of them is what a person
 # would recognise as what the session is about.
 _INJECTED_PREFIXES = ("<local-command", "<command-", "<system-", "<user-prompt",
-                      "<session-", "Caveat:", "<task-notification")
+                      "<session-", "Caveat:", "<task-notification",
+                      # What Claude Code writes after compacting a session:
+                      # it opens half the long ones and names none of them.
+                      "This session is being continued from a previous",
+                      "[Request interrupted by user")
 # How far into a transcript to look for the opening prompt before giving up.
 # A session opens with a file-history snapshot that routinely runs past 250 KB,
 # so a smaller budget finds the preamble and nothing else.
@@ -70,6 +74,11 @@ def prompt_text(line: str) -> str | None:
         # Attachments arrive as blocks; the typed text is in the first one.
         content = next((b.get("text") for b in content
                         if isinstance(b, dict) and b.get("type") == "text"), None)
+    return typed_text(content)
+
+
+def typed_text(content: object) -> str | None:
+    """*content* when a person could have typed it, not a command or an injection."""
     if not isinstance(content, str):
         return None
     text = content.strip()

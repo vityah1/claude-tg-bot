@@ -102,6 +102,11 @@ def _suggestion(s: PermissionUpdate) -> dict[str, Any]:
 
 
 CLAUDE_CODE_PROMPT: SystemPromptPreset = {"type": "preset", "preset": "claude_code"}
+# The SDK drops the connection to `claude` when one JSON line passes 1 MB: a
+# tool result or an image in a resumed transcript is enough (2026-11-27: a
+# launch refused with CLIJSONDecodeError; 2026-11-26 a session's reader died).
+# The limit only bounds one line in memory, so it is set far above any real one.
+MAX_MESSAGE_BYTES = 128 * 1024 * 1024
 
 
 class StartError(Exception):
@@ -228,6 +233,7 @@ class SessionActor:
             # unset, the SDK passes `--system-prompt ""`: every SDK session ran
             # without it from the move on 2026-11-24 (found the same evening).
             system_prompt=CLAUDE_CODE_PROMPT,
+            max_buffer_size=MAX_MESSAGE_BYTES,
             model=model,
             effort=self.effort,  # pyright: ignore[reportArgumentType]
             # A mode picked from the chat outlives a wake-up; None leaves the

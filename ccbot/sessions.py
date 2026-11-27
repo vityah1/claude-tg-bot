@@ -36,6 +36,7 @@ _LIVE_TTL = 5.0            # seconds; `claude agents --json` spawns a node proce
 _HISTORY_LIMIT = 25
 _HEAD_BYTES = 32 * 1024
 _TAIL_BYTES = 64 * 1024
+_TAIL_MAX_BLOCK = 8 * 1024 * 1024
 # Below this, and with no prompt of its own, a transcript holds nothing useful.
 _EMPTY_SESSION_BYTES = 20 * 1024
 # How much of a button caption the path may take.
@@ -390,6 +391,67 @@ def _json_field(line: str, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _may_be_prompt(line: str) -> bool:
+    """Cheap test before parsing a line as a user's prompt.
+
+    A tool result is a user record too, and one can be megabytes long: parsing
+    it only to learn that nobody typed it is what made a full scan slow.
+    """
+    return ('"tool_result"' not in line
+            and ('"type":"user"' in line or '"type": "user"' in line))
+
+
+def _prompt_of(line: str) -> str | None:
+    """The prompt a transcript line records, from either place it is kept.
+
+    Most sessions write what was typed as a `user` record. Others — mostly the
+    ones driven through the bot — never do: Claude Code keeps the text only in
+    `last-prompt` records (cut short, which is plenty for a caption).
+    """
+    if '"lastPrompt"' in line:
+        return transcript.typed_text(_json_field(line, "lastPrompt"))
+    if _may_be_prompt(line):
+        return transcript.prompt_text(line)
+    return None
+
+
+def _scan_tail(fh, size: int, title: str | None) -> tuple[str | None, str | None]:
+    """The latest title and the prompt a transcript stopped on.
+
+    Read backwards in blocks until a prompt turns up: the last 64 KB of a long
+    session is often nothing but tool results, and giving up there left the
+    session without a caption — and, in the history, without a row.
+    """
+    last = None
+    end = size
+    block = _TAIL_BYTES
+    carry = b""
+    while end > 0 and last is None:
+        start = max(0, end - block)
+        fh.seek(start)
+        data = fh.read(end - start) + carry
+        carry = b""
+        if start > 0:
+            nl = data.find(b"\n")
+            if nl < 0:                       # one line longer than the block
+                carry, end = data, start
+                block = min(block * 2, _TAIL_MAX_BLOCK)
+                continue
+            carry, data = data[:nl], data[nl + 1:]   # the partial first line
+        found_title = False
+        for line in reversed(data.decode("utf-8", "replace").splitlines()):
+            if not found_title and '"ai-title"' in line:
+                title = _json_field(line, "aiTitle") or title
+                found_title = True
+            if last is None:
+                # The prompt it stopped on says more about a session than the
+                # one it started with — that is what "where was I" means.
+                last = _prompt_of(line)
+        end = start
+        block = min(block * 2, _TAIL_MAX_BLOCK)
+    return title, last
+
+
 def _scan_file(path: Path, store: Store) -> Scan:
     """Everything a list row and a detail card need, cached per (path, mtime, size)."""
     try:
@@ -410,35 +472,30 @@ def _scan_file(path: Path, store: Store) -> Scan:
             read = 0
             for raw in fh:
                 read += len(raw)
-                if read > transcript.PROMPT_SCAN_BYTES:
+                # Names and the title are written within the first megabyte;
+                # the opening prompt is not: behind slash commands, hooks and
+                # a long run of tool results it can sit twenty megabytes in.
+                # Stopping at the megabyte made such sessions vanish from the
+                # history (2026-11-27), so only the prompt is hunted further.
+                near = read <= transcript.PROMPT_SCAN_BYTES
+                if not near and opening is not None:
                     break
                 line = raw.decode("utf-8", "replace")
-                if cwd is None and '"cwd"' in line:
-                    cwd = _json_field(line, "cwd")
-                if opening is None and '"type":"user"' in line.replace(" ", ""):
+                if near:
+                    if cwd is None and '"cwd"' in line:
+                        cwd = _json_field(line, "cwd")
+                    if launched is None and '"custom-title"' in line:
+                        launched = _json_field(line, "customTitle")
+                    # Claude Code writes the title it invents early in the
+                    # file, not at the end: looking only at the tail found it
+                    # in a handful of transcripts and missed it in the rest.
+                    if '"ai-title"' in line:
+                        title = _json_field(line, "aiTitle") or title
+                if opening is None and _may_be_prompt(line):
                     opening = transcript.prompt_text(line)
-                if launched is None and '"custom-title"' in line:
-                    launched = _json_field(line, "customTitle")
-                # Claude Code writes the title it invents early in the file,
-                # not at the end: looking only at the tail found it in a
-                # handful of transcripts and missed it in the rest.
-                if '"ai-title"' in line:
-                    title = _json_field(line, "aiTitle") or title
-                if cwd and opening and launched and title:
+                if near and cwd and opening and launched and title:
                     break
-            if st.st_size > _TAIL_BYTES:
-                fh.seek(-_TAIL_BYTES, 2)
-                fh.readline()          # drop the partial line
-            else:
-                fh.seek(0)
-            for line in fh.read().decode("utf-8", "replace").splitlines():
-                if '"ai-title"' in line:
-                    title = _json_field(line, "aiTitle") or title
-                if '"type":"user"' in line.replace(" ", ""):
-                    # The prompt it stopped on says more about a session than
-                    # the one it started with — that is what "where was I"
-                    # actually means.
-                    last = transcript.prompt_text(line) or last
+            title, last = _scan_tail(fh, st.st_size, title)
     except OSError:
         pass
     # Cleaned while the line breaks are still there, then flattened: the
@@ -461,7 +518,7 @@ def _closed_view(scan: Scan, mtime: float, size: int, saved: str) -> SessionView
     sessions in late August 2026, so it is also the most common.
     """
     name = (saved or scan.launched or scan.title or scan.opening
-            or _("untitled"))
+            or scan.last or _("untitled"))
     return SessionView(
         session_id=scan.session_id or "", name=name, cwd=scan.cwd or "",
         kind="closed", status="closed", title=scan.title, mtime=mtime,
@@ -513,7 +570,7 @@ async def closed_all(store: Store, roots: tuple[str, ...] = (),
             continue
         # Judge by content, not size: a session that only ran /exit still
         # weighs hundreds of KB because of its file-history snapshot.
-        if not scan.title and not scan.opening:
+        if not (scan.title or scan.opening or scan.last):
             continue
         saved = saved_names.get(scan.session_id, "")
         if needle and not _matches(scan, saved, needle):
