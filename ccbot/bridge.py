@@ -191,7 +191,9 @@ class SdkBridge:
         self.resume_fired: dict[str, int] = {}
         try:
             saved = json.loads(store.meta_get("limit_resume") or "{}")
-            self.resume_due = {str(k): {"at": int(v["at"]), "type": str(v.get("type") or "")}
+            self.resume_due = {str(k): {"at": int(v["at"]), "type": str(v.get("type") or ""),
+                                        "msg": int(v.get("msg") or 0),
+                                        "text": str(v.get("text") or "")}
                                for k, v in (saved.get("due") or {}).items()}
             self.resume_fired = {str(k): int(v) for k, v in (saved.get("fired") or {}).items()}
         except (ValueError, TypeError, KeyError, AttributeError):
@@ -276,7 +278,7 @@ class SdkBridge:
 
     def forget(self, name: str) -> None:
         self.rt.pop(name, None)
-        self._drop_resume(name)
+        self._drop_resume(name, "closed")
         for rid in [r for r, q in self.requests.items() if q.name == name]:
             self.requests.pop(rid, None)
 
@@ -706,10 +708,32 @@ class SdkBridge:
         self.store.meta_set("limit_resume", json.dumps(
             {"due": self.resume_due, "fired": self.resume_fired}))
 
-    def _drop_resume(self, name: str) -> None:
-        if self.resume_due.pop(name, None) is not None:
-            log.info("limit resume dropped: %s", name)
-            self._save_resume()
+    def _drop_resume(self, name: str, why: str = "taken") -> None:
+        """Forget a planned continue; its announcement says why, or it would
+        still promise one (2026-11-27: «I will continue it myself: 04:01» stood
+        after he had written to the session himself)."""
+        entry = self.resume_due.pop(name, None)
+        if entry is None:
+            return
+        log.info("limit resume dropped: %s (%s)", name, why)
+        self._save_resume()
+        note = {"taken": _("✔️ Not needed: the session got a message before that."),
+                "closed": _("⏹ Not continued: the session was closed."),
+                "waiting": _("⏸ Not continued: the session is waiting for your answer."),
+                }.get(why)
+        if note and entry.get("msg") and entry.get("text"):
+            task = asyncio.create_task(self._settle_resume(
+                int(entry["msg"]), str(entry["text"]) + "\n\n" + note))
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
+
+    async def _settle_resume(self, msg_id: int, text: str) -> None:
+        try:
+            await self.bot.edit_message_text(text, chat_id=self.chat_id, message_id=msg_id,
+                                             parse_mode="HTML")
+        except Exception as exc:
+            # Too old or gone: the drop itself already happened.
+            log.warning("limit resume note on %s not written: %s", msg_id, exc)
 
     async def _limit_wait(self, name: str, d: dict[str, Any]) -> None:
         """A turn the account limit stopped: continue it once the limit lifts."""
@@ -725,16 +749,19 @@ class SdkBridge:
             return
         if (self.resume_due.get(name) or {}).get("at") == at:
             return                      # a replayed turn end
-        self.resume_due[name] = {"at": at, "type": str(d.get("limit_type") or "")}
+        entry: dict[str, Any] = {"at": at, "type": str(d.get("limit_type") or "")}
+        self.resume_due[name] = entry
         self._save_resume()
         log.info("limit resume scheduled: %s at %s", name, at)
-        await self._say(
-            _("⏸ <b>{name}: the account limit is reached</b>").format(
-                name=html.escape(mgd.full_label))
-            + "\n\n" + _("It lifts: {when}.\nI will continue it myself: {resume}.").format(
-                when=Limit("", 0, at).reset_text,
-                resume=Limit("", 0, at + _RESUME_SLACK).reset_text),
-            mgd.session_id, parse_mode="HTML")
+        text = (_("⏸ <b>{name}: the account limit is reached</b>").format(
+                    name=html.escape(mgd.full_label))
+                + "\n\n" + _("It lifts: {when}.\nI will continue it myself: {resume}.").format(
+                    when=Limit("", 0, at).reset_text,
+                    resume=Limit("", 0, at + _RESUME_SLACK).reset_text))
+        msg = await self._say(text, mgd.session_id, parse_mode="HTML")
+        if msg is not None and self.resume_due.get(name) is entry:
+            entry.update(msg=msg.message_id, text=text)
+            self._save_resume()
 
     async def _resume_due(self, now: float) -> None:
         for name, entry in list(self.resume_due.items()):
@@ -751,16 +778,17 @@ class SdkBridge:
     async def _resume_one(self, name: str, at: int, now: float) -> None:
         mgd = self.store.by_name(name)
         if mgd is None:
-            self._drop_resume(name)
+            self._drop_resume(name, "closed")
             return
         state = self.state(mgd)
         if state == "offline":
             if now - at > _RESUME_GIVEUP:
-                self._drop_resume(name)
+                self._drop_resume(name, "failed")   # said by its own message
                 await self._resume_failed(mgd)
             return
         if state in ("busy", "waiting"):
-            self._drop_resume(name)     # already moving, or asking something
+            # Already moving, or asking him something.
+            self._drop_resume(name, "taken" if state == "busy" else "waiting")
             return
         # The intent is written before the call: a crash never sends it twice.
         self.resume_due.pop(name, None)

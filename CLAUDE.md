@@ -15,7 +15,10 @@ messages and cards. The long "why" lives in `README.md` — don't duplicate it.
 - 🔴 **The host is a second unit, `claude-tg-host`** (`host_main.py`,
   `ccbot/host/`). Restart it only when its own code or the SDK pin changed: a
   host restart ends every turn in progress (the chat gets «🔌 … restarted» with
-  «🔁 Send again»). Check `/service` for busy sessions first. Everything else
+  «🔁 Send again»). Check `/service` for busy sessions first. 🔴 It also kills
+  every background task (`run_in_background`, Monitor) silently: a session
+  whose last `background` event in `host.db` lists tasks is busy too
+  (2026-11-27: the APK wait of a 7loc session died). Everything else
   in `ccbot/` needs only the bot restart. Log: `~/.cache/ccbot/host.log`.
 - 🔴 **Restarting the bot is your job**: after a tested change, restart it and
   say so (2026-10-01). Before that, check the log tail — an `in msg` from the
