@@ -25,6 +25,7 @@ from aiogram.types import (
     ErrorEvent,
     InlineKeyboardMarkup,
     MenuButtonCommands,
+    MenuButtonDefault,
     Message,
     ReplyParameters,
     Update,
@@ -253,6 +254,8 @@ Any other <code>/command</code> (<code>/model</code>, <code>/compact</code>,
    this one run out). The sign-in link comes here, the code from
    the page goes back as a message. The other sessions switch to
    the new account with their next request, without a restart.
+/start — this help and the session list. Also brings back the
+   menu button beside the input box if Telegram lost it.
 /service — uptime, code version, session host state, restart button
 /restart — restart the bot (Claude's sessions are unaffected)
 /log — the last lines of the journal
@@ -749,6 +752,8 @@ class CCBot:
         async def _start(m: Message):
             if not self._ok(m):
                 return
+            # The standard way back when the client lost the menu button.
+            await self._publish_menu()
             await m.answer(help_text(), parse_mode="HTML")
             await self._show_sessions(m)
 
@@ -4246,6 +4251,12 @@ class CCBot:
                 await self._push_menu(locale, locale)
         for chat_id in sorted(self.cfg.allowed):
             try:
+                # Setting the value the button already has pushes nothing to
+                # the clients, so one that lost the button keeps it lost
+                # (2026-11-28). A detour through "default" makes it a change.
+                await self.bot.set_chat_menu_button(
+                    chat_id=chat_id, menu_button=MenuButtonDefault(),
+                )
                 await self.bot.set_chat_menu_button(
                     chat_id=chat_id, menu_button=MenuButtonCommands(),
                 )

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: claude-tg-bot 1.0\n"
 "Report-Msgid-Bugs-To: https://github.com/\n"
-"POT-Creation-Date: 2026-11-27 07:09+0000\n"
+"POT-Creation-Date: 2026-11-28 08:08+0000\n"
 "PO-Revision-Date: 2026-08-24 20:08+0000\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: uk\n"
@@ -20,7 +20,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
-#: ccbot/bot.py:176
+#: ccbot/bot.py:177
 msgid ""
 "🔄 <b>Restart the bot?</b>\n"
 "\n"
@@ -45,7 +45,7 @@ msgstr ""
 "\n"
 "Зазвичай бот повертається за 5–10 секунд."
 
-#: ccbot/bot.py:189
+#: ccbot/bot.py:190
 msgid ""
 "⚠️ The bot was started by hand rather than by systemd — once it exits "
 "nothing will bring it back, and there will be nothing left to drive the "
@@ -70,7 +70,7 @@ msgstr ""
 "\n"
 "Після цього <code>/restart</code> запрацює."
 
-#: ccbot/bot.py:202
+#: ccbot/bot.py:203
 msgid ""
 "🤖 <b>Claude Code session dispatcher</b>\n"
 "\n"
@@ -128,6 +128,8 @@ msgid ""
 "   this one run out). The sign-in link comes here, the code from\n"
 "   the page goes back as a message. The other sessions switch to\n"
 "   the new account with their next request, without a restart.\n"
+"/start — this help and the session list. Also brings back the\n"
+"   menu button beside the input box if Telegram lost it.\n"
 "/service — uptime, code version, session host state, restart button\n"
 "/restart — restart the bot (Claude's sessions are unaffected)\n"
 "/log — the last lines of the journal\n"
@@ -207,6 +209,8 @@ msgstr ""
 "   сторінки надішліть назад повідомленням. Інші сесії\n"
 "   перейдуть на новий акаунт зі своїм наступним запитом, без\n"
 "   перезапуску.\n"
+"/start — ця довідка і список сесій. Також повертає кнопку меню\n"
+"   біля поля вводу, якщо Telegram її загубив.\n"
 "/service — аптайм, версія коду, стан хоста сесій, кнопка перезапуску\n"
 "/restart — перезапустити бота (сесії Claude не постраждають)\n"
 "/log — останні рядки журналу\n"
@@ -233,7 +237,7 @@ msgstr ""
 "\n"
 "Коли Claude ставить питання — прилітають кнопки з варіантами."
 
-#: ccbot/bot.py:337
+#: ccbot/bot.py:340
 #, python-brace-format
 msgid "📋 <b>Sessions</b> — {count} running"
 msgid_plural "📋 <b>Sessions</b> — {count} running"
@@ -241,7 +245,7 @@ msgstr[0] "📋 <b>Сесії</b> — {count} запущена"
 msgstr[1] "📋 <b>Сесії</b> — {count} запущені"
 msgstr[2] "📋 <b>Сесії</b> — {count} запущених"
 
-#: ccbot/bot.py:341
+#: ccbot/bot.py:344
 #, python-brace-format
 msgid ", {count} waiting for you"
 msgid_plural ", {count} waiting for you"
@@ -249,12 +253,12 @@ msgstr[0] ", {count} чекає на тебе"
 msgstr[1] ", {count} чекають на тебе"
 msgstr[2] ", {count} чекають на тебе"
 
-#: ccbot/bot.py:347
+#: ccbot/bot.py:350
 #, python-brace-format
 msgid "🟢 active: <b>{name}</b> — plain text goes here"
 msgstr "🟢 активна: <b>{name}</b> — звичайний текст іде сюди"
 
-#: ccbot/bot.py:353
+#: ccbot/bot.py:356
 #, python-brace-format
 msgid "⬆️ {count} session runs an older Claude Code — /update"
 msgid_plural "⬆️ {count} sessions run an older Claude Code — /update"
@@ -262,7 +266,7 @@ msgstr[0] "⬆️ {count} сесія працює на старішому Claude
 msgstr[1] "⬆️ {count} сесії працюють на старішому Claude Code — /update"
 msgstr[2] "⬆️ {count} сесій працюють на старішому Claude Code — /update"
 
-#: ccbot/bot.py:358
+#: ccbot/bot.py:361
 #, python-brace-format
 msgid ""
 "📋 <b>Sessions</b>\n"
@@ -273,12 +277,12 @@ msgstr ""
 "\n"
 "Жодна сесія ще не запущена — почни з {button}."
 
-#: ccbot/bot.py:360 ccbot/bot.py:1314 ccbot/keyboards.py:88
+#: ccbot/bot.py:363 ccbot/bot.py:1319 ccbot/keyboards.py:88
 #: ccbot/keyboards.py:204
 msgid "➕ New session"
 msgstr "➕ Нова сесія"
 
-#: ccbot/bot.py:363
+#: ccbot/bot.py:366
 #, python-brace-format
 msgid ""
 "<b>{button}</b> — sessions closed earlier; resuming brings the context "
@@ -287,11 +291,11 @@ msgstr ""
 "<b>{button}</b> — завершені раніше сесії; відновлення повертає їхній "
 "контекст."
 
-#: ccbot/bot.py:364 ccbot/keyboards.py:89 ccbot/keyboards.py:205
+#: ccbot/bot.py:367 ccbot/keyboards.py:89 ccbot/keyboards.py:205
 msgid "🕘 Recent"
 msgstr "🕘 Останні"
 
-#: ccbot/bot.py:367
+#: ccbot/bot.py:370
 msgid ""
 "Tap a session for details — whether to open it is decided there. Replying"
 " to a session's message writes to that session and makes it active; ✏️ on"
@@ -301,7 +305,7 @@ msgstr ""
 "повідомлення сесії пише саме їй і робить її активною; ✏️ у картці дає їй "
 "свою назву."
 
-#: ccbot/bot.py:376
+#: ccbot/bot.py:379
 msgid ""
 "❌ The session host is not answering, so the session cannot start. It "
 "restarts by itself — try again in a minute."
@@ -309,7 +313,7 @@ msgstr ""
 "❌ Хост сесій не відповідає, тож сесію не запустити. Він перезапускається "
 "сам — спробуй за хвилину."
 
-#: ccbot/bot.py:379
+#: ccbot/bot.py:382
 #, python-brace-format
 msgid ""
 "❌ The session host could not start the session:\n"
@@ -318,11 +322,11 @@ msgstr ""
 "❌ Хост сесій не зміг запустити сесію:\n"
 "<code>{detail}</code>"
 
-#: ccbot/bot.py:384
+#: ccbot/bot.py:387
 msgid "The session host did not answer — try again in a moment."
 msgstr "Хост сесій не відповів — спробуйте за мить."
 
-#: ccbot/bot.py:388
+#: ccbot/bot.py:391
 #, python-brace-format
 msgid ""
 "<b>❌ {name} was not ended</b>\n"
@@ -335,32 +339,32 @@ msgstr ""
 "Хост сесій не відповідає. Сесія, можливо, ще працює — спробуйте за "
 "хвилину."
 
-#: ccbot/bot.py:396
+#: ccbot/bot.py:399
 #, python-brace-format
 msgid "This card is too old — send {command} again"
 msgstr "Ця картка застаріла — надішли {command} заново"
 
-#: ccbot/bot.py:426 ccbot/bot.py:432 ccbot/bot.py:433
+#: ccbot/bot.py:429 ccbot/bot.py:435 ccbot/bot.py:436
 msgid "someone"
 msgstr "хтось"
 
-#: ccbot/bot.py:633
+#: ccbot/bot.py:636
 #, python-brace-format
 msgid "<b>🟢 Text now goes to {name}</b>"
 msgstr "<b>🟢 Текст тепер іде в {name}</b>"
 
-#: ccbot/bot.py:637
+#: ccbot/bot.py:640
 #, python-brace-format
 msgid "{previous} keeps working — to write to it, reply to one of its messages."
 msgstr ""
 "{previous} працює далі — щоб написати їй, відповідай (reply) на її "
 "повідомлення."
 
-#: ccbot/bot.py:648
+#: ccbot/bot.py:651
 msgid "🗑 The session has ended — the message was not sent."
 msgstr "🗑 Сесія завершилась — повідомлення не надіслано."
 
-#: ccbot/bot.py:649
+#: ccbot/bot.py:652
 #, python-brace-format
 msgid "🗑 The session has ended — {count} message was not sent."
 msgid_plural "🗑 The session has ended — {count} messages were not sent."
@@ -368,22 +372,22 @@ msgstr[0] "🗑 Сесія завершилась — {count} повідомле
 msgstr[1] "🗑 Сесія завершилась — {count} повідомлення не надіслано."
 msgstr[2] "🗑 Сесія завершилась — {count} повідомлень не надіслано."
 
-#: ccbot/bot.py:858 ccbot/bot.py:1783 ccbot/bot.py:4119 ccbot/bot.py:4133
-#: ccbot/bot.py:4139
+#: ccbot/bot.py:863 ccbot/bot.py:1788 ccbot/bot.py:4130 ccbot/bot.py:4144
+#: ccbot/bot.py:4150
 msgid "It is waiting for an answer — deal with that first"
 msgstr "Вона чекає на відповідь — спершу розберись із нею"
 
-#: ccbot/bot.py:861
+#: ccbot/bot.py:866
 #, python-brace-format
 msgid "🧹 /clear sent to <b>{name}</b>{note}"
 msgstr "🧹 /clear надіслано в <b>{name}</b>{note}"
 
-#: ccbot/bot.py:892
+#: ccbot/bot.py:897
 #, python-brace-format
 msgid "⏳ Ending {name}…"
 msgstr "⏳ Завершую {name}…"
 
-#: ccbot/bot.py:897 ccbot/bot.py:4187
+#: ccbot/bot.py:902 ccbot/bot.py:4198
 #, python-brace-format
 msgid ""
 "<b>❌ Session {name} has ended</b>\n"
@@ -394,7 +398,7 @@ msgstr ""
 "\n"
 "Транскрипт лишився — її можна відродити через 🕘 у списку."
 
-#: ccbot/bot.py:957
+#: ccbot/bot.py:962
 #, python-brace-format
 msgid ""
 "⚠️ <b>Could not handle this message</b>\n"
@@ -407,51 +411,51 @@ msgstr ""
 "\n"
 "Сесії це не зачіпає. Подробиці — /log."
 
-#: ccbot/bot.py:969
+#: ccbot/bot.py:974
 msgid "Not allowed"
 msgstr "Не дозволено"
 
-#: ccbot/bot.py:978
+#: ccbot/bot.py:983
 #, python-brace-format
 msgid "Error: {error} — see /log"
 msgstr "Помилка: {error} — дивись /log"
 
-#: ccbot/bot.py:1056
+#: ccbot/bot.py:1061
 msgid "No active session — /sessions"
 msgstr "Немає активної сесії — /sessions"
 
-#: ccbot/bot.py:1075 ccbot/bot.py:4074
+#: ccbot/bot.py:1080 ccbot/bot.py:4085
 msgid "That session has already ended — see /sessions"
 msgstr "Та сесія вже завершена — дивись /sessions"
 
-#: ccbot/bot.py:1078
+#: ccbot/bot.py:1083
 msgid "in reply"
 msgstr "у відповідь"
 
-#: ccbot/bot.py:1082
+#: ccbot/bot.py:1087
 msgid "in reply, now active"
 msgstr "у відповідь, тепер активна"
 
-#: ccbot/bot.py:1119
+#: ccbot/bot.py:1124
 msgid "🤖 <b>Bot service</b>"
 msgstr "🤖 <b>Сервіс бота</b>"
 
-#: ccbot/bot.py:1120
+#: ccbot/bot.py:1125
 #, python-brace-format
 msgid "⏱ Up for {duration} (started at {time})"
 msgstr "⏱ Працює {duration} (старт о {time})"
 
-#: ccbot/bot.py:1123
+#: ccbot/bot.py:1128
 #, python-brace-format
 msgid "🧩 Code: <code>{version}</code>"
 msgstr "🧩 Код: <code>{version}</code>"
 
-#: ccbot/bot.py:1129
+#: ccbot/bot.py:1134
 #, python-brace-format
 msgid "🧰 Claude Code on disk: <code>{version}</code>"
 msgstr "🧰 Claude Code на диску: <code>{version}</code>"
 
-#: ccbot/bot.py:1133
+#: ccbot/bot.py:1138
 #, python-brace-format
 msgid "{count} session is still on an older one — /update"
 msgid_plural "{count} sessions are still on an older one — /update"
@@ -459,27 +463,27 @@ msgstr[0] "{count} сесія досі на старішій — /update"
 msgstr[1] "{count} сесії досі на старіших — /update"
 msgstr[2] "{count} сесій досі на старіших — /update"
 
-#: ccbot/bot.py:1139
+#: ccbot/bot.py:1144
 #, python-brace-format
 msgid "⚙️ PID {pid} · systemd <code>{unit}</code> — a crash brings it back in 5 s"
 msgstr "⚙️ PID {pid} · systemd <code>{unit}</code> — падіння підніме сам за 5 с"
 
-#: ccbot/bot.py:1143
+#: ccbot/bot.py:1148
 #, python-brace-format
 msgid "⚙️ PID {pid} · started by hand — a crash will not bring it back"
 msgstr "⚙️ PID {pid} · запущений вручну — після падіння сам не підніметься"
 
-#: ccbot/bot.py:1145
+#: ccbot/bot.py:1150
 #, python-brace-format
 msgid "📋 Sessions: {count}"
 msgstr "📋 Сесій: {count}"
 
-#: ccbot/bot.py:1146
+#: ccbot/bot.py:1151
 #, python-brace-format
 msgid "📓 Journal: <code>{path}</code> — /log"
 msgstr "📓 Журнал: <code>{path}</code> — /log"
 
-#: ccbot/bot.py:1156
+#: ccbot/bot.py:1161
 msgid ""
 "🛰 Session host: not answering — the sessions cannot be reached until it "
 "is back"
@@ -487,7 +491,7 @@ msgstr ""
 "🛰 Хост сесій: не відповідає — до сесій не достукатись, доки він не "
 "повернеться"
 
-#: ccbot/bot.py:1159
+#: ccbot/bot.py:1164
 #, python-brace-format
 msgid ""
 "🛰 Session host: PID {pid}, up for {duration} · SDK {sdk} · live sessions:"
@@ -496,16 +500,16 @@ msgstr ""
 "🛰 Хост сесій: PID {pid}, працює {duration} · SDK {sdk} · активних сесій: "
 "{live}"
 
-#: ccbot/bot.py:1170
+#: ccbot/bot.py:1175
 msgid "⏳ Restarting — back in a few seconds…"
 msgstr "⏳ Перезапускаюсь — повернуся за кілька секунд…"
 
-#: ccbot/bot.py:1229
+#: ccbot/bot.py:1234
 #, python-brace-format
 msgid "📁 New session in <code>{path}</code>"
 msgstr "📁 Нова сесія в <code>{path}</code>"
 
-#: ccbot/bot.py:1242
+#: ccbot/bot.py:1247
 #, python-brace-format
 msgid ""
 "<b>✏️ What should {name} be called?</b>\n"
@@ -518,11 +522,11 @@ msgstr ""
 "Надішли назву наступним повідомленням (до {limit} символів).\n"
 "<code>-</code> поверне автоматичну назву."
 
-#: ccbot/bot.py:1254
+#: ccbot/bot.py:1259
 msgid "auto"
 msgstr "авто"
 
-#: ccbot/bot.py:1261
+#: ccbot/bot.py:1266
 msgid ""
 "❌ There is nothing left of that name once unprintable characters are "
 "dropped."
@@ -530,16 +534,16 @@ msgstr ""
 "❌ Від цієї назви нічого не лишилось після прибирання недрукованих "
 "символів."
 
-#: ccbot/bot.py:1276
+#: ccbot/bot.py:1281
 msgid "your own name is gone — I will show Claude's own topic instead"
 msgstr "своя назва знята — показуватиму тему від Claude"
 
-#: ccbot/bot.py:1281
+#: ccbot/bot.py:1286
 #, python-brace-format
 msgid "✏️ It is now <b>{name}</b>{note}"
 msgstr "✏️ Тепер це <b>{name}</b>{note}"
 
-#: ccbot/bot.py:1312
+#: ccbot/bot.py:1317
 #, python-brace-format
 msgid ""
 "📁 <b>Project directories</b>\n"
@@ -550,7 +554,7 @@ msgstr ""
 "\n"
 "Ці каталоги пропонуються в {button}."
 
-#: ccbot/bot.py:1317
+#: ccbot/bot.py:1322
 msgid ""
 "⚠️ The list comes from <code>CCBOT_DIRS</code> in .env — the buttons "
 "below will not change it."
@@ -558,7 +562,7 @@ msgstr ""
 "⚠️ Список задано через <code>CCBOT_DIRS</code> у .env — кнопки нижче його"
 " не змінять."
 
-#: ccbot/bot.py:1322
+#: ccbot/bot.py:1327
 msgid ""
 "<code>~</code> counts as well: the home directory cannot be a root — it "
 "would take in every project below it — but sessions started there are "
@@ -568,7 +572,7 @@ msgstr ""
 " вбере в себе всі проєкти всередині — але сесії, запущені там, "
 "пропонуються і лишаються в 🕘 історії."
 
-#: ccbot/bot.py:1326
+#: ccbot/bot.py:1331
 msgid ""
 "📁 <b>Project directories</b>\n"
 "\n"
@@ -582,11 +586,11 @@ msgstr ""
 " Claude.\n"
 "Додай свої, якщо хочеш бачити лише певні проєкти."
 
-#: ccbot/bot.py:1340
+#: ccbot/bot.py:1345
 msgid "📁 Which directory should the session start in?"
 msgstr "📁 У якому каталозі запустити сесію?"
 
-#: ccbot/bot.py:1371
+#: ccbot/bot.py:1376
 #, python-brace-format
 msgid ""
 "❌ No such directory:\n"
@@ -601,29 +605,29 @@ msgstr ""
 "Якщо це було звичайне повідомлення — я чекав на шлях після {button}. "
 "Натисни /sessions і спробуй ще раз."
 
-#: ccbot/bot.py:1374 ccbot/keyboards.py:437
+#: ccbot/bot.py:1379 ccbot/keyboards.py:437
 msgid "✏️ Another path"
 msgstr "✏️ Інший шлях"
 
-#: ccbot/bot.py:1433
+#: ccbot/bot.py:1438
 msgid "resumed"
 msgstr "продовжено"
 
-#: ccbot/bot.py:1433
+#: ccbot/bot.py:1438
 msgid "new"
 msgstr "нова"
 
-#: ccbot/bot.py:1436
+#: ccbot/bot.py:1441
 #, python-brace-format
 msgid "✅ Resumed: <b>{name}</b>"
 msgstr "✅ Продовжено: <b>{name}</b>"
 
-#: ccbot/bot.py:1437
+#: ccbot/bot.py:1442
 #, python-brace-format
 msgid "✅ Created: <b>{name}</b>"
 msgstr "✅ Створено: <b>{name}</b>"
 
-#: ccbot/bot.py:1484
+#: ccbot/bot.py:1489
 msgid ""
 "🔑 That looks like a sign-in code, and no session is waiting for one, so I"
 " have not sent it anywhere. /login starts a login."
@@ -631,19 +635,19 @@ msgstr ""
 "🔑 Це схоже на код входу, але жодна сесія його не чекає, тож я нікуди його"
 " не надсилав. Почати вхід — /login."
 
-#: ccbot/bot.py:1497
+#: ccbot/bot.py:1502
 msgid "a restart of it is already under way"
 msgstr "її перезапуск уже триває"
 
-#: ccbot/bot.py:1504 ccbot/bot.py:1587
+#: ccbot/bot.py:1509 ccbot/bot.py:1592
 msgid "it is working or waiting for an answer"
 msgstr "вона працює або чекає на відповідь"
 
-#: ccbot/bot.py:1541
+#: ccbot/bot.py:1546
 msgid "⬆️ <b>Claude Code</b>"
 msgstr "⬆️ <b>Claude Code</b>"
 
-#: ccbot/bot.py:1543
+#: ccbot/bot.py:1548
 #, python-brace-format
 msgid ""
 "On disk: <code>{version}</code> — what a session gets the moment it is "
@@ -652,7 +656,7 @@ msgstr ""
 "На диску: <code>{version}</code> — саме це отримає сесія, щойно її "
 "запустять знову."
 
-#: ccbot/bot.py:1547
+#: ccbot/bot.py:1552
 msgid ""
 "The version on disk could not be read — is the <code>claude</code> CLI on"
 " the bot's PATH?"
@@ -660,11 +664,11 @@ msgstr ""
 "Не вдалося прочитати версію на диску — чи є <code>claude</code> у PATH "
 "бота?"
 
-#: ccbot/bot.py:1559
+#: ccbot/bot.py:1564
 msgid "✅ Every session is already running the version that is on disk."
 msgstr "✅ Усі сесії вже працюють на тій версії, що лежить на диску."
 
-#: ccbot/bot.py:1564
+#: ccbot/bot.py:1569
 #, python-brace-format
 msgid "{count} session is behind."
 msgid_plural "{count} sessions are behind."
@@ -672,11 +676,11 @@ msgstr[0] "{count} сесія відстала."
 msgstr[1] "{count} сесії відстали."
 msgstr[2] "{count} сесій відстали."
 
-#: ccbot/bot.py:1568
+#: ccbot/bot.py:1573
 msgid "Left alone by «Restart all»:"
 msgstr "«Перезапустити всі» їх не чіпало:"
 
-#: ccbot/bot.py:1573
+#: ccbot/bot.py:1578
 msgid ""
 "A restart resumes the same session on the build on disk: the session id, "
 "the transcript and the context all survive. What does not: the prompt "
@@ -686,20 +690,20 @@ msgstr ""
 "сесії, транскрипт і контекст лишаються. Не лишається кеш промту — тому "
 "перша відповідь після перезапуску буде трохи довшою."
 
-#: ccbot/bot.py:1584
+#: ccbot/bot.py:1589
 msgid "it is waiting for an answer"
 msgstr "вона чекає на відповідь"
 
-#: ccbot/bot.py:1586
+#: ccbot/bot.py:1591
 msgid "its state could not be read"
 msgstr "не вдалося прочитати її стан"
 
-#: ccbot/bot.py:1604
+#: ccbot/bot.py:1609
 #, python-brace-format
 msgid "⏳ Restarting <b>{name}</b>…"
 msgstr "⏳ Перезапускаю <b>{name}</b>…"
 
-#: ccbot/bot.py:1615
+#: ccbot/bot.py:1620
 #, python-brace-format
 msgid ""
 "✅ <b>{name}</b> now runs <code>{version}</code> — the context came back "
@@ -708,23 +712,23 @@ msgstr ""
 "✅ <b>{name}</b> тепер на <code>{version}</code> — контекст повернувся "
 "разом з нею."
 
-#: ccbot/bot.py:1620
+#: ccbot/bot.py:1625
 #, python-brace-format
 msgid ""
 "✅ <b>{name}</b> has been restarted; it has not said which version it is "
 "yet."
 msgstr "✅ <b>{name}</b> перезапущено; яка саме версія — ще не сказала."
 
-#: ccbot/bot.py:1623
+#: ccbot/bot.py:1628
 #, python-brace-format
 msgid "⚠️ <b>{name}</b> was not restarted — {reason}. Nothing was changed."
 msgstr "⚠️ <b>{name}</b> не перезапущено — {reason}. Нічого не змінено."
 
-#: ccbot/bot.py:1638
+#: ccbot/bot.py:1643
 msgid "Nothing to restart: no idle session is behind."
 msgstr "Нема чого перезапускати: жодна вільна сесія не відстала."
 
-#: ccbot/bot.py:1645
+#: ccbot/bot.py:1650
 #, python-brace-format
 msgid "⏳ Restarting {count} session…"
 msgid_plural "⏳ Restarting {count} sessions…"
@@ -732,12 +736,12 @@ msgstr[0] "⏳ Перезапускаю {count} сесію…"
 msgstr[1] "⏳ Перезапускаю {count} сесії…"
 msgstr[2] "⏳ Перезапускаю {count} сесій…"
 
-#: ccbot/bot.py:1651
+#: ccbot/bot.py:1656
 #, python-brace-format
 msgid "⏳ {index}/{total}: <b>{name}</b>…"
 msgstr "⏳ {index}/{total}: <b>{name}</b>…"
 
-#: ccbot/bot.py:1662
+#: ccbot/bot.py:1667
 #, python-brace-format
 msgid "✅ Restarted {count} session:"
 msgid_plural "✅ Restarted {count} sessions:"
@@ -745,11 +749,11 @@ msgstr[0] "✅ Перезапущено {count} сесію:"
 msgstr[1] "✅ Перезапущено {count} сесії:"
 msgstr[2] "✅ Перезапущено {count} сесій:"
 
-#: ccbot/bot.py:1668
+#: ccbot/bot.py:1673
 msgid "⚠️ Left as they were:"
 msgstr "⚠️ Лишились як були:"
 
-#: ccbot/bot.py:1683
+#: ccbot/bot.py:1688
 msgid ""
 "I have no local copy of the release notes "
 "(<code>~/.claude/cache/changelog.md</code>). They are at "
@@ -761,11 +765,11 @@ msgstr ""
 "code.claude.com/docs/en/changelog, а <code>/release-notes</code> покаже "
 "їх усередині сесії."
 
-#: ccbot/bot.py:1697
+#: ccbot/bot.py:1702
 msgid "Nothing new: every session already runs what is on disk."
 msgstr "Нічого нового: усі сесії вже працюють на тому, що лежить на диску."
 
-#: ccbot/bot.py:1701
+#: ccbot/bot.py:1706
 #, python-brace-format
 msgid "🆕 **Claude Code {since} → {disk}** — {count} release"
 msgid_plural "🆕 **Claude Code {since} → {disk}** — {count} releases"
@@ -773,12 +777,12 @@ msgstr[0] "🆕 **Claude Code {since} → {disk}** — {count} реліз"
 msgstr[1] "🆕 **Claude Code {since} → {disk}** — {count} релізи"
 msgstr[2] "🆕 **Claude Code {since} → {disk}** — {count} релізів"
 
-#: ccbot/bot.py:1705
+#: ccbot/bot.py:1710
 #, python-brace-format
 msgid "🆕 **Claude Code {disk}** — the newest release notes"
 msgstr "🆕 **Claude Code {disk}** — нотатки до останнього релізу"
 
-#: ccbot/bot.py:1710
+#: ccbot/bot.py:1715
 #, python-brace-format
 msgid "…and {count} older release, at code.claude.com/docs/en/changelog"
 msgid_plural "…and {count} older releases, at code.claude.com/docs/en/changelog"
@@ -786,11 +790,11 @@ msgstr[0] "…і ще {count} старіший реліз — на code.claude.c
 msgstr[1] "…і ще {count} старіші релізи — на code.claude.com/docs/en/changelog"
 msgstr[2] "…і ще {count} старіших релізів — на code.claude.com/docs/en/changelog"
 
-#: ccbot/bot.py:1723
+#: ccbot/bot.py:1728
 msgid "🔄 Running <code>claude update</code> — this can take a minute…"
 msgstr "🔄 Виконую <code>claude update</code> — це може зайняти хвилину…"
 
-#: ccbot/bot.py:1728
+#: ccbot/bot.py:1733
 #, python-brace-format
 msgid ""
 "⚠️ <code>claude update</code> failed:\n"
@@ -799,7 +803,7 @@ msgstr ""
 "⚠️ <code>claude update</code> не спрацював:\n"
 "<code>{output}</code>"
 
-#: ccbot/bot.py:1731
+#: ccbot/bot.py:1736
 #, python-brace-format
 msgid ""
 "⬆️ Updated: <code>{before}</code> → <code>{after}</code>. Restart the "
@@ -808,80 +812,80 @@ msgstr ""
 "⬆️ Оновлено: <code>{before}</code> → <code>{after}</code>. Щоб це "
 "запрацювало, перезапусти сесії — /update."
 
-#: ccbot/bot.py:1735
+#: ccbot/bot.py:1740
 #, python-brace-format
 msgid "✅ Already on the latest release: <code>{version}</code>."
 msgstr "✅ Уже найновіша версія: <code>{version}</code>."
 
-#: ccbot/bot.py:1758
+#: ccbot/bot.py:1763
 #, python-brace-format
 msgid "🧠 Model for <b>{name}</b> — this session only"
 msgstr "🧠 Модель для <b>{name}</b> — лише для цієї сесії"
 
-#: ccbot/bot.py:1768
+#: ccbot/bot.py:1773
 #, python-brace-format
 msgid "◉ Reasoning effort for <b>{name}</b> — this session only"
 msgstr "◉ Рівень роздумів для <b>{name}</b> — лише для цієї сесії"
 
-#: ccbot/bot.py:1771
+#: ccbot/bot.py:1776
 msgid "This model takes no effort level."
 msgstr "Ця модель не має рівнів роздумів."
 
-#: ccbot/bot.py:1798
+#: ccbot/bot.py:1803
 #, python-brace-format
 msgid "Model: {value}"
 msgstr "Модель: {value}"
 
-#: ccbot/bot.py:1799
+#: ccbot/bot.py:1804
 #, python-brace-format
 msgid "Effort: {value}"
 msgstr "Роздуми: {value}"
 
-#: ccbot/bot.py:1807 ccbot/bridge.py:1218
+#: ccbot/bot.py:1812 ccbot/bridge.py:1241
 msgid "This question is no longer open"
 msgstr "Це питання вже закрите"
 
-#: ccbot/bot.py:1810 ccbot/bridge.py:1267
+#: ccbot/bot.py:1815 ccbot/bridge.py:1290
 msgid "The card was out of date — it is shown again"
 msgstr "Картка застаріла — показую її заново"
 
-#: ccbot/bot.py:1814
+#: ccbot/bot.py:1819
 msgid "✏️ Write what to change in the plan — one message."
 msgstr "✏️ Напишіть, що змінити в плані, — одним повідомленням."
 
-#: ccbot/bot.py:1815
+#: ccbot/bot.py:1820
 msgid "✏️ Write why — one message; Claude gets it with the refusal."
 msgstr ""
 "✏️ Напишіть причину одним повідомленням — Claude отримає її разом із "
 "відмовою."
 
-#: ccbot/bot.py:1816
+#: ccbot/bot.py:1821
 msgid "✏️ Write your answer — one message."
 msgstr "✏️ Напишіть свою відповідь одним повідомленням."
 
-#: ccbot/bot.py:1835
+#: ccbot/bot.py:1840
 msgid "I no longer keep that text — copy it from the card."
 msgstr "Цього тексту в мене вже немає — скопіюйте його з картки."
 
-#: ccbot/bot.py:1842
+#: ccbot/bot.py:1847
 msgid "It has a question open — answer it first."
 msgstr "У сесії відкрите питання — спершу дайте відповідь на нього."
 
-#: ccbot/bot.py:1849
+#: ccbot/bot.py:1854
 msgid "Sent again"
 msgstr "Надіслано знову"
 
-#: ccbot/bot.py:1850
+#: ccbot/bot.py:1855
 #, python-brace-format
 msgid "🔁 Sent again to <b>{name}</b>"
 msgstr "🔁 Знову надіслано в <b>{name}</b>"
 
-#: ccbot/bot.py:1865
+#: ccbot/bot.py:1870
 #, python-brace-format
 msgid "❌ Could not start the login: <code>{detail}</code>"
 msgstr "❌ Не вдалося почати вхід: <code>{detail}</code>"
 
-#: ccbot/bot.py:1871
+#: ccbot/bot.py:1876
 msgid ""
 "🔑 <b>Sign in to Claude</b> — for every session of this machine.\n"
 "\n"
@@ -898,101 +902,101 @@ msgstr ""
 "#.\n"
 "3. Надішліть його сюди повідомленням, і я його введу."
 
-#: ccbot/bot.py:1884
+#: ccbot/bot.py:1889
 msgid "⏳ Entering the code…"
 msgstr "⏳ Вводжу код…"
 
-#: ccbot/bot.py:1893
+#: ccbot/bot.py:1898
 #, python-brace-format
 msgid "✅ Logged in as <b>{email}</b>."
 msgstr "✅ Увійшли як <b>{email}</b>."
 
-#: ccbot/bot.py:1894
+#: ccbot/bot.py:1899
 msgid "✅ Logged in."
 msgstr "✅ Вхід виконано."
 
-#: ccbot/bot.py:1898
+#: ccbot/bot.py:1903
 msgid "❌ Claude did not accept the code."
 msgstr "❌ Claude не прийняв код."
 
-#: ccbot/bot.py:1907 ccbot/bot.py:1912
+#: ccbot/bot.py:1912 ccbot/bot.py:1917
 msgid "Login cancelled"
 msgstr "Вхід скасовано"
 
-#: ccbot/bot.py:1909 ccbot/bot.py:1914
+#: ccbot/bot.py:1914 ccbot/bot.py:1919
 msgid "✖️ Login cancelled"
 msgstr "✖️ Вхід скасовано"
 
-#: ccbot/bot.py:1932
+#: ccbot/bot.py:1937
 #, python-brace-format
 msgid "working for {minutes} min"
 msgstr "працює вже {minutes} хв"
 
-#: ccbot/bot.py:1934 ccbot/sessions.py:48
+#: ccbot/bot.py:1939 ccbot/sessions.py:49
 msgid "working"
 msgstr "працює"
 
-#: ccbot/bot.py:1934
+#: ccbot/bot.py:1939
 msgid "waiting for your answer"
 msgstr "чекає на вашу відповідь"
 
-#: ccbot/bot.py:1935
+#: ccbot/bot.py:1940
 msgid "free"
 msgstr "вільна"
 
-#: ccbot/bot.py:1935
+#: ccbot/bot.py:1940
 msgid "resting — your next message wakes it"
 msgstr "спить — ваше наступне повідомлення її розбудить"
 
-#: ccbot/bot.py:1936
+#: ccbot/bot.py:1941
 msgid "the session host is not answering"
 msgstr "хост сесій не відповідає"
 
-#: ccbot/bot.py:1937
+#: ccbot/bot.py:1942
 #, python-brace-format
 msgid "**📜 {name}: where it stopped**"
 msgstr "**📜 {name}: на чому зупинилась**"
 
-#: ccbot/bot.py:1938
+#: ccbot/bot.py:1943
 #, python-brace-format
 msgid "📊 State: {state}"
 msgstr "📊 Стан: {state}"
 
-#: ccbot/bot.py:1941
+#: ccbot/bot.py:1946
 msgid "**✍️ Your last task:**"
 msgstr "**✍️ Ваше останнє завдання:**"
 
-#: ccbot/bot.py:1944
+#: ccbot/bot.py:1949
 msgid "**🔧 Last steps:**"
 msgstr "**🔧 Останні кроки:**"
 
-#: ccbot/bot.py:1947
+#: ccbot/bot.py:1952
 msgid "**💬 Last answer:**"
 msgstr "**💬 Остання відповідь:**"
 
-#: ccbot/bot.py:1949
+#: ccbot/bot.py:1954
 msgid "The transcript has nothing yet."
 msgstr "У транскрипті ще нічого немає."
 
-#: ccbot/bot.py:1969
+#: ccbot/bot.py:1974
 #, python-brace-format
 msgid "⏸ Interrupted <b>{name}</b>{note}"
 msgstr "⏸ Перервано <b>{name}</b>{note}"
 
-#: ccbot/bot.py:1974
+#: ccbot/bot.py:1979
 #, python-brace-format
 msgid "💤 <b>{name}</b> is resting — there is nothing to interrupt."
 msgstr "💤 <b>{name}</b> спить — переривати нічого."
 
-#: ccbot/bot.py:2039
+#: ccbot/bot.py:2044
 msgid "/btw needs the question after it, in the same message."
 msgstr "Після /btw потрібне саме питання, у тому самому повідомленні."
 
-#: ccbot/bot.py:2097 ccbot/bot.py:2367 ccbot/bot.py:2509 ccbot/bot.py:2990
+#: ccbot/bot.py:2102 ccbot/bot.py:2372 ccbot/bot.py:2514 ccbot/bot.py:2995
 msgid "❌ Could not pass that on — see /log"
 msgstr "❌ Не змогло дійти — дивись /log"
 
-#: ccbot/bot.py:2115
+#: ccbot/bot.py:2120
 #, python-brace-format
 msgid "📎 Saved {count} file. Write something and I will send them together."
 msgid_plural "📎 Saved {count} files. Write something and I will send them together."
@@ -1000,7 +1004,7 @@ msgstr[0] "📎 Збережено {count} файл. Напиши текст —
 msgstr[1] "📎 Збережено {count} файли. Напиши текст — надішлю разом із ними."
 msgstr[2] "📎 Збережено {count} файлів. Напиши текст — надішлю разом із ними."
 
-#: ccbot/bot.py:2196
+#: ccbot/bot.py:2201
 #, python-brace-format
 msgid "{count} message"
 msgid_plural "{count} messages"
@@ -1008,7 +1012,7 @@ msgstr[0] "{count} повідомлення"
 msgstr[1] "{count} повідомлення"
 msgstr[2] "{count} повідомлень"
 
-#: ccbot/bot.py:2199
+#: ccbot/bot.py:2204
 #, python-brace-format
 msgid "{count} attachment"
 msgid_plural "{count} attachments"
@@ -1016,17 +1020,17 @@ msgstr[0] "{count} вкладення"
 msgstr[1] "{count} вкладення"
 msgstr[2] "{count} вкладень"
 
-#: ccbot/bot.py:2201
+#: ccbot/bot.py:2206
 #, python-brace-format
 msgid "➡️ Sent to <b>{name}</b>{extra}{note}"
 msgstr "➡️ Надіслано в <b>{name}</b>{extra}{note}"
 
-#: ccbot/bot.py:2277
+#: ccbot/bot.py:2282
 #, python-brace-format
 msgid "⏳ <b>{name}</b> — sending in {seconds} s: the session is busy."
 msgstr "⏳ <b>{name}</b> — надішлю через {seconds} с: сесія зайнята."
 
-#: ccbot/bot.py:2279
+#: ccbot/bot.py:2284
 #, python-brace-format
 msgid ""
 "⏳ <b>{name}</b> — sending your {count} message in {seconds} s: the "
@@ -1044,16 +1048,16 @@ msgstr[2] ""
 "⏳ <b>{name}</b> — надішлю ваші {count} повідомлень через {seconds} с: "
 "сесія зайнята."
 
-#: ccbot/bot.py:2391 ccbot/bot.py:2419 ccbot/bot.py:2445
+#: ccbot/bot.py:2396 ccbot/bot.py:2424 ccbot/bot.py:2450
 msgid "This message can no longer be cancelled."
 msgstr "Це повідомлення вже не можна скасувати."
 
-#: ccbot/bot.py:2398
+#: ccbot/bot.py:2403
 #, python-brace-format
 msgid "↩️ Cancelled — <b>{name}</b> did not get it."
 msgstr "↩️ Скасовано — <b>{name}</b> його не отримала."
 
-#: ccbot/bot.py:2399
+#: ccbot/bot.py:2404
 #, python-brace-format
 msgid "↩️ Cancelled — <b>{name}</b> did not get your {count} message."
 msgid_plural "↩️ Cancelled — <b>{name}</b> did not get your {count} messages."
@@ -1061,24 +1065,24 @@ msgstr[0] "↩️ Скасовано — <b>{name}</b> не отримала в�
 msgstr[1] "↩️ Скасовано — <b>{name}</b> не отримала ваші {count} повідомлення."
 msgstr[2] "↩️ Скасовано — <b>{name}</b> не отримала ваших {count} повідомлень."
 
-#: ccbot/bot.py:2414
+#: ccbot/bot.py:2419
 msgid "It is being sent right now — tap again in a moment."
 msgstr "Саме зараз надсилається — натисніть ще раз за мить."
 
-#: ccbot/bot.py:2430
+#: ccbot/bot.py:2435
 msgid "Could not cancel it — try again."
 msgstr "Не вдалося скасувати — спробуйте ще раз."
 
-#: ccbot/bot.py:2443
+#: ccbot/bot.py:2448
 #, python-brace-format
 msgid "Too late — {name} has already taken it in."
 msgstr "Запізно — {name} уже взяла його в роботу."
 
-#: ccbot/bot.py:2478
+#: ccbot/bot.py:2483
 msgid "I no longer keep that text — send it again."
 msgstr "Цей текст уже не збережено — надішліть його ще раз."
 
-#: ccbot/bot.py:2491 ccbot/bot.py:3071
+#: ccbot/bot.py:2496 ccbot/bot.py:3076
 #, python-brace-format
 msgid "📥 <b>{count} message</b> is waiting"
 msgid_plural "📥 <b>{count} messages</b> are waiting"
@@ -1086,7 +1090,7 @@ msgstr[0] "📥 <b>{count} повідомлення</b> чекає"
 msgstr[1] "📥 <b>{count} повідомлення</b> чекають"
 msgstr[2] "📥 <b>{count} повідомлень</b> чекають"
 
-#: ccbot/bot.py:2529
+#: ccbot/bot.py:2534
 #, python-brace-format
 msgid ""
 "<b>⚠️ Not sent to {name}</b>\n"
@@ -1097,7 +1101,7 @@ msgstr ""
 "\n"
 "Бот перезапустився раніше, ніж ваше повідомлення туди пішло."
 
-#: ccbot/bot.py:2532
+#: ccbot/bot.py:2537
 #, python-brace-format
 msgid ""
 "<b>⚠️ Not sent to {name}</b>\n"
@@ -1120,7 +1124,7 @@ msgstr[2] ""
 "\n"
 "Бот перезапустився раніше, ніж ваші {count} повідомлень туди пішли."
 
-#: ccbot/bot.py:2679
+#: ccbot/bot.py:2684
 #, python-brace-format
 msgid "⏳ Your message goes to <b>{name}</b> once its question is answered."
 msgid_plural "⏳ Your {count} messages go to <b>{name}</b> once its question is answered."
@@ -1132,7 +1136,7 @@ msgstr[2] ""
 "⏳ Ваші {count} повідомлень підуть у <b>{name}</b>, щойно ви відповісте на"
 " питання."
 
-#: ccbot/bot.py:2707
+#: ccbot/bot.py:2712
 #, python-brace-format
 msgid ""
 "<b>❓ {name} has an open question</b>\n"
@@ -1145,7 +1149,7 @@ msgstr ""
 "Воно вище — ви могли його не побачити. Ваше повідомлення поки не "
 "надіслано, щоб не вибрати варіант замість вас."
 
-#: ccbot/bot.py:2711
+#: ccbot/bot.py:2716
 #, python-brace-format
 msgid ""
 "<b>❓ {name} has an open question</b>\n"
@@ -1173,7 +1177,7 @@ msgstr[2] ""
 "Воно вище — ви могли його не побачити. Ваші {count} повідомлень поки не "
 "надіслано, щоб не вибрати варіант замість вас."
 
-#: ccbot/bot.py:2755
+#: ccbot/bot.py:2760
 msgid ""
 "⚠️ Telegram sent something this version of the bot cannot read at all, "
 "and it was skipped. If it was a message, send it again in another form. "
@@ -1183,7 +1187,7 @@ msgstr ""
 "тож це пропущено. Якщо це було повідомлення, надішліть його ще раз в "
 "іншому вигляді. Подробиці — в /log."
 
-#: ccbot/bot.py:2760
+#: ccbot/bot.py:2765
 #, python-brace-format
 msgid ""
 "⚠️ Part of this message could not be read by this version of the bot and "
@@ -1194,7 +1198,7 @@ msgstr ""
 "пропущено: {parts}. Решту отримано. Якщо ця частина важлива, надішліть її"
 " ще раз в іншому вигляді."
 
-#: ccbot/bot.py:2776
+#: ccbot/bot.py:2781
 #, python-brace-format
 msgid ""
 "⌛️ The message that was waiting for an answered question has expired — it"
@@ -1212,17 +1216,17 @@ msgstr[2] ""
 "⌛️ {count} повідомлень, що чекали відповіді на питання, протерміновані — "
 "вони нікуди не пішли. Надішліть їх знову, якщо вони ще потрібні."
 
-#: ccbot/bot.py:2798 ccbot/bot.py:3153
+#: ccbot/bot.py:2803 ccbot/bot.py:3158
 msgid "Those messages are no longer waiting"
 msgstr "Ті повідомлення вже не чекають"
 
-#: ccbot/bot.py:2812 ccbot/bot.py:3196 ccbot/bot.py:3414 ccbot/bot.py:3669
-#: ccbot/bot.py:3681 ccbot/bot.py:3691 ccbot/bot.py:3714 ccbot/bot.py:3723
-#: ccbot/bot.py:3756 ccbot/bot.py:3791
+#: ccbot/bot.py:2817 ccbot/bot.py:3201 ccbot/bot.py:3419 ccbot/bot.py:3674
+#: ccbot/bot.py:3686 ccbot/bot.py:3696 ccbot/bot.py:3719 ccbot/bot.py:3728
+#: ccbot/bot.py:3761 ccbot/bot.py:3796
 msgid "That session is gone"
 msgstr "Сесія зникла"
 
-#: ccbot/bot.py:2814 ccbot/bot.py:2823
+#: ccbot/bot.py:2819 ccbot/bot.py:2828
 #, python-brace-format
 msgid "🗑 Not sent"
 msgid_plural "🗑 {count} messages not sent"
@@ -1230,36 +1234,36 @@ msgstr[0] "🗑 Не надіслано"
 msgstr[1] "🗑 {count} повідомлення не надіслано"
 msgstr[2] "🗑 {count} повідомлень не надіслано"
 
-#: ccbot/bot.py:2838
+#: ccbot/bot.py:2843
 msgid "Closing the question…"
 msgstr "Закриваю питання…"
 
-#: ccbot/bot.py:2845
+#: ccbot/bot.py:2850
 msgid "Esc did not close the question — the message is still waiting."
 msgstr "Esc не закрив питання — повідомлення досі чекає."
 
-#: ccbot/bot.py:2854
+#: ccbot/bot.py:2859
 #, python-brace-format
 msgid "💬 Question in <b>{name}</b> closed, message sent"
 msgstr "💬 Питання в <b>{name}</b> закрито, повідомлення надіслано"
 
-#: ccbot/bot.py:2863
+#: ccbot/bot.py:2868
 #, python-brace-format
 msgid "➡️ The question had closed — sent to <b>{name}</b> as an ordinary message"
 msgstr ""
 "➡️ Питання вже закрилось — надіслано в <b>{name}</b> як звичайне "
 "повідомлення"
 
-#: ccbot/bot.py:2870
+#: ccbot/bot.py:2875
 msgid "The question has changed — it is above"
 msgstr "Питання змінилось — воно вище"
 
-#: ccbot/bot.py:2971
+#: ccbot/bot.py:2976
 #, python-brace-format
 msgid "✅ The question in <b>{name}</b> was answered — message sent"
 msgstr "✅ На питання в <b>{name}</b> відповіли — повідомлення надіслано"
 
-#: ccbot/bot.py:3041
+#: ccbot/bot.py:3046
 #, python-brace-format
 msgid ""
 "⌛️ The forwarded message that was waiting for a session has expired — it "
@@ -1277,7 +1281,7 @@ msgstr[2] ""
 "⌛️ {count} пересланих повідомлень, які чекали на сесію, прострочились — "
 "вони нікуди не пішли. Перешли ще раз, якщо вони досі потрібні."
 
-#: ccbot/bot.py:3048
+#: ccbot/bot.py:3053
 #, python-brace-format
 msgid ""
 "⌛️ The message that was waiting for a session has expired — it went "
@@ -1295,7 +1299,7 @@ msgstr[2] ""
 "⌛️ {count} повідомлень, які чекали на сесію, прострочились — вони нікуди "
 "не пішли. Надішли ще раз, якщо вони досі потрібні."
 
-#: ccbot/bot.py:3068
+#: ccbot/bot.py:3073
 #, python-brace-format
 msgid "📥 <b>{count} forwarded message</b> is waiting"
 msgid_plural "📥 <b>{count} forwarded messages</b> are waiting"
@@ -1303,7 +1307,7 @@ msgstr[0] "📥 <b>{count} переслане повідомлення</b> че�
 msgstr[1] "📥 <b>{count} переслані повідомлення</b> чекають"
 msgstr[2] "📥 <b>{count} пересланих повідомлень</b> чекають"
 
-#: ccbot/bot.py:3075
+#: ccbot/bot.py:3080
 #, python-brace-format
 msgid "{count} file"
 msgid_plural "{count} files"
@@ -1311,11 +1315,11 @@ msgstr[0] "{count} файл"
 msgstr[1] "{count} файли"
 msgstr[2] "{count} файлів"
 
-#: ccbot/bot.py:3079
+#: ccbot/bot.py:3084
 msgid "Which session should they go to? Anything you send meanwhile joins them."
 msgstr "У яку сесію їх відправити? Усе, що надішлеш поки що, долучиться до них."
 
-#: ccbot/bot.py:3088
+#: ccbot/bot.py:3093
 msgid ""
 "No session is active, so there is nowhere to send them yet. Start a new "
 "one, bring a closed one back or pick one from the list — they go there as"
@@ -1325,15 +1329,15 @@ msgstr ""
 " закриту або вибери зі списку — вони підуть туди, щойно сесія встане. "
 "Усе, що надішлеш поки що, долучиться до них."
 
-#: ccbot/bot.py:3119
+#: ccbot/bot.py:3124
 msgid "now active"
 msgstr "тепер активна"
 
-#: ccbot/bot.py:3160
+#: ccbot/bot.py:3165
 msgid "Discarded"
 msgstr "Відкинуто"
 
-#: ccbot/bot.py:3162
+#: ccbot/bot.py:3167
 #, python-brace-format
 msgid "🗑 The forwarded message was discarded — it went to no session."
 msgid_plural "🗑 The {count} forwarded messages were discarded — they went to no session."
@@ -1341,7 +1345,7 @@ msgstr[0] "🗑 {count} переслане повідомлення відкин
 msgstr[1] "🗑 {count} переслані повідомлення відкинуто — вони не пішли в жодну сесію."
 msgstr[2] "🗑 {count} пересланих повідомлень відкинуто — вони не пішли в жодну сесію."
 
-#: ccbot/bot.py:3167
+#: ccbot/bot.py:3172
 #, python-brace-format
 msgid "🗑 The message was discarded — it went to no session."
 msgid_plural "🗑 The {count} messages were discarded — they went to no session."
@@ -1349,32 +1353,32 @@ msgstr[0] "🗑 {count} повідомлення відкинуто — воно
 msgstr[1] "🗑 {count} повідомлення відкинуто — вони не пішли в жодну сесію."
 msgstr[2] "🗑 {count} повідомлень відкинуто — вони не пішли в жодну сесію."
 
-#: ccbot/bot.py:3175
+#: ccbot/bot.py:3180
 msgid "No active session — pick one below"
 msgstr "Немає активної сесії — вибери нижче"
 
-#: ccbot/bot.py:3179 ccbot/bot.py:3199
+#: ccbot/bot.py:3184 ccbot/bot.py:3204
 msgid "Sending…"
 msgstr "Надсилаю…"
 
-#: ccbot/bot.py:3213 ccbot/bot.py:3533 ccbot/bot.py:3538 ccbot/bot.py:3544
-#: ccbot/bot.py:3563
+#: ccbot/bot.py:3218 ccbot/bot.py:3538 ccbot/bot.py:3543 ccbot/bot.py:3549
+#: ccbot/bot.py:3568
 msgid "Looking…"
 msgstr "Шукаю…"
 
-#: ccbot/bot.py:3214
+#: ccbot/bot.py:3219
 msgid "🕘 Looking through the transcripts…"
 msgstr "🕘 Шукаю по транскриптах…"
 
-#: ccbot/bot.py:3222
+#: ccbot/bot.py:3227
 msgid "📋 <b>Where should the forwarded messages go?</b>"
 msgstr "📋 <b>Куди відправити переслані повідомлення?</b>"
 
-#: ccbot/bot.py:3224
+#: ccbot/bot.py:3229
 msgid "📋 <b>Where should the messages go?</b>"
 msgstr "📋 <b>Куди відправити повідомлення?</b>"
 
-#: ccbot/bot.py:3226
+#: ccbot/bot.py:3231
 msgid ""
 "A running session takes them straight away. ➕ starts a new one in a "
 "directory you pick, 🕘 brings a closed one back — either way they are sent"
@@ -1384,7 +1388,7 @@ msgstr ""
 "підіймає закриту — у будь-якому разі повідомлення підуть, щойно сесія "
 "встане."
 
-#: ccbot/bot.py:3286
+#: ccbot/bot.py:3291
 #, python-brace-format
 msgid ""
 "⚠️ I cannot read this kind of message (<code>{kind}</code>), so it went "
@@ -1393,7 +1397,7 @@ msgstr ""
 "⚠️ Такий тип повідомлення (<code>{kind}</code>) я прочитати не можу, тож "
 "нікуди його не передав. Надішліть текстом, фото або файлом."
 
-#: ccbot/bot.py:3314
+#: ccbot/bot.py:3319
 #, python-brace-format
 msgid ""
 "That file is too big ({size} MB). Telegram lets a bot download 20 MB at "
@@ -1402,33 +1406,33 @@ msgstr ""
 "Файл завеликий ({size} МБ). Telegram дає боту качати щонайбільше 20 МБ — "
 "поклади його десь на диск і надішли мені шлях."
 
-#: ccbot/bot.py:3329
+#: ccbot/bot.py:3334
 msgid "❌ Could not download the file"
 msgstr "❌ Не вдалося завантажити файл"
 
-#: ccbot/bot.py:3354
+#: ccbot/bot.py:3359
 msgid "⌛️ That request has expired — treating this as an ordinary message."
 msgstr "⌛️ Той запит уже застарів — обробляю як звичайне повідомлення."
 
-#: ccbot/bot.py:3363
+#: ccbot/bot.py:3368
 #, python-brace-format
 msgid "❌ No such directory: <code>{path}</code>"
 msgstr "❌ Немає такого каталогу: <code>{path}</code>"
 
-#: ccbot/bot.py:3369
+#: ccbot/bot.py:3374
 #, python-brace-format
 msgid "✅ Added: <code>{path}</code>"
 msgstr "✅ Додано: <code>{path}</code>"
 
-#: ccbot/bot.py:3373
+#: ccbot/bot.py:3378
 msgid "That directory is already on the list"
 msgstr "Цей каталог уже в списку"
 
-#: ccbot/bot.py:3397
+#: ccbot/bot.py:3402
 msgid "Your message goes to the session as an ordinary message."
 msgstr "Ваше повідомлення піде в сесію як звичайне."
 
-#: ccbot/bot.py:3423
+#: ccbot/bot.py:3428
 msgid ""
 "That does not look like a path (one starts with / or ~), so I am sending "
 "it to the session."
@@ -1436,23 +1440,23 @@ msgstr ""
 "Це не схоже на шлях (він має починатися з / або ~), тож надсилаю це в "
 "сесію."
 
-#: ccbot/bot.py:3471
+#: ccbot/bot.py:3476
 msgid "Already answered — the button only shows what was chosen"
 msgstr "Вже відповіли — кнопка лише показує, що вибрано"
 
-#: ccbot/bot.py:3494
+#: ccbot/bot.py:3499
 msgid "Reading the release notes…"
 msgstr "Читаю нотатки до релізів…"
 
-#: ccbot/bot.py:3497
+#: ccbot/bot.py:3502
 msgid "Checking…"
 msgstr "Перевіряю…"
 
-#: ccbot/bot.py:3501 ccbot/bot.py:3509 ccbot/bot.py:3747 ccbot/bot.py:4126
+#: ccbot/bot.py:3506 ccbot/bot.py:3514 ccbot/bot.py:3752 ccbot/bot.py:4137
 msgid "Restarting…"
 msgstr "Перезапускаю…"
 
-#: ccbot/bot.py:3552
+#: ccbot/bot.py:3557
 msgid ""
 "🔍 Send a word to look for — it is matched against the session's name, its"
 " first prompt and its last one, in every directory."
@@ -1460,23 +1464,23 @@ msgstr ""
 "🔍 Надішли слово для пошуку — шукаю в назві сесії, її першому та "
 "останньому промпті, по всіх каталогах."
 
-#: ccbot/bot.py:3560
+#: ccbot/bot.py:3565
 msgid "That search is gone — press 🔍 again"
 msgstr "Цей пошук уже забувся — натисни 🔍 ще раз"
 
-#: ccbot/bot.py:3570
+#: ccbot/bot.py:3575
 msgid "Send the absolute path of the project directory:"
 msgstr "Надішли абсолютний шлях до каталогу проєкту:"
 
-#: ccbot/bot.py:3580
+#: ccbot/bot.py:3585
 msgid "Removed"
 msgstr "Прибрано"
 
-#: ccbot/bot.py:3589
+#: ccbot/bot.py:3594
 msgid "Reset"
 msgstr "Скинуто"
 
-#: ccbot/bot.py:3600
+#: ccbot/bot.py:3605
 msgid ""
 "Send the absolute path of a directory (it starts with / or ~).\n"
 "Or just press any button to cancel."
@@ -1484,15 +1488,15 @@ msgstr ""
 "Надішли абсолютний шлях до каталогу (починається з / або ~).\n"
 "Або просто натисни будь-яку кнопку, щоб скасувати."
 
-#: ccbot/bot.py:3608
+#: ccbot/bot.py:3613
 msgid "Starting…"
 msgstr "Запускаю…"
 
-#: ccbot/bot.py:3644
+#: ccbot/bot.py:3649
 msgid "Bringing it up…"
 msgstr "Піднімаю…"
 
-#: ccbot/bot.py:3656
+#: ccbot/bot.py:3661
 #, python-brace-format
 msgid ""
 "▶️ Resuming <b>{name}</b>\n"
@@ -1501,12 +1505,12 @@ msgstr ""
 "▶️ Відновлюю <b>{name}</b>\n"
 "<code>{path}</code>"
 
-#: ccbot/bot.py:3672
+#: ccbot/bot.py:3677
 #, python-brace-format
 msgid "Active: {name}"
 msgstr "Активна: {name}"
 
-#: ccbot/bot.py:3701
+#: ccbot/bot.py:3706
 #, python-brace-format
 msgid ""
 "{title} for <b>{name}</b>\n"
@@ -1515,23 +1519,23 @@ msgstr ""
 "{title} для <b>{name}</b>\n"
 "Зараз: <code>{value}</code>"
 
-#: ccbot/bot.py:3702
+#: ccbot/bot.py:3707
 msgid "🔐 Permission mode"
 msgstr "🔐 Режим дозволів"
 
-#: ccbot/bot.py:3726
+#: ccbot/bot.py:3731
 msgid "Done"
 msgstr "Готово"
 
-#: ccbot/bot.py:3726
+#: ccbot/bot.py:3731
 msgid "Could not switch that"
 msgstr "Не вдалося перемкнути"
 
-#: ccbot/bot.py:3740
+#: ccbot/bot.py:3745
 msgid "The bot was started by hand"
 msgstr "Бот запущений вручну"
 
-#: ccbot/bot.py:3804
+#: ccbot/bot.py:3809
 #, python-brace-format
 msgid ""
 "🌐 <b>Interface language</b>\n"
@@ -1542,28 +1546,28 @@ msgstr ""
 "\n"
 "Говорю: <b>{name}</b>"
 
-#: ccbot/bot.py:3807
+#: ccbot/bot.py:3812
 msgid "following your Telegram profile"
 msgstr "як у твоєму профілі Telegram"
 
-#: ccbot/bot.py:3831
+#: ccbot/bot.py:3836
 msgid "I do not know that language"
 msgstr "Я не знаю такої мови"
 
-#: ccbot/bot.py:3836
+#: ccbot/bot.py:3841
 #, python-brace-format
 msgid "Language: {name}"
 msgstr "Мова: {name}"
 
-#: ccbot/bot.py:3855
+#: ccbot/bot.py:3860
 msgid "That session is running again — open it in /sessions."
 msgstr "Ця сесія вже працює — відкрий її в /sessions."
 
-#: ccbot/bot.py:3856
+#: ccbot/bot.py:3861
 msgid "Session not found"
 msgstr "Сесію не знайдено"
 
-#: ccbot/bot.py:3887
+#: ccbot/bot.py:3892
 #, python-brace-format
 msgid ""
 "🕘 <b>Closed sessions</b> — resuming brings the context back.\n"
@@ -1572,7 +1576,7 @@ msgstr ""
 "🕘 <b>Завершені сесії</b> — відновлення повертає контекст.\n"
 "📁 <code>{path}</code>"
 
-#: ccbot/bot.py:3890 ccbot/bot.py:3929
+#: ccbot/bot.py:3895 ccbot/bot.py:3934
 #, python-brace-format
 msgid "{n} session"
 msgid_plural "{n} sessions"
@@ -1580,7 +1584,7 @@ msgstr[0] "{n} сесія"
 msgstr[1] "{n} сесії"
 msgstr[2] "{n} сесій"
 
-#: ccbot/bot.py:3892
+#: ccbot/bot.py:3897
 #, python-brace-format
 msgid ""
 "{count} · tap one for details — whether to resume it is decided there.\n"
@@ -1589,16 +1593,16 @@ msgstr ""
 "{count} · тап покаже деталі — продовжувати чи ні, вирішиш там.\n"
 "<i>час · тема · живі сесії — в /sessions</i>"
 
-#: ccbot/bot.py:3905
+#: ccbot/bot.py:3910
 msgid "Too short to search for — send at least two characters."
 msgstr "Закоротко для пошуку — надішли хоча б два символи."
 
-#: ccbot/bot.py:3909
+#: ccbot/bot.py:3914
 #, python-brace-format
 msgid "🔍 Looking for «{query}»…"
 msgstr "🔍 Шукаю «{query}»…"
 
-#: ccbot/bot.py:3919
+#: ccbot/bot.py:3924
 #, python-brace-format
 msgid ""
 "🔍 Nothing matches «{query}».\n"
@@ -1609,7 +1613,7 @@ msgstr ""
 "<i>Пошук іде по назвах, першому й останньому промпту завершених сесій — "
 "не по всій розмові.</i>"
 
-#: ccbot/bot.py:3933
+#: ccbot/bot.py:3938
 #, python-brace-format
 msgid ""
 "🔍 «{query}» — {count}.\n"
@@ -1618,11 +1622,11 @@ msgstr ""
 "🔍 «{query}» — {count}.\n"
 "<i>час · каталог · тема</i>"
 
-#: ccbot/bot.py:3943
+#: ccbot/bot.py:3948
 msgid "🕘 No closed sessions found in the project directories."
 msgstr "🕘 Завершених сесій у робочих каталогах не знайдено."
 
-#: ccbot/bot.py:3950
+#: ccbot/bot.py:3955
 #, python-brace-format
 msgid ""
 "🕘 <b>Closed sessions</b> — {total} in all, by directory.\n"
@@ -1631,32 +1635,32 @@ msgstr ""
 "🕘 <b>Завершені сесії</b> — усього {total}, по каталогах.\n"
 "Обери проєкт, щоб побачити його список."
 
-#: ccbot/bot.py:3975
+#: ccbot/bot.py:3980
 #, python-brace-format
 msgid "🕘 Last active: {when}"
 msgstr "🕘 Остання активність: {when}"
 
-#: ccbot/bot.py:3977
+#: ccbot/bot.py:3982
 #, python-brace-format
 msgid "💬 It started with: {text}"
 msgstr "💬 Починалась з: {text}"
 
-#: ccbot/bot.py:3981
+#: ccbot/bot.py:3986
 #, python-brace-format
 msgid "⏹ It stopped on: {text}"
 msgstr "⏹ Зупинилась на: {text}"
 
-#: ccbot/bot.py:3985
+#: ccbot/bot.py:3990
 #, python-brace-format
 msgid "📦 Transcript: {size} MB"
 msgstr "📦 Транскрипт: {size} МБ"
 
-#: ccbot/bot.py:3988
+#: ccbot/bot.py:3993
 #, python-brace-format
 msgid "📦 Transcript: {size} KB"
 msgstr "📦 Транскрипт: {size} КБ"
 
-#: ccbot/bot.py:3991
+#: ccbot/bot.py:3996
 #, python-brace-format
 msgid ""
 "{button} brings the session back through the session host — it picks up "
@@ -1665,127 +1669,127 @@ msgstr ""
 "{button} повертає сесію через хост сесій — вона підхоплює весь свій "
 "контекст."
 
-#: ccbot/bot.py:3993 ccbot/keyboards.py:99
+#: ccbot/bot.py:3998 ccbot/keyboards.py:99
 msgid "▶️ Resume"
 msgstr "▶️ Продовжити"
 
-#: ccbot/bot.py:4032
+#: ccbot/bot.py:4045
 #, python-brace-format
 msgid "▶️ Active session: <b>{name}</b>"
 msgstr "▶️ Активна сесія: <b>{name}</b>"
 
-#: ccbot/bot.py:4033
+#: ccbot/bot.py:4046
 #, python-brace-format
 msgid "▶️ Session: <b>{name}</b>"
 msgstr "▶️ Сесія: <b>{name}</b>"
 
-#: ccbot/bot.py:4036
+#: ccbot/bot.py:4049
 #, python-brace-format
 msgid "Status: {status}"
 msgstr "Статус: {status}"
 
-#: ccbot/bot.py:4097
+#: ccbot/bot.py:4108
 msgid "Interrupting…"
 msgstr "Перериваю…"
 
-#: ccbot/bot.py:4101
+#: ccbot/bot.py:4112
 msgid "It is not asking anything right now"
 msgstr "Сесія зараз нічого не питає"
 
-#: ccbot/bot.py:4104
+#: ccbot/bot.py:4115
 msgid "The question is below"
 msgstr "Питання — внизу чату"
 
-#: ccbot/bot.py:4122
+#: ccbot/bot.py:4133
 msgid "/context sent — the breakdown comes in a moment"
 msgstr "/context надіслано — розкладка зараз прийде"
 
-#: ccbot/bot.py:4136
+#: ccbot/bot.py:4147
 msgid "/compact sent — the chat is told when it is done"
 msgstr "/compact надіслано — коли завершиться, прийде повідомлення"
 
-#: ccbot/bot.py:4142
+#: ccbot/bot.py:4153
 msgid "/clear sent"
 msgstr "/clear надіслано"
 
-#: ccbot/bot.py:4153 ccbot/bot.py:4170
+#: ccbot/bot.py:4164 ccbot/bot.py:4181
 msgid "Ending it…"
 msgstr "Завершую…"
 
-#: ccbot/bot.py:4167
+#: ccbot/bot.py:4178
 #, python-brace-format
 msgid "{name} is working again — it was not ended."
 msgstr "{name} знову працює — сесію не завершено."
 
-#: ccbot/bot.py:4179
+#: ccbot/bot.py:4190
 msgid "🚪 Ended"
 msgstr "🚪 Завершено"
 
-#: ccbot/bot.py:4198
+#: ccbot/bot.py:4209
 msgid "Session list and controls"
 msgstr "Список сесій і керування"
 
-#: ccbot/bot.py:4199
+#: ccbot/bot.py:4210
 msgid "Controls of the session you are talking to"
 msgstr "Керування сесією, з якою ти говориш"
 
-#: ccbot/bot.py:4200
+#: ccbot/bot.py:4211
 msgid "New session in a chosen directory"
 msgstr "Нова сесія у вибраному каталозі"
 
-#: ccbot/bot.py:4201
+#: ccbot/bot.py:4212
 msgid "Quota and context, without asking Claude"
 msgstr "Витрата лімітів і контекст, не питаючи Claude"
 
-#: ccbot/bot.py:4202
+#: ccbot/bot.py:4213
 msgid "Where the session stopped"
 msgstr "На чому зупинилась сесія"
 
-#: ccbot/bot.py:4203
+#: ccbot/bot.py:4214
 msgid "Interrupt what Claude is doing"
 msgstr "Перервати те, що Claude зараз робить"
 
-#: ccbot/bot.py:4204
+#: ccbot/bot.py:4215
 msgid "Clear the active session's context"
 msgstr "Очистити контекст активної сесії"
 
-#: ccbot/bot.py:4205
+#: ccbot/bot.py:4216
 msgid "Give a session your own name"
 msgstr "Перейменувати сесію"
 
-#: ccbot/bot.py:4206
+#: ccbot/bot.py:4217
 msgid "End the active session cleanly"
 msgstr "Завершити активну сесію коректно"
 
-#: ccbot/bot.py:4207
+#: ccbot/bot.py:4218
 msgid "Project directories for new sessions"
 msgstr "Робочі каталоги для нових сесій"
 
-#: ccbot/bot.py:4208
+#: ccbot/bot.py:4219
 msgid "Interface language"
 msgstr "Мова інтерфейсу"
 
-#: ccbot/bot.py:4209
+#: ccbot/bot.py:4220
 msgid "Last entries from the bot's journal"
 msgstr "Останні записи журналу бота"
 
-#: ccbot/bot.py:4210
+#: ccbot/bot.py:4221
 msgid "Claude Code version and session restarts"
 msgstr "Версія Claude Code і перезапуск сесій"
 
-#: ccbot/bot.py:4211
+#: ccbot/bot.py:4222
 msgid "Log Claude in to another account"
 msgstr "Увійти в Claude іншим акаунтом"
 
-#: ccbot/bot.py:4212
+#: ccbot/bot.py:4223
 msgid "Bot state: uptime, version, restart"
 msgstr "Стан бота: аптайм, версія, перезапуск"
 
-#: ccbot/bot.py:4213
+#: ccbot/bot.py:4224
 msgid "Help"
 msgstr "Довідка"
 
-#: ccbot/bot.py:4281
+#: ccbot/bot.py:4298
 #, python-brace-format
 msgid ""
 "<b>✅ The bot is back — the restart took {duration}.</b>\n"
@@ -1796,7 +1800,7 @@ msgstr ""
 "\n"
 "Код: <code>{version}</code>"
 
-#: ccbot/bot.py:4291
+#: ccbot/bot.py:4308
 msgid ""
 "<b>⚠️ I could not find the claude executable</b>\n"
 "\n"
@@ -1812,40 +1816,40 @@ msgstr ""
 "\n"
 "Задай шлях у .env: <code>CCBOT_CLAUDE_BIN=/шлях/до/claude</code>"
 
-#: ccbot/bridge.py:270
+#: ccbot/bridge.py:273
 #, python-brace-format
 msgid "⚠️ The side question to <b>{name}</b> got no answer: <code>{error}</code>"
 msgstr ""
 "⚠️ Бічне питання до <b>{name}</b> лишилося без відповіді: "
 "<code>{error}</code>"
 
-#: ccbot/bridge.py:282
+#: ccbot/bridge.py:285
 #, python-brace-format
 msgid "🗨 Side question (/btw): {question}"
 msgstr "🗨 Бічне питання (/btw): {question}"
 
-#: ccbot/bridge.py:284
+#: ccbot/bridge.py:287
 msgid "(no answer)"
 msgstr "(без відповіді)"
 
-#: ccbot/bridge.py:319
+#: ccbot/bridge.py:322
 msgid "⏹ Closed to send a message"
 msgstr "⏹ Закрито, щоб надіслати повідомлення"
 
-#: ccbot/bridge.py:422 ccbot/bridge.py:551 ccbot/bridge.py:630
-#: ccbot/bridge.py:1222 ccbot/bridge.py:1385
+#: ccbot/bridge.py:425 ccbot/bridge.py:554 ccbot/bridge.py:633
+#: ccbot/bridge.py:1245 ccbot/bridge.py:1408
 msgid "⏹ Question closed"
 msgstr "⏹ Питання закрито"
 
-#: ccbot/bridge.py:427
+#: ccbot/bridge.py:430
 msgid "⬇️ Shown again below"
 msgstr "⬇️ Показано ще раз нижче"
 
-#: ccbot/bridge.py:448
+#: ccbot/bridge.py:451
 msgid "✅ The session host is back — SDK sessions are reachable again."
 msgstr "✅ Хост сесій знову на зв'язку — SDK-сесії знову доступні."
 
-#: ccbot/bridge.py:461
+#: ccbot/bridge.py:464
 msgid ""
 "⚠️ <b>The session host is not answering.</b>\n"
 "\n"
@@ -1858,7 +1862,7 @@ msgstr ""
 "сам — якщо це триває, дивіться <code>journalctl --user -u claude-tg-"
 "host</code>."
 
-#: ccbot/bridge.py:472
+#: ccbot/bridge.py:475
 #, python-brace-format
 msgid ""
 "⚠️ <b>The SDK session bridge has crashed</b>\n"
@@ -1871,7 +1875,7 @@ msgstr ""
 "\n"
 "Подробиці в /log."
 
-#: ccbot/bridge.py:488
+#: ccbot/bridge.py:491
 #, python-brace-format
 msgid ""
 "⏳ <b>{name}</b>\n"
@@ -1880,7 +1884,7 @@ msgstr ""
 "⏳ <b>{name}</b>\n"
 "працює вже {minutes} хв"
 
-#: ccbot/bridge.py:562
+#: ccbot/bridge.py:565
 msgid ""
 "⚠️ The bot was away longer than the session host keeps its journal: some "
 "SDK output may be missing from the chat."
@@ -1888,33 +1892,33 @@ msgstr ""
 "⚠️ Бота не було довше, ніж хост сесій зберігає журнал: частини відповідей"
 " SDK-сесій у чаті може бракувати."
 
-#: ccbot/bridge.py:699
+#: ccbot/bridge.py:722
 msgid "⏹ Interrupted."
 msgstr "⏹ Перервано."
 
-#: ccbot/bridge.py:705
+#: ccbot/bridge.py:728
 #, python-brace-format
 msgid "⚠️ The turn ended with an error{status}: {detail}"
 msgstr "⚠️ Хід завершився з помилкою{status}: {detail}"
 
-#: ccbot/bridge.py:737
+#: ccbot/bridge.py:760
 msgid "✔️ Not needed: the session got a message before that."
 msgstr "✔️ Не знадобилось: сесія раніше отримала повідомлення."
 
-#: ccbot/bridge.py:738
+#: ccbot/bridge.py:761
 msgid "⏹ Not continued: the session was closed."
 msgstr "⏹ Не продовжено: сесію закрито."
 
-#: ccbot/bridge.py:739
+#: ccbot/bridge.py:762
 msgid "⏸ Not continued: the session is waiting for your answer."
 msgstr "⏸ Не продовжено: сесія чекає вашої відповіді."
 
-#: ccbot/bridge.py:773
+#: ccbot/bridge.py:796
 #, python-brace-format
 msgid "⏸ <b>{name}: the account limit is reached</b>"
 msgstr "⏸ <b>{name}: ліміт акаунта вичерпано</b>"
 
-#: ccbot/bridge.py:775
+#: ccbot/bridge.py:798
 #, python-brace-format
 msgid ""
 "It lifts: {when}.\n"
@@ -1924,34 +1928,34 @@ msgstr ""
 "Продовжу сесію сам: {resume}."
 
 #. TRANSLATORS: the prompt sent to Claude when a limit lifts, an imperative.
-#: ccbot/bridge.py:816
+#: ccbot/bridge.py:839
 msgid "Continue."
 msgstr "Продовжуй"
 
-#: ccbot/bridge.py:822
+#: ccbot/bridge.py:845
 #, python-brace-format
 msgid "▶️ <b>{name}: limit reset — continuing</b>"
 msgstr "▶️ <b>{name}: ліміт відновився — продовжую</b>"
 
-#: ccbot/bridge.py:827
+#: ccbot/bridge.py:850
 #, python-brace-format
 msgid "⚠️ <b>{name}: could not continue after the limit</b>"
 msgstr "⚠️ <b>{name}: не вдалося продовжити після ліміту</b>"
 
-#: ccbot/bridge.py:829 ccbot/bridge.py:1000
+#: ccbot/bridge.py:852 ccbot/bridge.py:1023
 msgid "Send it a message yourself to carry on."
 msgstr "Щоб продовжити, напишіть у сесію самі."
 
-#: ccbot/bridge.py:838
+#: ccbot/bridge.py:861
 #, python-brace-format
 msgid "⛔ <b>{name}: this model is not available on this account</b>"
 msgstr "⛔ <b>{name}: модель недоступна на цьому акаунті</b>"
 
-#: ccbot/bridge.py:840
+#: ccbot/bridge.py:863
 msgid "The message was not carried out. Pick another model and send it again."
 msgstr "Повідомлення не виконане. Оберіть іншу модель і надішліть його знову."
 
-#: ccbot/bridge.py:854
+#: ccbot/bridge.py:877
 #, python-brace-format
 msgid ""
 "🧹 <b>{name}</b>: context cleared — the session was given a new id, and I "
@@ -1960,42 +1964,42 @@ msgstr ""
 "🧹 <b>{name}</b>: контекст очищено — сесія отримала новий id, стежу далі "
 "за нею."
 
-#: ccbot/bridge.py:866
+#: ccbot/bridge.py:889
 #, python-brace-format
 msgid "⚠️ <b>{name}</b>: the Claude process has ended."
 msgstr "⚠️ <b>{name}</b>: процес Claude завершився."
 
-#: ccbot/bridge.py:869
+#: ccbot/bridge.py:892
 msgid "The session is resting: your next message resumes it with its context."
 msgstr "Сесія спить: ваше наступне повідомлення продовжить її з усім контекстом."
 
-#: ccbot/bridge.py:871
+#: ccbot/bridge.py:894
 msgid "Cut off with it:"
 msgstr "Разом із ним обірвано:"
 
-#: ccbot/bridge.py:879
+#: ccbot/bridge.py:902
 msgid "🗜 Context compacted."
 msgstr "🗜 Контекст стиснуто."
 
-#: ccbot/bridge.py:883
+#: ccbot/bridge.py:906
 #, python-brace-format
 msgid "⚠️ Claude reported an error: {error}"
 msgstr "⚠️ Claude повідомив про помилку: {error}"
 
-#: ccbot/bridge.py:892
+#: ccbot/bridge.py:915
 msgid "🔌 <b>The session host was restarted.</b>"
 msgstr "🔌 <b>Хост сесій перезапустився.</b>"
 
-#: ccbot/bridge.py:893
+#: ccbot/bridge.py:916
 msgid "SDK sessions are resting and wake up with your next message."
 msgstr "SDK-сесії сплять і прокинуться з вашим наступним повідомленням."
 
-#: ccbot/bridge.py:897
+#: ccbot/bridge.py:920
 #, python-brace-format
 msgid "✂️ <b>{name}</b> was cut off in the middle of:"
 msgstr "✂️ <b>{name}</b> обірвано посеред:"
 
-#: ccbot/bridge.py:909
+#: ccbot/bridge.py:932
 #, python-brace-format
 msgid "⏳ <b>{name}</b>: a background task was cut off:"
 msgid_plural "⏳ <b>{name}</b>: background tasks were cut off:"
@@ -2003,11 +2007,11 @@ msgstr[0] "⏳ <b>{name}</b>: обірвалась фонова задача:"
 msgstr[1] "⏳ <b>{name}</b>: обірвались фонові задачі:"
 msgstr[2] "⏳ <b>{name}</b>: обірвались фонові задачі:"
 
-#: ccbot/bridge.py:924
+#: ccbot/bridge.py:947
 msgid "▶️ I will wake it myself to check on them."
 msgstr "▶️ Розбуджу її сам, щоб перевірила."
 
-#: ccbot/bridge.py:926
+#: ccbot/bridge.py:949
 #, python-brace-format
 msgid "❓ {count} open question was closed with it."
 msgid_plural "❓ {count} open questions were closed with it."
@@ -2016,7 +2020,7 @@ msgstr[1] "❓ Разом із ним закрито {count} відкриті п
 msgstr[2] "❓ Разом із ним закрито {count} відкритих питань."
 
 #. TRANSLATORS: a prompt sent to Claude itself, not a chat text.
-#: ccbot/bridge.py:980
+#: ccbot/bridge.py:1003
 #, python-brace-format
 msgid ""
 "Continue. The session host restarted and your background task was cut "
@@ -2045,161 +2049,161 @@ msgstr[2] ""
 "Перевір, що вони встигли зробити, доведи до кінця решту і виконай те, що "
 "обіцяв."
 
-#: ccbot/bridge.py:993
+#: ccbot/bridge.py:1016
 #, python-brace-format
 msgid "⏳ <b>{name}</b>: waking it after the restart"
 msgstr "⏳ <b>{name}</b>: буджу її після перезапуску"
 
-#: ccbot/bridge.py:998
+#: ccbot/bridge.py:1021
 #, python-brace-format
 msgid "⚠️ <b>{name}: could not wake it after the host restart</b>"
 msgstr "⚠️ <b>{name}: не вдалося розбудити її після перезапуску хоста</b>"
 
-#: ccbot/bridge.py:1014
+#: ccbot/bridge.py:1037
 #, python-brace-format
 msgid "🔁 Send again: {text}"
 msgstr "🔁 Надіслати знову: {text}"
 
-#: ccbot/bridge.py:1089
+#: ccbot/bridge.py:1112
 #, python-brace-format
 msgid "**📋 {name}: a plan for your approval**"
 msgstr "**📋 {name}: план на погодження**"
 
-#: ccbot/bridge.py:1091
+#: ccbot/bridge.py:1114
 msgid "✅ Approve"
 msgstr "✅ Погодити"
 
-#: ccbot/bridge.py:1092
+#: ccbot/bridge.py:1115
 msgid "✅ Approve, accept edits"
 msgstr "✅ Погодити й приймати правки"
 
-#: ccbot/bridge.py:1094
+#: ccbot/bridge.py:1117
 msgid "✏️ Revise"
 msgstr "✏️ Переробити"
 
-#: ccbot/bridge.py:1095 ccbot/bridge.py:1240
+#: ccbot/bridge.py:1118 ccbot/bridge.py:1263
 msgid "❌ Keep planning"
 msgstr "❌ Ще планувати"
 
-#: ccbot/bridge.py:1099
+#: ccbot/bridge.py:1122
 #, python-brace-format
 msgid "Claude wants to use {tool}"
 msgstr "Claude хоче використати {tool}"
 
-#: ccbot/bridge.py:1116 ccbot/bridge.py:1135
+#: ccbot/bridge.py:1139 ccbot/bridge.py:1158
 msgid "✅ Allow"
 msgstr "✅ Дозволити"
 
-#: ccbot/bridge.py:1117 ccbot/bridge.py:1136
+#: ccbot/bridge.py:1140 ccbot/bridge.py:1159
 msgid "❌ Deny"
 msgstr "❌ Відхилити"
 
-#: ccbot/bridge.py:1118
+#: ccbot/bridge.py:1141
 msgid "✏️ Deny with a reason"
 msgstr "✏️ Відхилити з причиною"
 
-#: ccbot/bridge.py:1124
+#: ccbot/bridge.py:1147
 #, python-brace-format
 msgid "✅ Always: {rule}"
 msgstr "✅ Завжди: {rule}"
 
-#: ccbot/bridge.py:1133 ccbot/bridge.py:1145 ccbot/bridge.py:1184
+#: ccbot/bridge.py:1156 ccbot/bridge.py:1168 ccbot/bridge.py:1207
 msgid "🚫 Don't answer"
 msgstr "🚫 Не відповідати"
 
-#: ccbot/bridge.py:1147
+#: ccbot/bridge.py:1170
 #, python-brace-format
 msgid "**❓ {name}** asks a question this bot cannot read."
 msgstr "**❓ {name}** ставить питання, яке бот не вміє прочитати."
 
-#: ccbot/bridge.py:1164
+#: ccbot/bridge.py:1187
 #, python-brace-format
 msgid "_Several can be ticked; then press {button}._"
 msgstr "_Можна позначити кілька, потім натисніть {button}._"
 
-#: ccbot/bridge.py:1165 ccbot/bridge.py:1177
+#: ccbot/bridge.py:1188 ccbot/bridge.py:1200
 msgid "✅ Next"
 msgstr "✅ Далі"
 
-#: ccbot/bridge.py:1165 ccbot/bridge.py:1177
+#: ccbot/bridge.py:1188 ccbot/bridge.py:1200
 msgid "✅ Send"
 msgstr "✅ Надіслати"
 
-#: ccbot/bridge.py:1173 ccbot/keyboards.py:100 ccbot/keyboards.py:159
+#: ccbot/bridge.py:1196 ccbot/keyboards.py:100 ccbot/keyboards.py:159
 #: ccbot/keyboards.py:208 ccbot/keyboards.py:266 ccbot/keyboards.py:277
 msgid "⬅️ Back"
 msgstr "⬅️ Назад"
 
-#: ccbot/bridge.py:1181
+#: ccbot/bridge.py:1204
 msgid "✏️ Own answer"
 msgstr "✏️ Своя відповідь"
 
-#: ccbot/bridge.py:1183
+#: ccbot/bridge.py:1206
 msgid "💬 Discuss"
 msgstr "💬 Обговорити"
 
-#: ccbot/bridge.py:1229
+#: ccbot/bridge.py:1252
 msgid "✅ Allowed"
 msgstr "✅ Дозволено"
 
-#: ccbot/bridge.py:1230
+#: ccbot/bridge.py:1253
 msgid "✅ Plan approved"
 msgstr "✅ План погоджено"
 
-#: ccbot/bridge.py:1233
+#: ccbot/bridge.py:1256
 msgid "✅ Approved, edits accepted"
 msgstr "✅ Погоджено, правки приймаються"
 
-#: ccbot/bridge.py:1236
+#: ccbot/bridge.py:1259
 msgid "✅ Always allowed"
 msgstr "✅ Дозволено назавжди"
 
-#: ccbot/bridge.py:1243
+#: ccbot/bridge.py:1266
 msgid "🚫 Not answered"
 msgstr "🚫 Без відповіді"
 
-#: ccbot/bridge.py:1250
+#: ccbot/bridge.py:1273
 msgid "💬 To be discussed — your next message goes there"
 msgstr "💬 Обговорити — ваше наступне повідомлення піде туди"
 
-#: ccbot/bridge.py:1253
+#: ccbot/bridge.py:1276
 msgid "❌ Denied"
 msgstr "❌ Відхилено"
 
-#: ccbot/bridge.py:1255 ccbot/bridge.py:1298 ccbot/bridge.py:1360
-#: ccbot/bridge.py:1371
+#: ccbot/bridge.py:1278 ccbot/bridge.py:1321 ccbot/bridge.py:1383
+#: ccbot/bridge.py:1394
 msgid "Could not pass the answer on — see /log"
 msgstr "Не вдалося передати відповідь — дивіться /log"
 
-#: ccbot/bridge.py:1298
+#: ccbot/bridge.py:1321
 msgid "Answered"
 msgstr "Відповідь передано"
 
-#: ccbot/bridge.py:1347
+#: ccbot/bridge.py:1370
 msgid "This question is no longer open."
 msgstr "Це питання вже закрите."
 
-#: ccbot/bridge.py:1353
+#: ccbot/bridge.py:1376
 msgid "The question has moved on — its card is shown again."
 msgstr "Питання вже змінилося — показую його картку заново."
 
-#: ccbot/bridge.py:1358
+#: ccbot/bridge.py:1381
 msgid "✏️ Answer taken — the next part is on the card."
 msgstr "✏️ Відповідь прийнято — наступна частина на картці."
 
-#: ccbot/bridge.py:1359
+#: ccbot/bridge.py:1382
 msgid "✏️ Answered."
 msgstr "✏️ Відповідь передано."
 
-#: ccbot/bridge.py:1365
+#: ccbot/bridge.py:1388
 msgid "✏️ Sent back with changes"
 msgstr "✏️ Повернуто на доробку"
 
-#: ccbot/bridge.py:1368
+#: ccbot/bridge.py:1391
 msgid "❌ Denied with a reason"
 msgstr "❌ Відхилено з причиною"
 
-#: ccbot/bridge.py:1386
+#: ccbot/bridge.py:1409
 msgid "✅ Already answered"
 msgstr "✅ Уже відповіли"
 
@@ -2477,57 +2481,57 @@ msgstr "не git-репозиторій"
 msgid "{commit} + uncommitted changes"
 msgstr "{commit} + незакомічені зміни"
 
-#: ccbot/sessions.py:49
+#: ccbot/sessions.py:50
 msgid "idle"
 msgstr "вільна"
 
-#: ccbot/sessions.py:50
+#: ccbot/sessions.py:51
 msgid "waiting for you"
 msgstr "чекає на тебе"
 
-#: ccbot/sessions.py:51
+#: ccbot/sessions.py:52
 msgid "starting"
 msgstr "стартує"
 
-#: ccbot/sessions.py:52
+#: ccbot/sessions.py:53
 msgid "closed"
 msgstr "завершена"
 
 #. TRANSLATORS: "yesterday" abbreviated to fit a button caption.
-#: ccbot/sessions.py:71
+#: ccbot/sessions.py:72
 #, python-brace-format
 msgid "yst {time}"
 msgstr "вч {time}"
 
 #. TRANSLATORS: strftime format — day and month, on a button.
-#: ccbot/sessions.py:73
+#: ccbot/sessions.py:74
 #, python-format
 msgid "%d.%m"
 msgstr "%d.%m"
 
-#: ccbot/sessions.py:215 ccbot/status_feed.py:62
+#: ccbot/sessions.py:216 ccbot/status_feed.py:62
 #, python-brace-format
 msgid "today {time}"
 msgstr "сьогодні {time}"
 
-#: ccbot/sessions.py:217
+#: ccbot/sessions.py:218
 #, python-brace-format
 msgid "yesterday {time}"
 msgstr "вчора {time}"
 
 #. TRANSLATORS: strftime format — a date this year, plus the time.
-#: ccbot/sessions.py:220
+#: ccbot/sessions.py:221
 #, python-format
 msgid "%d.%m %H:%M"
 msgstr "%d.%m %H:%M"
 
 #. TRANSLATORS: strftime format — a date in an earlier year.
-#: ccbot/sessions.py:222
+#: ccbot/sessions.py:223
 #, python-format
 msgid "%d.%m.%y"
 msgstr "%d.%m.%y"
 
-#: ccbot/sessions.py:464
+#: ccbot/sessions.py:521
 msgid "untitled"
 msgstr "без назви"
 
